@@ -6,7 +6,6 @@
 
 Desktop app for batch-organizing multitracks to stem exports (2-stem/4-stem) based on RMS and SI-SDR classification. Includes a built-in **STEM player** for auditioning mixes.
 
-**Version:** 1.0.2  
 **By:** Gilliaan & Bas Curtiz  
 **Repository:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  
 **Video guide:** [How to install & use STEM organizer](https://youtu.be/Zqj6thKYrUs)
@@ -131,7 +130,6 @@ Settings are saved to `settings.json` beside the app (ignored by git).
 | `build.bat` | PyInstaller build script |
 | `update_checker.py` | GitHub release update check |
 | `ffmpeg_bootstrap.py` | Locates bundled or system ffmpeg |
-| `changelog.txt` | Release notes |
 
 ---
 
