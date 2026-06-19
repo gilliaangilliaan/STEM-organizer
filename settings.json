@@ -1,0 +1,28 @@
+{
+  "input_dir": "D:\\Multitracks test",
+  "output_dir": "D:\\Multitracks test_organized",
+  "use_cuda": true,
+  "model_label": "htdemucs (good)",
+  "stem_mode": "2-way (instrumental/vocals)",
+  "quality": "FLAC 16-bit",
+  "threshold": 0.4,
+  "min_margin": 0.2,
+  "batch_size": 4,
+  "peak_norm": true,
+  "make_mixture": false,
+  "dedup": false,
+  "ambig_label": "Skip ambiguous stem only",
+  "scan_label": "Each subfolder (one level)",
+  "naming_label": "Original folder name",
+  "append_duration": false,
+  "delete_if_short": true,
+  "min_duration_sec": 8,
+  "delete_if_incomplete": true,
+  "skip_existing": true,
+  "sdr_delete_folder": true,
+  "sdr_thresholds": {
+    "instrumental": 30,
+    "vocals": 30
+  },
+  "hide_device_notice": false
+}

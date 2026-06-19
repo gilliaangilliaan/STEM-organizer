@@ -1,0 +1,378 @@
+"""Load PyTorch / Demucs from beside the exe (or normal pip env when running from source)."""
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+import webbrowser
+from pathlib import Path
+
+TORCH_CPU_INDEX = 'https://download.pytorch.org/whl/cpu'
+TORCH_CUDA_INDEX = 'https://download.pytorch.org/whl/cu124'  # RTX 20/30/40 series
+TORCH_CUDA_NEW_INDEX = 'https://download.pytorch.org/whl/cu128'  # RTX 50-series (Blackwell)
+REPO_URL = 'https://github.com/gilliaangilliaan/STEM-organizer'
+
+SUPPORTED_PYTHON = ((3, 10), (3, 11))
+SUPPORTED_LABEL = '3.10.x or 3.11.x'
+LEGACY_PREBUILT_PYTHON = (3, 11)
+PYTHON_INSTALLERS = {
+    (3, 10): 'https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe',
+    (3, 11): 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe',
+}
+APP_VERSION_FILE = 'python-version.txt'
+SITE_PACKAGES_MARKER = '.python-version-used'
+
+
+def _version_label(ver: tuple[int, int]) -> str:
+    return f'{ver[0]}.{ver[1]}.x'
+
+
+def _parse_version_tag(text: str) -> tuple[int, int] | None:
+    text = text.strip()
+    parts = text.replace(',', '.').split('.')
+    if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+        return int(parts[0]), int(parts[1])
+    return None
+
+
+def _embedded_python(app_dir: Path) -> tuple[int, int] | None:
+    marker = app_dir / APP_VERSION_FILE
+    if marker.is_file():
+        parsed = _parse_version_tag(marker.read_text(encoding='utf-8'))
+        if parsed in SUPPORTED_PYTHON:
+            return parsed
+    if any((app_dir / name).is_file() for name in ('STEM-organizer.exe', 'stem-organizer.exe')):
+        return LEGACY_PREBUILT_PYTHON
+    return None
+
+
+def _mismatch_hint(app_dir: Path) -> str | None:
+    if is_frozen():
+        expected = sys.version_info[:2]
+    else:
+        expected = _embedded_python(app_dir)
+        if expected is None:
+            return None
+    marker = app_dir / 'site-packages' / SITE_PACKAGES_MARKER
+    if not marker.is_file():
+        return None
+    installed = _parse_version_tag(marker.read_text(encoding='utf-8'))
+    if installed is None or installed == expected:
+        return None
+    return (
+        f'site-packages were installed with Python {_version_label(installed)}, '
+        f'but this app needs {_version_label(expected)}.\n'
+        f'Delete site-packages\\ and run install-deps.bat with py -{expected[0]}.{expected[1]}.'
+    )
+
+
+def is_frozen() -> bool:
+    return getattr(sys, 'frozen', False)
+
+
+def _fix_frozen_stdio() -> None:
+    """PyInstaller windowed builds set stdout/stderr to None; torch hub needs them."""
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, 'w', encoding='utf-8')  # noqa: SIM115
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, 'w', encoding='utf-8')  # noqa: SIM115
+
+
+if is_frozen():
+    _fix_frozen_stdio()
+
+
+def app_dir() -> Path:
+    if is_frozen():
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def external_site_dirs() -> list[Path]:
+    base = app_dir()
+    return [
+        base / 'site-packages',
+        base / '.venv' / 'Lib' / 'site-packages',
+    ]
+
+
+def _prepend_path(path: Path) -> None:
+    entry = str(path)
+    if not path.is_dir():
+        return
+    current = os.environ.get('PATH', '')
+    if entry not in current.split(os.pathsep):
+        os.environ['PATH'] = entry + (os.pathsep + current if current else '')
+
+
+def _register_native_libs(site_packages: Path) -> None:
+    """Make torch/numpy/soundfile DLLs visible to the frozen exe on Windows."""
+    candidates = [
+        site_packages,
+        site_packages / 'torch' / 'lib',
+        site_packages / 'numpy.libs',
+        site_packages / '_soundfile_data',
+        site_packages / 'bin',
+    ]
+    for path in candidates:
+        if not path.is_dir():
+            continue
+        if hasattr(os, 'add_dll_directory'):
+            try:
+                os.add_dll_directory(str(path))
+            except OSError:
+                pass
+        _prepend_path(path)
+
+
+def _prepare_soundfile_dll(site_packages: Path) -> None:
+    data = site_packages / '_soundfile_data'
+    if not data.is_dir():
+        return
+    dlls = sorted(data.glob('libsndfile*.dll'))
+    if not dlls:
+        return
+    primary = dlls[0]
+    alias = data / 'libsndfile.dll'
+    if not alias.exists() and primary.name.lower() != 'libsndfile.dll':
+        try:
+            import shutil
+            shutil.copy2(primary, alias)
+        except OSError:
+            pass
+
+
+def _preload_site_extensions(site_packages: Path) -> None:
+    """Load top-level extension modules pip drops directly into site-packages."""
+    if not is_frozen():
+        return
+    for pyd in site_packages.glob('*.pyd'):
+        stem = pyd.name.partition('.')[0]
+        if not stem or stem in sys.modules:
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(stem, pyd)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[stem] = module
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(stem, None)
+
+
+def init_external_deps(set_status=None) -> None:
+    def status(msg: str) -> None:
+        if set_status is not None:
+            set_status(msg)
+
+    status('Setting up FFmpeg…')
+    from ffmpeg_bootstrap import setup_ffmpeg
+
+    setup_ffmpeg()
+    status('Preparing native libraries…')
+    for path in external_site_dirs():
+        if path.is_dir():
+            entry = str(path)
+            if entry not in sys.path:
+                sys.path.insert(0, entry)
+            _register_native_libs(path)
+            _prepare_soundfile_dll(path)
+            _preload_site_extensions(path)
+
+    torch_home = app_dir() / 'torch_home'
+    checkpoints = torch_home / 'hub' / 'checkpoints'
+    if checkpoints.is_dir() and any(checkpoints.glob('*.th')):
+        os.environ['TORCH_HOME'] = str(torch_home)
+
+
+def load_ml_deps(set_status=None):
+    """Import ML stack. Raises ImportError when packages are missing."""
+    def status(msg: str) -> None:
+        if set_status is not None:
+            set_status(msg)
+
+    status('Loading numpy…')
+    import numpy as np
+    status('Loading PyTorch…')
+    import torch
+    status('Loading soundfile…')
+    import soundfile as sf
+    status('Loading Demucs…')
+    from demucs.apply import apply_model
+    from demucs.audio import AudioFile
+    from demucs.pretrained import get_model
+
+    return np, sf, torch, get_model, apply_model, AudioFile
+
+
+def _pkg_present(dest: Path, name: str) -> bool:
+    return (dest / name).is_dir() or (dest / f'{name}.py').is_file()
+
+
+def _import_probe(name: str) -> str:
+    try:
+        mod = __import__(name)
+        ver = getattr(mod, '__version__', '')
+        return f'{name}: OK' + (f' ({ver})' if ver else '')
+    except Exception as exc:
+        return f'{name}: failed ({exc})'
+
+
+def _site_packages_hint() -> str:
+    dest = app_dir() / 'site-packages'
+    if not dest.is_dir():
+        return f'site-packages\\ folder not found next to this app ({dest}).'
+
+    lines: list[str] = []
+    torch_dir = dest / 'torch'
+    if torch_dir.is_dir():
+        lib_dir = torch_dir / 'lib'
+        dlls = len(list(lib_dir.glob('*.dll'))) if lib_dir.is_dir() else 0
+        lines.append(f'torch\\ found ({dlls} DLLs in torch\\lib).')
+    else:
+        lines.append('torch\\ not found in site-packages.')
+
+    for name in ('numpy', 'demucs', 'soundfile', 'cffi'):
+        lines.append(f'{name}: on disk' if _pkg_present(dest, name) else f'{name}: missing on disk')
+
+    lines.append('')
+    lines.append('Import check:')
+    for name in ('numpy', 'torch', '_cffi_backend', 'soundfile'):
+        lines.append(f'  {_import_probe(name)}')
+
+    return '\n'.join(lines)
+
+
+def _required_python_label() -> str:
+    if is_frozen():
+        return _version_label(sys.version_info[:2])
+    needed = _embedded_python(app_dir())
+    return _version_label(needed) if needed else SUPPORTED_LABEL
+
+
+def missing_deps_message(exc: ImportError) -> str:
+    detail = str(exc).strip()
+    if detail and detail != str(exc.name or ''):
+        missing_line = f'Missing: {exc.name or "package"} ({detail})'
+    else:
+        missing_line = f'Missing: {exc.name or exc}'
+
+    hint = _mismatch_hint(app_dir())
+    version_line = _required_python_label()
+    lines = [
+        'STEM organizer needs Python packages that are not bundled in this .exe.',
+        '',
+        missing_line,
+        '',
+        _site_packages_hint(),
+    ]
+    if hint:
+        lines.extend(['', hint])
+    lines.extend([
+        '',
+        'One-time setup:',
+        f'1. Install Python {version_line} from python.org',
+        f'   (supported: {SUPPORTED_LABEL}; not 3.12+)',
+        '2. Double-click install-deps.bat and choose CPU or the matching NVIDIA option',
+        '   (RTX 50-series / 5090 needs the cu128 option, not cu124)',
+        '3. Restart STEM organizer',
+        '',
+        'install-deps.bat must sit in the same folder as this .exe.',
+        'It installs matching wheels into site-packages\\ beside the app.',
+        'Use the same Python major.minor as the .exe (e.g. py -3.10 install-deps.bat).',
+        '',
+        'If packages are listed above but import still fails, reinstall with',
+        'install-deps.bat (delete site-packages\\ first).',
+        '',
+        'Demucs models (~450 MB) download on first run into torch_home\\',
+        '(internet required once).',
+    ])
+    return '\n'.join(lines)
+
+
+def _show_missing_deps_dialog(exc: ImportError) -> None:
+    import tkinter as tk
+    from tkinter import messagebox
+
+    root = tk.Tk()
+    root.withdraw()
+    root.title('Missing dependencies')
+
+    version_line = _required_python_label()
+    msg = missing_deps_message(exc)
+    folder = str(app_dir())
+    messagebox.showinfo('Missing dependencies', msg, parent=root)
+
+    if messagebox.askyesno(
+        'Download Python?',
+        f'Download a Python {version_line} installer (64-bit)?\n\n'
+        'Tick "Add python.exe to PATH" during setup, then run install-deps.bat.',
+        parent=root,
+    ):
+        if is_frozen():
+            installer = PYTHON_INSTALLERS.get(sys.version_info[:2])
+        else:
+            needed = _embedded_python(app_dir())
+            installer = PYTHON_INSTALLERS.get(needed or sys.version_info[:2])
+        if installer:
+            webbrowser.open(installer)
+
+    if messagebox.askyesno(
+        'Open app folder?',
+        'Open the folder containing install-deps.bat?',
+        parent=root,
+    ):
+        if sys.platform == 'win32':
+            os.startfile(folder)  # noqa: S606
+        else:
+            webbrowser.open(folder)
+
+    root.destroy()
+
+
+def demucs_models_present() -> bool:
+    """True when at least one Demucs checkpoint exists in torch_home."""
+    torch_home = Path(os.environ.get('TORCH_HOME', str(app_dir() / 'torch_home')))
+    checkpoints = torch_home / 'hub' / 'checkpoints'
+    return checkpoints.is_dir() and any(checkpoints.glob('*.th'))
+
+
+def demucs_model_cached(model_id: str) -> bool:
+    """Best-effort check whether model weights are likely already on disk."""
+    del model_id  # Demucs hub files are hash-named; any checkpoint usually means prior download.
+    return demucs_models_present()
+
+
+def ensure_ml_deps(*, show_dialog: bool = True, set_status=None) -> bool:
+    init_external_deps(set_status)
+    hint = _mismatch_hint(app_dir())
+    if hint and show_dialog:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror('Python version mismatch', hint, parent=root)
+        root.destroy()
+        return False
+    try:
+        load_ml_deps(set_status)
+        return True
+    except ImportError as exc:
+        if show_dialog:
+            _show_missing_deps_dialog(exc)
+        return False
+    except OSError as exc:
+        wrapped = ImportError(f'DLL load failed: {exc}')
+        wrapped.__cause__ = exc
+        if show_dialog:
+            _show_missing_deps_dialog(wrapped)
+        return False
+
+
+def python_for_install() -> str:
+    """Python executable used by install-deps.bat (best effort)."""
+    if is_frozen():
+        return 'python'
+    return sys.executable
