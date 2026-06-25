@@ -269,7 +269,7 @@ SI_SDR_URL = (
     'https://source-separation.github.io/tutorial/basics/evaluation.html'
     '?highlight=sdr#si-sdr'
 )
-APP_VERSION = '1.0.2'
+APP_VERSION = '1.0.3'
 SPLASH_SIZE = 512
 SPLASH_PAD = 28
 SPLASH_CHROMA = '#010101'
@@ -300,6 +300,20 @@ def format_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}m{secs:02d}s"
     return f"{secs}s"
+
+
+def format_duration_log(seconds: float) -> str:
+    """Format seconds as minutes:seconds:milliseconds for log output."""
+    if seconds < 0:
+        seconds = 0.0
+    total_ms = int(round(seconds * 1000))
+    ms = total_ms % 1000
+    total_s = total_ms // 1000
+    mins, secs = divmod(total_s, 60)
+    hours, mins = divmod(mins, 60)
+    if hours:
+        return f'{hours}:{mins:02d}:{secs:02d}:{ms:03d}'
+    return f'{mins:02d}:{secs:02d}:{ms:03d}'
 
 
 def format_status_clock(seconds: float | None) -> str:
@@ -463,6 +477,21 @@ def _safe_tk_int(var: tk.Variable, default: int) -> int:
         return default
 
 
+def _safe_tk_float(var: tk.Variable, default: float) -> float:
+    try:
+        return float(var.get())
+    except (tk.TclError, ValueError, TypeError):
+        return default
+
+
+def _tk_numeric_var_ready(var: tk.Variable) -> bool:
+    try:
+        var.get()
+        return True
+    except tk.TclError:
+        return False
+
+
 def load_settings() -> dict:
     if not SETTINGS_PATH.exists():
         return {}
@@ -527,6 +556,71 @@ def send_to_recycle_bin(path: Path) -> None:
         shutil.rmtree(target)
     else:
         target.unlink()
+
+
+def _is_empty_dir(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    try:
+        return not any(path.iterdir())
+    except OSError:
+        return False
+
+
+def remove_empty_parent_dirs(start: Path, root: Path) -> list[Path]:
+    """Remove empty directories walking up from start; never removes root."""
+    removed: list[Path] = []
+    root = root.resolve()
+    try:
+        current = Path(start).resolve().parent
+    except OSError:
+        return removed
+
+    while current != root:
+        try:
+            current.relative_to(root)
+        except ValueError:
+            break
+        if not _is_empty_dir(current):
+            break
+        try:
+            send_to_recycle_bin(current)
+            removed.append(current)
+        except OSError:
+            break
+        current = current.parent
+    return removed
+
+
+def prune_empty_dirs_under(root: Path) -> list[Path]:
+    """Bottom-up sweep: remove every empty directory under root (not root itself)."""
+    root = root.resolve()
+    removed: list[Path] = []
+    if not root.is_dir():
+        return removed
+    for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
+        current = Path(dirpath)
+        if current == root or not _is_empty_dir(current):
+            continue
+        try:
+            send_to_recycle_bin(current)
+            removed.append(current)
+        except OSError:
+            pass
+    return removed
+
+
+def cleanup_empty_dirs_after_delete(deleted_paths: list[Path], root: Path) -> list[Path]:
+    """Walk up from each deleted path and remove newly empty parent folders."""
+    removed: list[Path] = []
+    seen: set[Path] = set()
+    for path in deleted_paths:
+        for parent in remove_empty_parent_dirs(path, root):
+            key = parent.resolve()
+            if key not in seen:
+                seen.add(key)
+                removed.append(parent)
+    return removed
 
 
 def next_sequence_number(out_dir: Path, manifest: dict) -> int:
@@ -1386,6 +1480,7 @@ def separate_mixture(model, mixture: np.ndarray, device: str) -> np.ndarray:
 
 DONE_SENTINEL = object()
 PROGRESS_TAG = '__progress__'
+PAIR_LOG_TAG = '__pair_log__'
 SDR_LOG_TAG = '__sdr_line__'
 
 
@@ -1584,7 +1679,7 @@ class Worker(threading.Thread):
             try:
                 write_audio(str(out_path), scaled, sr, subtype)
                 written.add(cat)
-                self.log(f"  wrote {cat}{ext}  ({len(buckets[cat])} stems, {cut/sr:.2f}s)")
+                self.log(f"  wrote {cat}{ext}  ({len(buckets[cat])} stems, {format_duration_log(cut / sr)})")
             except Exception as e:
                 had_errors = True
                 self.log(f"  [export error] {cat}: {e}")
@@ -1913,6 +2008,20 @@ class SdrWorker(threading.Thread):
         except ValueError:
             return folder.name
 
+    def _cleanup_empty_dirs_after_delete(self, deleted_paths: list[Path]) -> None:
+        root = getattr(self, '_sdr_root', None)
+        if root is None or not deleted_paths:
+            return
+        cleanup_empty_dirs_after_delete(deleted_paths, root)
+
+    def _prune_empty_sdr_dirs(self) -> None:
+        root = getattr(self, '_sdr_root', None)
+        if root is None:
+            return
+        pruned = prune_empty_dirs_under(root)
+        if pruned:
+            self.log(f'  [cleanup] Removed {len(pruned)} empty folder(s).')
+
     def _log_sdr_summary(self, elapsed: float) -> None:
         st = self._stats
         self.log('')
@@ -2007,13 +2116,16 @@ class SdrWorker(threading.Thread):
             return
 
         delete_folder = self.p.get('sdr_delete_folder', True)
+        deleted_paths: list[Path] = []
         if delete_folder:
             try:
                 if layout == SDR_LAYOUT_MUSDB and delete_whole is not None:
                     send_to_recycle_bin(delete_whole)
+                    deleted_paths.append(delete_whole)
                 else:
                     for path in stem_paths.values():
                         send_to_recycle_bin(path)
+                        deleted_paths.append(path)
                 names = ', '.join(p.name for _, p, _ in failed)
                 self.log(f'[deleted] {display}: Threshold not met: {names}')
                 if layout == SDR_LAYOUT_MUSDB and delete_whole is not None:
@@ -2024,10 +2136,13 @@ class SdrWorker(threading.Thread):
                     self._stats['deleted_whole_folder'].append(display)
             except OSError as e:
                 self.log(f'[delete error] {display}: {e}')
+            else:
+                self._cleanup_empty_dirs_after_delete(deleted_paths)
         else:
             for cat, path, _score in failed:
                 try:
                     send_to_recycle_bin(path)
+                    deleted_paths.append(path)
                     if layout == SDR_LAYOUT_STEMS:
                         loc = f'{path.parent.name}/{path.name}'
                     elif layout in SDR_SINGLE_FLAT_LAYOUTS:
@@ -2038,6 +2153,8 @@ class SdrWorker(threading.Thread):
                     self._stats['deleted_stem_files'].append(loc)
                 except OSError as e:
                     self.log(f'[delete error] {path}: {e}')
+            if deleted_paths:
+                self._cleanup_empty_dirs_after_delete(deleted_paths)
 
     def _process_folder(
         self, folder: Path, root: Path, categories: tuple[str, ...],
@@ -2096,6 +2213,7 @@ class SdrWorker(threading.Thread):
             mode_cfg = STEM_MODES[p['stem_mode']]
             preferred = mode_cfg['categories']
             root = Path(p['target_dir'])
+            self._sdr_root = root.resolve()
             scan_mode = p['scan_mode']
 
             self.log('Starting SI-SDR determination...')
@@ -2170,35 +2288,38 @@ class SdrWorker(threading.Thread):
                     f'{len(categories)}-stem sets (of {scanned} scanned).'
                 )
 
-            for fi, target in enumerate(targets, 1):
-                if self._stop.is_set():
-                    self.log('Stopped by user.')
-                    if device == 'cuda':
-                        model.cpu()
-                        torch.cuda.empty_cache()
-                    return
-                if layout == SDR_LAYOUT_MUSDB:
-                    self._process_folder(
-                        target, root, categories, thresholds, model, device, sources, sr,
-                        fi, len(targets),
-                    )
-                elif layout in SDR_SINGLE_FLAT_LAYOUTS:
-                    stem_paths: dict[str, Path] = target
-                    cat = next(iter(stem_paths))
-                    display = stem_paths[cat].stem
-                    self._process_song(
-                        stem_paths, display, categories, thresholds, model, device, sources, sr,
-                        fi, len(targets), layout=layout,
-                    )
-                else:
-                    stem_paths: dict[str, Path] = target
-                    cat = next(iter(stem_paths))
-                    display = stem_file_song_key(stem_paths[cat], cat)
-                    self._process_song(
-                        stem_paths, display, categories, thresholds, model, device, sources, sr,
-                        fi, len(targets), layout=SDR_LAYOUT_STEMS,
-                    )
-                self._mark_folder_done()
+            try:
+                for fi, target in enumerate(targets, 1):
+                    if self._stop.is_set():
+                        self.log('Stopped by user.')
+                        if device == 'cuda':
+                            model.cpu()
+                            torch.cuda.empty_cache()
+                        return
+                    if layout == SDR_LAYOUT_MUSDB:
+                        self._process_folder(
+                            target, root, categories, thresholds, model, device, sources, sr,
+                            fi, len(targets),
+                        )
+                    elif layout in SDR_SINGLE_FLAT_LAYOUTS:
+                        stem_paths: dict[str, Path] = target
+                        cat = next(iter(stem_paths))
+                        display = stem_paths[cat].stem
+                        self._process_song(
+                            stem_paths, display, categories, thresholds, model, device, sources, sr,
+                            fi, len(targets), layout=layout,
+                        )
+                    else:
+                        stem_paths: dict[str, Path] = target
+                        cat = next(iter(stem_paths))
+                        display = stem_file_song_key(stem_paths[cat], cat)
+                        self._process_song(
+                            stem_paths, display, categories, thresholds, model, device, sources, sr,
+                            fi, len(targets), layout=SDR_LAYOUT_STEMS,
+                        )
+                    self._mark_folder_done()
+            finally:
+                self._prune_empty_sdr_dirs()
 
             elapsed = time.monotonic() - self._run_started_at
             self._log_sdr_summary(elapsed)
@@ -2226,6 +2347,27 @@ COLORS = {
     'status_trough': '#343647',
     'status_pct':    '#ffffff',
 }
+
+
+def _blend_hex(fg: str, bg: str, t: float) -> str:
+    t = max(0.0, min(1.0, t))
+    fg = fg.lstrip('#')
+    bg = bg.lstrip('#')
+    fr, fg_g, fb = (int(fg[i:i + 2], 16) for i in (0, 2, 4))
+    br, bg_g, bb = (int(bg[i:i + 2], 16) for i in (0, 2, 4))
+    return (
+        f'#{int(fr + (br - fr) * t):02x}'
+        f'{int(fg_g + (bg_g - fg_g) * t):02x}'
+        f'{int(fb + (bb - fb) * t):02x}'
+    )
+
+
+def _entry_select_colors() -> tuple[str, str]:
+    c = COLORS
+    return (
+        _blend_hex(c['accent'], c['panel2'], 0.36),
+        _blend_hex(c['accent'], c['panel2'], 0.58),
+    )
 
 # tk.Label only — ttk TLabel styles ignore small font sizes on Windows/clam.
 HEADER_DESC_FONT = ('Segoe UI', 10)
@@ -3743,6 +3885,7 @@ def apply_theme(root: tk.Tk) -> None:
     section = ('Segoe UI Semibold', 8)
     title = ('Segoe UI Semibold', 16)
     C = COLORS
+    select_active, select_inactive = _entry_select_colors()
     action_pad = (ACTION_BTN_PADX, ACTION_BTN_PADY)
     action_bw = 1
     action_pad_states = [
@@ -3756,6 +3899,9 @@ def apply_theme(root: tk.Tk) -> None:
 
     root.configure(bg=C['bg'])
     root.option_add('*Font', base)
+    root.option_add('*selectBackground', select_active)
+    root.option_add('*selectForeground', C['fg'])
+    root.option_add('*inactiveSelectBackground', select_inactive)
 
     style.configure('.', background=C['bg'], foreground=C['fg'],
                     fieldbackground=C['panel2'], bordercolor=C['border'],
@@ -3775,11 +3921,13 @@ def apply_theme(root: tk.Tk) -> None:
         'TLabelframe.Label':         {'background': C['bg'], 'foreground': C['fg_dim'], 'font': section},
         'TEntry':                    {'fieldbackground': C['panel2'], 'foreground': C['fg'],
                                       'bordercolor': C['border'], 'insertcolor': C['fg'],
+                                      'selectbackground': select_active,
+                                      'selectforeground': C['fg'],
                                       'padding': CTRL_FIELD_PAD},
         'TCombobox':                 {'fieldbackground': C['panel2'], 'background': C['panel2'],
                                       'foreground': C['fg'], 'arrowcolor': C['fg_dim'],
                                       'bordercolor': C['border'], 'padding': CTRL_FIELD_PAD,
-                                      'selectbackground': C['panel2'], 'selectforeground': C['fg'],
+                                      'selectbackground': select_active, 'selectforeground': C['fg'],
                                       'insertcolor': C['fg']},
         'TCheckbutton':              {'background': C['bg'], 'foreground': C['fg'],
                                       'indicatorcolor': C['panel2']},
@@ -3815,6 +3963,8 @@ def apply_theme(root: tk.Tk) -> None:
         'TSpinbox':                  {'fieldbackground': C['panel2'], 'foreground': C['fg'],
                                       'background': C['panel2'], 'bordercolor': C['border'],
                                       'arrowcolor': C['fg_dim'], 'insertcolor': C['fg'],
+                                      'selectbackground': select_active,
+                                      'selectforeground': C['fg'],
                                       'padding': CTRL_FIELD_PAD},
         'Vertical.TScrollbar':       {'background': C['panel2'], 'troughcolor': C['log_bg'],
                                       'bordercolor': C['border'], 'arrowcolor': C['fg_dim'],
@@ -3827,6 +3977,22 @@ def apply_theme(root: tk.Tk) -> None:
         'Class.TNotebook.Tab':       {'background': C['panel2'], 'foreground': C['fg_dim'],
                                       'padding': (14, 3), 'font': bold, 'borderwidth': 1,
                                       'bordercolor': C['border'],
+                                      'lightcolor': C['panel2'], 'darkcolor': C['panel2']},
+        'Mode.TNotebook':            {'background': C['bg'], 'borderwidth': 0,
+                                      'tabmargins': [2, 0, 2, 0],
+                                      'bordercolor': C['bg'], 'lightcolor': C['bg'],
+                                      'darkcolor': C['bg']},
+        'Mode.TNotebook.Tab':        {'background': C['panel2'], 'foreground': C['fg_dim'],
+                                      'padding': (14, 4), 'font': bold, 'borderwidth': 1,
+                                      'bordercolor': C['panel2'],
+                                      'lightcolor': C['panel2'], 'darkcolor': C['panel2']},
+        'Sub.TNotebook':             {'background': C['bg'], 'borderwidth': 0,
+                                      'tabmargins': [2, 0, 2, 0],
+                                      'bordercolor': C['bg'], 'lightcolor': C['bg'],
+                                      'darkcolor': C['bg']},
+        'Sub.TNotebook.Tab':         {'background': C['panel2'], 'foreground': C['fg_dim'],
+                                      'padding': (14, 4), 'font': bold, 'borderwidth': 1,
+                                      'bordercolor': C['panel2'],
                                       'lightcolor': C['panel2'], 'darkcolor': C['panel2']},
     }
     for name, opts in cfgs.items():
@@ -3844,15 +4010,51 @@ def apply_theme(root: tk.Tk) -> None:
     for btn_style in ('TButton', 'Path.TButton'):
         style.layout(btn_style, _btn_layout)
 
-    style.map('TEntry',    bordercolor=[('focus', C['accent'])])
-    style.map('TSpinbox',  bordercolor=[('focus', C['accent'])])
+    style.layout(
+        'Mode.TNotebook.Tab',
+        [('Notebook.tab', {
+            'sticky': 'nswe',
+            'children': [
+                ('Notebook.padding', {
+                    'side': 'top', 'sticky': 'nswe',
+                    'children': [
+                        ('Notebook.label', {'side': 'top', 'sticky': ''}),
+                    ],
+                }),
+            ],
+        })],
+    )
+
+    style.layout(
+        'Sub.TNotebook.Tab',
+        [('Notebook.tab', {
+            'sticky': 'nswe',
+            'children': [
+                ('Notebook.padding', {
+                    'side': 'top', 'sticky': 'nswe',
+                    'children': [
+                        ('Notebook.label', {'side': 'top', 'sticky': ''}),
+                    ],
+                }),
+            ],
+        })],
+    )
+
+    style.map('TEntry',
+              bordercolor=[('focus', C['accent'])],
+              selectbackground=[('focus', select_active), ('!focus', select_inactive)],
+              selectforeground=[('focus', C['fg']), ('!focus', C['fg_dim'])])
+    style.map('TSpinbox',
+              bordercolor=[('focus', C['accent'])],
+              selectbackground=[('focus', select_active), ('!focus', select_inactive)],
+              selectforeground=[('focus', C['fg']), ('!focus', C['fg_dim'])])
     style.map('TCombobox',
               fieldbackground=[('readonly', C['panel2']), ('!disabled', C['panel2'])],
               background=[('readonly', C['panel2']), ('active', C['panel2'])],
               foreground=[('readonly', C['fg']), ('hover', C['fg']),
                           ('focus', C['fg']), ('active', C['fg'])],
-              selectbackground=[('readonly', C['panel2']), ('focus', C['panel2'])],
-              selectforeground=[('readonly', C['fg']), ('focus', C['fg'])],
+              selectbackground=[('focus', select_active), ('!focus', select_inactive)],
+              selectforeground=[('focus', C['fg']), ('!focus', C['fg_dim'])],
               arrowcolor=[('hover', C['fg']), ('active', C['fg'])],
               bordercolor=[('focus', C['accent'])])
     style.map('TCheckbutton',
@@ -3896,9 +4098,35 @@ def apply_theme(root: tk.Tk) -> None:
               darkcolor=[('selected', C['bg']), ('active', C['panel']), ('!selected', C['panel2'])],
               bordercolor=[('selected', C['border']), ('active', C['border'])],
               expand=[('selected', [1, 1, 1, 0])])
+    style.map('Mode.TNotebook.Tab',
+              background=[('selected', C['bg']), ('active', C['panel']), ('!selected', C['panel2'])],
+              foreground=[('selected', C['fg']), ('active', C['fg']), ('!selected', C['fg_dim'])],
+              lightcolor=[('selected', C['border']), ('active', C['border']),
+                          ('!selected', C['panel2'])],
+              darkcolor=[('selected', C['border']), ('active', C['border']),
+                         ('!selected', C['panel2'])],
+              bordercolor=[('selected', C['border']), ('active', C['border']),
+                           ('!selected', C['panel2'])])
+    style.map('Mode.TNotebook',
+              bordercolor=[('active', C['bg']), ('!active', C['bg'])],
+              lightcolor=[('active', C['bg']), ('!active', C['bg'])],
+              darkcolor=[('active', C['bg']), ('!active', C['bg'])])
+    style.map('Sub.TNotebook.Tab',
+              background=[('selected', C['bg']), ('active', C['panel']), ('!selected', C['panel2'])],
+              foreground=[('selected', C['fg']), ('active', C['fg']), ('!selected', C['fg_dim'])],
+              lightcolor=[('selected', C['border']), ('active', C['border']),
+                          ('!selected', C['panel2'])],
+              darkcolor=[('selected', C['border']), ('active', C['border']),
+                         ('!selected', C['panel2'])],
+              bordercolor=[('selected', C['border']), ('active', C['border']),
+                           ('!selected', C['panel2'])])
+    style.map('Sub.TNotebook',
+              bordercolor=[('active', C['bg']), ('!active', C['bg'])],
+              lightcolor=[('active', C['bg']), ('!active', C['bg'])],
+              darkcolor=[('active', C['bg']), ('!active', C['bg'])])
 
     for k, v in (('background', C['panel2']), ('foreground', C['fg']),
-                 ('selectBackground', C['accent']), ('selectForeground', C['fg'])):
+                 ('selectBackground', select_active), ('selectForeground', C['fg'])):
         root.option_add(f'*TCombobox*Listbox.{k}', v)
 
 
@@ -4004,8 +4232,10 @@ TIPS = {
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.withdraw()
         self.title('STEM organizer')
-        self.geometry(f'{WIN_DEFAULT_W}x{WIN_DEFAULT_H}')
+        x, y, w, h = _place_window_centered(self, WIN_DEFAULT_W, WIN_DEFAULT_H)
+        self.geometry(f'{w}x{h}+{x}+{y}')
         self.minsize(WIN_MIN_W, WIN_MIN_H)
 
         self.input_dir    = tk.StringVar()
@@ -4048,6 +4278,7 @@ class App(tk.Tk):
         self._resource_monitor = None
         self._resource_visible = False
         self._stopping = False
+        self._pair_busy = False
 
         self.log_queue: queue.Queue = queue.Queue()
         self.worker = None
@@ -4074,9 +4305,11 @@ class App(tk.Tk):
         self._load_settings()
         self._center_on_screen()
         if _USE_CUSTOM_TITLE_BAR:
-            self.after(0, apply_native_window_frame, self)
+            apply_native_window_frame(self)
             self.bind('<Map>', self._on_window_map, add='+')
         self.protocol('WM_DELETE_WINDOW', self._on_close)
+        self.update_idletasks()
+        self.deiconify()
         self.after(100, self._drain_log)
         self.after(300, self._maybe_show_device_notice)
 
@@ -4102,8 +4335,37 @@ class App(tk.Tk):
             self.hide_device_notice = True
             self._save_settings()
 
+    def _classify_mode_active(self) -> bool:
+        return self.mode_notebook.index(self.mode_notebook.select()) == 0
+
+    def _show_organize_action_bar(self) -> None:
+        self.start_btn.pack(side='left')
+        self.stop_btn.pack(side='left', padx=(8, 0))
+        self.save_log_btn.pack(side='left', padx=(8, 0))
+        self.clear_log_btn.pack(side='left', padx=(8, 0))
+        self.play_btn.pack(side='right')
+
+    def _hide_organize_action_bar(self) -> None:
+        for widget in self._organize_action_widgets:
+            widget.pack_forget()
+
+    def _on_mode_tab_changed(self, _event=None) -> None:
+        if self._classify_mode_active():
+            self.pair_panel.hide_action_bar()
+            self._show_organize_action_bar()
+            self._update_action_buttons_for_tab()
+        else:
+            self._hide_organize_action_bar()
+            self.pair_panel.show_action_bar()
+            if not self._pair_busy:
+                self.pair_panel.set_buttons_state('normal')
+
     def _set_action_buttons(self, running: bool, *, sdr: bool = False) -> None:
         """Only swap colors — never disabled/style changes (ttk shrinks on both)."""
+        if hasattr(self, 'pair_panel'):
+            self.pair_panel.set_buttons_state('disabled' if running else 'normal')
+        if not self._classify_mode_active():
+            return
         if running:
             self.start_btn.configure(fg=COLORS['fg_dim'], cursor='arrow')
             self.stop_btn.configure(fg=COLORS['danger'], cursor='hand2')
@@ -4112,6 +4374,8 @@ class App(tk.Tk):
             self.stop_btn.configure(fg=COLORS['fg_dim'], cursor='arrow')
 
     def _update_action_buttons_for_tab(self) -> None:
+        if not self._classify_mode_active():
+            return
         sdr = self._class_tab.get() == 'sdr'
         running = (
             (self.sdr_worker is not None and self.sdr_worker.is_alive()) if sdr
@@ -4204,7 +4468,10 @@ class App(tk.Tk):
         w = WIN_DEFAULT_W
         h = WIN_DEFAULT_H
         x, y, w, h = _place_window_centered(self, w, h)
-        self.geometry(f'{w}x{h}+{x}+{y}')
+        if _USE_CUSTOM_TITLE_BAR and _win_move_resize(self, x, y, w, h):
+            _sync_tk_geometry(self, x, y, w, h)
+        else:
+            self.geometry(f'{w}x{h}+{x}+{y}')
 
     def _on_window_map(self, _event=None) -> None:
         if getattr(self, '_resize_active', False):
@@ -4446,6 +4713,8 @@ class App(tk.Tk):
         for widget in (bar, title):
             self._bind_title_drag(widget)
 
+        self._title_bar = bar
+
     def _build_ui(self):
         content_row = 1 if _USE_CUSTOM_TITLE_BAR else 0
         bottom_row = 2 if _USE_CUSTOM_TITLE_BAR else 1
@@ -4468,6 +4737,7 @@ class App(tk.Tk):
 
         actions = ttk.Frame(left)
         actions.pack(side='bottom', fill='x', padx=SECTION_PADX, pady=(4, ACTIONS_BOTTOM_PAD))
+        self._actions_frame = actions
         C = COLORS
         self.start_btn = tk.Button(
             actions, text='▶  Start RMS', command=self._start,
@@ -4525,16 +4795,33 @@ class App(tk.Tk):
 
         self.play_btn.bind('<Enter>', _play_enter, add='+')
         self.play_btn.bind('<Leave>', _play_leave, add='+')
+        self._organize_action_widgets = (
+            self.start_btn, self.stop_btn, self.save_log_btn,
+            self.clear_log_btn, self.play_btn,
+        )
 
         left_body = ttk.Frame(left)
         left_body.pack(side='top', fill='both', expand=True)
+
+        self.mode_notebook = ttk.Notebook(left_body, style='Mode.TNotebook', takefocus=0)
+        self.mode_notebook.pack(fill='both', expand=True)
+        organize_tab = ttk.Frame(self.mode_notebook)
+        pair_finder_tab = ttk.Frame(self.mode_notebook)
+        self.mode_notebook.add(organize_tab, text='  Classify  ')
+        self.mode_notebook.add(pair_finder_tab, text='  Match & Align  ')
+
+        from pair_finder_panel import PairFinderPanel
+        self.pair_panel = PairFinderPanel(self, pair_finder_tab)
+        self.pair_panel.pack(fill='both', expand=True)
+        self.pair_panel.attach_action_bar(actions)
+        self.mode_notebook.bind('<<NotebookTabChanged>>', self._on_mode_tab_changed)
 
         right = ttk.Frame(content)
         right.grid(row=0, column=1, sticky='nsew')
         right.rowconfigure(0, weight=1)
         right.columnconfigure(0, weight=1)
 
-        header = ttk.Frame(left_body)
+        header = ttk.Frame(organize_tab)
         header.pack(fill='x', padx=SECTION_PADX, pady=(HEADER_TOP_PAD, 12))
         desc_row = tk.Frame(header, bg=COLORS['bg'])
         desc_row.pack(fill='x', anchor='w')
@@ -4555,7 +4842,7 @@ class App(tk.Tk):
                 wraplength=500, justify='left',
             ).pack(anchor='w', pady=(4, 0))
 
-        paths = ttk.LabelFrame(left_body, text='  PATHS  ', padding=SECTION_INNER_PAD)
+        paths = ttk.LabelFrame(organize_tab, text='  PATHS  ', padding=SECTION_INNER_PAD)
         paths.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
         paths.columnconfigure(1, weight=1)
         self._path_row(paths, 0, 'Input',  self.input_dir,  self._pick_input,
@@ -4564,47 +4851,64 @@ class App(tk.Tk):
                        self._open_output, TIPS['output'])
         self._combo_field(paths, 2, 0, 'Scan',   self.scan_label,   list(SCAN_MODES),   TIPS['scan'],
                           sticky='w', width=PATH_COMBO_WIDTH)
-        self._combo_field(paths, 3, 0, 'Naming', self.naming_label, list(NAMING_MODES), TIPS['naming'],
-                          sticky='w', width=PATH_COMBO_WIDTH)
+        naming_lbl = ttk.Label(paths, text='Naming')
+        naming_lbl.grid(row=3, column=0, sticky='w', padx=(0, 10), pady=CTRL_ROW_PADY)
+        naming_cell = ttk.Frame(paths)
+        naming_cell.grid(row=3, column=1, columnspan=3, sticky='ew', pady=CTRL_ROW_PADY)
+        naming_cell.columnconfigure(1, weight=1)
+        naming_cb = ttk.Combobox(
+            naming_cell, textvariable=self.naming_label, values=list(NAMING_MODES),
+            state='readonly', width=PATH_COMBO_WIDTH,
+        )
+        naming_cb.grid(row=0, column=0, sticky='w', padx=(0, 16))
+        for seq in ('<Control-a>', '<Control-A>', '<KeyPress>'):
+            naming_cb.bind(seq, lambda e: 'break')
+        naming_cb.bind('<<ComboboxSelected>>', lambda e: naming_cb.selection_clear())
+        naming_cb.bind('<FocusIn>', lambda e: naming_cb.selection_clear())
+        tip(naming_lbl, naming_cb, text=TIPS['naming'])
         dur_chk = ttk.Checkbutton(
-            paths, text='Append duration to output folder name',
+            naming_cell, text='Append duration to output folder name',
             variable=self.append_duration,
         )
-        dur_chk.grid(row=4, column=0, columnspan=4, sticky='w', pady=(2, 0))
+        dur_chk.grid(row=0, column=1, sticky='e')
         Tooltip(dur_chk, TIPS['duration'])
 
-        filters = ttk.LabelFrame(left_body, text='  OUTPUT FILTERS  ', padding=SECTION_INNER_PAD)
+        filters = ttk.LabelFrame(organize_tab, text='  OUTPUT FILTERS  ', padding=SECTION_INNER_PAD)
         filters.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
-        filters.columnconfigure(1, weight=1)
+        filters.columnconfigure(0, weight=1)
+        filter_row0 = ttk.Frame(filters)
+        filter_row0.grid(row=0, column=0, sticky='ew', pady=4)
+        filter_left = ttk.Frame(filter_row0)
+        filter_left.pack(side='left')
         short_chk = ttk.Checkbutton(
-            filters, text='Delete folder if shorter than',
+            filter_left, text='Delete folder if shorter than',
             variable=self.delete_if_short,
             command=self._update_filter_state,
         )
-        short_chk.grid(row=0, column=0, sticky='w', pady=4)
+        short_chk.pack(side='left')
         Tooltip(short_chk, TIPS['delete_short'])
-        dur_ctrl = ttk.Frame(filters)
-        dur_ctrl.grid(row=0, column=1, sticky='w', padx=(8, 0), pady=4)
+        dur_ctrl = ttk.Frame(filter_left)
+        dur_ctrl.pack(side='left', padx=(8, 0))
         self.min_dur_sp = ttk.Spinbox(
             dur_ctrl, from_=1, to=600, textvariable=self.min_duration_sec, width=6,
         )
         self.min_dur_sp.pack(side='left')
         ttk.Label(dur_ctrl, text='seconds', style='Dim.TLabel').pack(side='left', padx=(8, 0))
         tip(self.min_dur_sp, text=TIPS['min_duration'])
+        skip_chk = ttk.Checkbutton(
+            filter_row0, text='Skip if output already exists',
+            variable=self.skip_existing,
+        )
+        skip_chk.pack(side='right')
+        Tooltip(skip_chk, TIPS['skip_existing'])
         incomplete_chk = ttk.Checkbutton(
             filters, text='Delete folder if any expected stem is missing',
             variable=self.delete_if_incomplete,
         )
-        incomplete_chk.grid(row=1, column=0, columnspan=4, sticky='w', pady=(2, 0))
+        incomplete_chk.grid(row=1, column=0, sticky='w', pady=(2, 0))
         Tooltip(incomplete_chk, TIPS['delete_incomplete'])
-        skip_chk = ttk.Checkbutton(
-            filters, text='Skip if output already exists',
-            variable=self.skip_existing,
-        )
-        skip_chk.grid(row=2, column=0, columnspan=4, sticky='w', pady=(6, 0))
-        Tooltip(skip_chk, TIPS['skip_existing'])
 
-        opts = ttk.LabelFrame(left_body, text='  OPTIONS  ', padding=SECTION_INNER_PAD)
+        opts = ttk.LabelFrame(organize_tab, text='  OPTIONS  ', padding=SECTION_INNER_PAD)
         opts.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
         opts.columnconfigure(1, weight=1)
         opts.columnconfigure(3, weight=1)
@@ -4628,7 +4932,7 @@ class App(tk.Tk):
         Tooltip(cuda_chk, TIPS['cuda'])
         self._combo_field(opts, 2, 0, 'On ambiguous', self.ambig_label, list(AMBIG_MODES), TIPS['ambig'])
 
-        cls = ttk.LabelFrame(left_body, text='  CLASSIFICATION  ', padding=CLASS_FRAME_PAD)
+        cls = ttk.LabelFrame(organize_tab, text='  CLASSIFICATION  ', padding=CLASS_FRAME_PAD)
         cls.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
         cls.columnconfigure(0, weight=1)
         self.cls_frame = cls
@@ -4671,14 +4975,14 @@ class App(tk.Tk):
             font=SDR_THRESH_NOTE_FONT, fg=COLORS['fg_dim'], bg=COLORS['bg'],
         ).grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 8))
         self._sdr_thresh_frame = ttk.Frame(self.cls_sdr_tab)
-        self._sdr_thresh_frame.grid(row=1, column=0, columnspan=2, sticky='ew')
+        self._sdr_thresh_frame.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(0, 4))
         self._sdr_thresh_frame.columnconfigure(1, weight=1)
         sdr_del_chk = ttk.Checkbutton(
             self.cls_sdr_tab,
             text='Delete folder if any expected stem is missing after SI-SDR determination',
             variable=self.sdr_delete_folder,
         )
-        sdr_del_chk.grid(row=2, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        sdr_del_chk.grid(row=2, column=0, columnspan=2, sticky='w', pady=(10, 0))
         Tooltip(sdr_del_chk, TIPS['sdr_delete_folder'])
         self.stem_mode.trace_add('write', lambda *_: self._rebuild_sdr_thresholds())
         self._rebuild_sdr_thresholds()
@@ -4705,6 +5009,7 @@ class App(tk.Tk):
         bind_mousewheel(log_frame, self.log_text.yview)
         for tag, color in (('err', '#ff7a7a'), ('warn', LOG_WARN_COLOR),
                            ('ok', '#7ee0a0'), ('info', COLORS['fg_dim']),
+                           ('detail', COLORS['log_fg']),
                            ('sdr_pass', SDR_PASS_COLOR), ('sdr_fail', SDR_FAIL_COLOR),
                            ('sdr_label', SDR_LABEL_COLOR)):
             self.log_text.tag_configure(tag, foreground=color)
@@ -4846,7 +5151,7 @@ class App(tk.Tk):
         )
 
         self._build_resource_bars(self.status_run)
-        self._update_action_buttons_for_tab()
+        self._on_mode_tab_changed()
 
     def _build_resource_bars(self, parent: tk.Misc) -> None:
         row = tk.Frame(parent, bg=COLORS['panel'], height=RESOURCE_ROW_HEIGHT)
@@ -4946,6 +5251,7 @@ class App(tk.Tk):
         running = (
             (self.worker is not None and self.worker.is_alive())
             or (self.sdr_worker is not None and self.sdr_worker.is_alive())
+            or self._pair_busy
         )
         if not running:
             self._stop_resource_monitor()
@@ -5088,16 +5394,16 @@ class App(tk.Tk):
         self.min_dur_sp.configure(state=state)
 
     def _settings_snapshot(self) -> dict:
-        return {
+        snap = {
             'input_dir':    display_path(self.input_dir.get()),
             'output_dir':   display_path(self.output_dir.get()),
             'use_cuda':     self.use_cuda.get(),
             'model_label':  self.model_label.get(),
             'stem_mode':    self.stem_mode.get(),
             'quality':      self.quality.get(),
-            'threshold':    self.threshold.get(),
-            'min_margin':   self.min_margin.get(),
-            'batch_size':   self.batch_size.get(),
+            'threshold':    _safe_tk_float(self.threshold, 0.40),
+            'min_margin':   _safe_tk_float(self.min_margin, 0.20),
+            'batch_size':   _safe_tk_int(self.batch_size, 4),
             'peak_norm':    self.peak_norm.get(),
             'make_mixture': self.make_mixture.get(),
             'dedup':        self.dedup.get(),
@@ -5106,7 +5412,7 @@ class App(tk.Tk):
             'naming_label': self.naming_label.get(),
             'append_duration': self.append_duration.get(),
             'delete_if_short': self.delete_if_short.get(),
-            'min_duration_sec': self.min_duration_sec.get(),
+            'min_duration_sec': _safe_tk_int(self.min_duration_sec, 8),
             'delete_if_incomplete': self.delete_if_incomplete.get(),
             'skip_existing': self.skip_existing.get(),
             'sdr_delete_folder': self.sdr_delete_folder.get(),
@@ -5116,6 +5422,9 @@ class App(tk.Tk):
             },
             'hide_device_notice': self.hide_device_notice,
         }
+        if hasattr(self, 'pair_panel'):
+            snap.update(self.pair_panel.settings_snapshot())
+        return snap
 
     def _load_settings(self) -> None:
         data = load_settings()
@@ -5138,7 +5447,7 @@ class App(tk.Tk):
             self.quality.set(_valid_label(data.get('quality'), QUALITY_PRESETS, 'FLAC 16-bit'))
             self.threshold.set(float(data.get('threshold', self.threshold.get())))
             self.min_margin.set(float(data.get('min_margin', self.min_margin.get())))
-            self.batch_size.set(int(data.get('batch_size', self.batch_size.get())))
+            self.batch_size.set(int(data.get('batch_size', _safe_tk_int(self.batch_size, 4))))
             self.peak_norm.set(bool(data.get('peak_norm', self.peak_norm.get())))
             self.make_mixture.set(bool(data.get('make_mixture', self.make_mixture.get())))
             self.dedup.set(bool(data.get('dedup', self.dedup.get())))
@@ -5147,7 +5456,7 @@ class App(tk.Tk):
             self.naming_label.set(_valid_label(data.get('naming_label'), NAMING_MODES, next(iter(NAMING_MODES))))
             self.append_duration.set(bool(data.get('append_duration', self.append_duration.get())))
             self.delete_if_short.set(bool(data.get('delete_if_short', self.delete_if_short.get())))
-            self.min_duration_sec.set(int(data.get('min_duration_sec', self.min_duration_sec.get())))
+            self.min_duration_sec.set(int(data.get('min_duration_sec', _safe_tk_int(self.min_duration_sec, 8))))
             self.delete_if_incomplete.set(
                 bool(data.get('delete_if_incomplete', self.delete_if_incomplete.get()))
             )
@@ -5167,6 +5476,8 @@ class App(tk.Tk):
             self._update_mixture_state()
             self._update_filter_state()
             self.hide_device_notice = bool(data.get('hide_device_notice', False))
+            if hasattr(self, 'pair_panel'):
+                self.pair_panel._load_settings()
         finally:
             self._loading_settings = False
 
@@ -5176,6 +5487,11 @@ class App(tk.Tk):
         def _autosave(*_):
             if self._loading_settings:
                 return
+            for var in (
+                self.threshold, self.min_margin, self.batch_size, self.min_duration_sec,
+            ):
+                if not _tk_numeric_var_ready(var):
+                    return
             self._save_settings()
 
         for var in (
@@ -5252,6 +5568,8 @@ class App(tk.Tk):
             self._save_settings()
 
     def _start(self):
+        if self._pair_busy:
+            return
         if self.worker and self.worker.is_alive():
             return
         if self.sdr_worker and self.sdr_worker.is_alive():
@@ -5276,9 +5594,9 @@ class App(tk.Tk):
             'model_id':     MODELS[self.model_label.get()],
             'stem_mode':    self.stem_mode.get(),
             'quality':      self.quality.get(),
-            'threshold':    self.threshold.get(),
-            'min_margin':   self.min_margin.get(),
-            'batch_size':   self.batch_size.get(),
+            'threshold':    _safe_tk_float(self.threshold, 0.40),
+            'min_margin':   _safe_tk_float(self.min_margin, 0.20),
+            'batch_size':   _safe_tk_int(self.batch_size, 4),
             'peak_norm':    self.peak_norm.get(),
             'make_mixture': self.make_mixture.get(),
             'dedup':        self.dedup.get(),
@@ -5287,7 +5605,7 @@ class App(tk.Tk):
             'naming_mode':  NAMING_MODES[self.naming_label.get()],
             'append_duration': self.append_duration.get(),
             'delete_if_short': self.delete_if_short.get(),
-            'min_duration_sec': self.min_duration_sec.get(),
+            'min_duration_sec': _safe_tk_int(self.min_duration_sec, 8),
             'delete_if_incomplete': self.delete_if_incomplete.get(),
             'skip_existing': self.skip_existing.get(),
         }
@@ -5301,6 +5619,8 @@ class App(tk.Tk):
         self.worker.start()
 
     def _start_sdr(self):
+        if self._pair_busy:
+            return
         if self.sdr_worker and self.sdr_worker.is_alive():
             return
         if self.worker and self.worker.is_alive():
@@ -5411,19 +5731,39 @@ class App(tk.Tk):
             self._stopping = True
             self._update_progress(self._progress_pct_value, None)
 
+    def _organize_worker_active(self) -> bool:
+        return (
+            (self.worker is not None and self.worker.is_alive())
+            or (self.sdr_worker is not None and self.sdr_worker.is_alive())
+        )
+
+    def _set_pair_busy(self, busy: bool, status: str, panel) -> None:
+        self._pair_busy = busy
+        self.status_var.set(status)
+        panel.set_buttons_state('disabled' if busy else 'normal')
+        if busy:
+            if self._classify_mode_active():
+                self.start_btn.configure(state='disabled')
+                self.stop_btn.configure(state='disabled')
+                self.save_log_btn.configure(state='disabled')
+                self.clear_log_btn.configure(state='disabled')
+            self._show_status_progress()
+        else:
+            if self._classify_mode_active():
+                self._update_action_buttons_for_tab()
+            self._update_progress(100.0, None)
+            self.after(300, self._show_status_idle)
+
+    def _append_pair_log(self, message: str, tag: str = 'info') -> None:
+        self.log_text.configure(state='normal')
+        self.log_text.insert('end', message + '\n', tag if tag in ('err', 'warn', 'ok', 'info', 'detail') else 'info')
+        self.log_text.see('end')
+        self.log_text.configure(state='disabled')
+
     def _open_stem_player(self) -> None:
-        from stem_player import detect_stem_folder, open_stem_player
+        from stem_player import open_stem_player
 
         open_stem_player(self)
-        win = getattr(self, '_stem_player_window', None)
-        if win is None or not win.winfo_exists():
-            return
-        for var in (self.output_dir, self.input_dir):
-            p = Path(var.get().strip())
-            if p.is_dir() and detect_stem_folder(p):
-                win._open_folder(p)
-                break
-        win.after_idle(win._place_and_show)
 
     def _save_log(self) -> None:
         path = filedialog.asksaveasfilename(
@@ -5504,6 +5844,8 @@ class App(tk.Tk):
                     elif isinstance(msg, tuple) and len(msg) == 3 and msg[0] == PROGRESS_TAG:
                         _, pct, eta = msg
                         self._update_progress(float(pct), eta)
+                    elif isinstance(msg, tuple) and len(msg) == 3 and msg[0] == PAIR_LOG_TAG:
+                        self._append_pair_log(msg[1], msg[2])
                     elif isinstance(msg, tuple) and len(msg) == 4 and msg[0] == SDR_LOG_TAG:
                         self._append_sdr_log_line(msg[1], msg[2], msg[3])
                     else:

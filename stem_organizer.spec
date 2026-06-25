@@ -45,6 +45,11 @@ datas = [
 hiddenimports = [
     'update_checker',
     'stem_player',
+    'pair_matcher',
+    'stem_align',
+    'pair_finder_panel',
+    'ui_theme',
+    'restore_align_backups',
     'requests',
     'packaging',
     'packaging.version',

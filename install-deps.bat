@@ -121,6 +121,8 @@ if errorlevel 1 goto failed
 echo.
 echo [3/3] demucs, soundfile, numpy, sounddevice ...
 python -m pip install soundfile numpy sounddevice -t "%DEST%" --upgrade --no-cache-dir
+echo Installing Pair Finder dependencies (mutagen, scipy, librosa)...
+python -m pip install mutagen scipy librosa resampy audioread -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 goto failed
 python -m pip install omegaconf retrying submitit treetable cloudpickle colorama -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 goto failed

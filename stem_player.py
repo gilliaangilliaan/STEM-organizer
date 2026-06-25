@@ -1,13 +1,17 @@
-"""Multi-track stem preview player — opens from the main STEM organizer UI."""
+"""Multi-track stem preview player for Match & Align."""
 from __future__ import annotations
 
+import gc
 import os
+import queue
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import tkinter as tk
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -34,8 +38,9 @@ PLAYER_SR = 44100
 SEEK_JUMP_SEC = 15
 UI_TICK_MS = 33
 
-STEM_ORDER_4 = ('bass', 'drums', 'other', 'vocals')
-STEM_ORDER_2 = ('instrumental', 'vocals')
+STEM_ORDER_4 = ('bass', 'drums', 'other', 'vocals')  # demucs filename stems
+DEMUCS_LAYOUT_STEMS = ('other', 'drums', 'bass')
+FILE_STEM_NAMES = STEM_ORDER_4 + ('instrumental',)
 
 AUDIO_EXTS = ('.wav', '.flac', '.mp3', '.ogg', '.m4a', '.aiff', '.aif', '.opus')
 
@@ -57,12 +62,16 @@ WAVE_ZOOM_STEP = 1.22
 WAVE_PEAK_BINS_FULL = 4096
 WAVE_FOLLOW_POS = 0.22  # keep playhead ~22% from left while playing zoomed-in
 
+BACKUP_DIR_NAME = '_backup_before_align'
+
 STEM_COLORS = {
     'bass': '#ef4444',
     'drums': '#f59e0b',
     'other': '#10b981',
     'vocals': '#a855f7',
     'instrumental': '#60A5FA',
+    'acapella': '#a855f7',
+    'original': '#7c5cff',
 }
 
 STEM_LABELS = {
@@ -71,11 +80,29 @@ STEM_LABELS = {
     'other': 'Other',
     'vocals': 'Vocals',
     'instrumental': 'Instrumental',
+    'acapella': 'Acapella',
+    'original': 'Original',
 }
 
+
+def _stem_row_label(name: str, stem_roles: set[str]) -> str:
+    """Show Vocals for demucs 4-stem folders; Acapella for pair-finder layouts."""
+    if name not in ('acapella', 'vocals'):
+        return STEM_LABELS.get(name, name.title())
+    if 'instrumental' in stem_roles or 'original' in stem_roles:
+        return 'Acapella'
+    if {'other', 'drums', 'bass'}.issubset(stem_roles):
+        return 'Vocals'
+    return STEM_LABELS.get(name, name.title())
+
 SHORTCUT_FONT = ('Segoe UI', 8)
-TITLE_HOVER_BG = '#1e2029'
-WAVEFORM_DIM_BLEND = 0.68
+BUSY_DOT_CYCLE_SEC = 1.0
+_BUSY_DOT_FRAMES = ('.', '..', '...')
+BUSY_FONT = ('Segoe UI', 10)
+BUSY_WORD_WIDTH = 7   # "Loading"
+BUSY_DOTS_WIDTH = 3
+MIN_BUSY_BADGE_SEC = 0.5
+FOLDER_CACHE_MAX = 8
 
 
 def _blend_hex(fg: str, bg: str, t: float) -> str:
@@ -91,8 +118,15 @@ def _blend_hex(fg: str, bg: str, t: float) -> str:
     return f'#{r:02x}{g:02x}{b:02x}'
 
 
+TITLE_HOVER_BG = '#1e2029'
+TITLE_FLASH_PASS_BG = _blend_hex('#7ee0a0', '#262833', 0.55)
+TITLE_FLASH_FAIL_BG = _blend_hex('#ff7a7a', '#262833', 0.55)
+TITLE_FLASH_MS = 1500
+WAVEFORM_DIM_BLEND = 0.68
+
+
 def _bind_tooltip(widget: tk.Misc, text: str) -> None:
-    from stem_organizer_ui import Tooltip
+    from ui_theme import Tooltip
 
     Tooltip(widget, text)
 
@@ -140,7 +174,7 @@ def _shortcut_group(
 
 def _populate_shortcuts_bar(bar: tk.Frame, colors: dict, *, stem_count: int = 0) -> None:
     has_stems = stem_count > 0
-    n_cols = 5 if has_stems else 3
+    n_cols = 6 if has_stems else 4
     for col in range(n_cols):
         bar.columnconfigure(col, weight=1)
 
@@ -154,16 +188,18 @@ def _populate_shortcuts_bar(bar: tk.Frame, colors: dict, *, stem_count: int = 0)
     _place_group(0, 'Play / pause', ('Space',), 'plus', anchor='w')
 
     if has_stems:
-        n = min(stem_count, 4)
+        n = min(stem_count, 3)
         solo_keys = tuple(str(i + 1) for i in range(n))
         mute_keys = tuple(f'⇧{i + 1}' for i in range(n))
         _place_group(1, 'Solo stem', solo_keys, 'gap')
-        _place_group(2, 'Zoom in / out', ('Ctrl', 'scroll ↑↓'), 'plus')
-        _place_group(3, 'Mute stem', mute_keys, 'gap')
-        _place_group(4, 'Seek ±15 seconds', ('←', '→'), 'gap', anchor='e')
+        _place_group(2, 'Mute stem', mute_keys, 'gap')
+        _place_group(3, 'Seek ±15 seconds', ('←', '→'), 'gap')
+        _place_group(4, 'Prev / next song', ('[', ']'), 'gap')
+        _place_group(5, 'Pass / Fail folder', ('P', 'F'), 'gap', anchor='e')
     else:
         _place_group(1, 'Zoom in / out', ('Ctrl', 'scroll ↑↓'), 'plus')
-        _place_group(2, 'Seek ±15 seconds', ('←', '→'), 'gap', anchor='e')
+        _place_group(2, 'Prev / next song', ('[', ']'), 'gap')
+        _place_group(3, 'Pass / Fail folder', ('P', 'F'), 'gap', anchor='e')
 
 
 def _parse_window_size(widget: tk.Misc) -> tuple[int, int]:
@@ -179,33 +215,80 @@ def _parse_window_size(widget: tk.Misc) -> tuple[int, int]:
     return max(1, widget.winfo_width()), max(1, widget.winfo_height())
 
 
-def _parent_window_rect(parent: tk.Misc) -> tuple[int, int, int, int]:
-    """Return (x, y, width, height) for the parent top-level window."""
-    parent.update_idletasks()
-    if sys.platform == 'win32':
-        try:
-            from stem_organizer_ui import _win_window_rect
+def _win_toplevel_hwnd(root: tk.Misc) -> int:
+    user32 = ctypes.windll.user32
+    wid = int(root.winfo_id())
+    return int(user32.GetParent(wid) or wid)
 
-            rect = _win_window_rect(parent)
-            if rect is not None:
-                return rect
-        except Exception:
-            pass
+
+def _win_window_rect(root: tk.Misc) -> tuple[int, int, int, int] | None:
+    if sys.platform != 'win32' or ctypes is None:
+        return None
     try:
-        if parent.overrideredirect():
+        class _RECT(ctypes.Structure):
+            _fields_ = [
+                ('left', ctypes.c_long),
+                ('top', ctypes.c_long),
+                ('right', ctypes.c_long),
+                ('bottom', ctypes.c_long),
+            ]
+
+        user32 = ctypes.windll.user32
+        hwnd = _win_toplevel_hwnd(root)
+        rect = _RECT()
+        if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
             return (
-                parent.winfo_rootx(),
-                parent.winfo_rooty(),
-                max(1, parent.winfo_width()),
-                max(1, parent.winfo_height()),
+                int(rect.left),
+                int(rect.top),
+                int(rect.right - rect.left),
+                int(rect.bottom - rect.top),
             )
-    except tk.TclError:
+    except Exception:
         pass
-    pw, ph = _parse_window_size(parent)
-    return parent.winfo_rootx(), parent.winfo_rooty(), pw, ph
+    return None
+
+
+def _parent_title_bar_bottom(parent: tk.Misc) -> int:
+    """Screen Y coordinate immediately below the parent's custom title bar."""
+    parent.update_idletasks()
+    bar = getattr(parent, '_title_bar', None)
+    if bar is not None:
+        try:
+            bar.update_idletasks()
+            bottom = bar.winfo_rooty() + bar.winfo_height()
+            if bottom > parent.winfo_rooty():
+                return bottom
+        except tk.TclError:
+            pass
+    return parent.winfo_rooty() + _parent_title_bar_height(parent)
+
+
+def _parent_content_rect(parent: tk.Misc) -> tuple[int, int, int, int]:
+    """Return (x, y, width, height) for the STEM player, bottom-aligned under the title bar."""
+    parent.update_idletasks()
+    px = parent.winfo_rootx()
+    pw = max(1, parent.winfo_width())
+    parent_bottom = parent.winfo_rooty() + max(1, parent.winfo_height())
+    title_bottom = _parent_title_bar_bottom(parent)
+    ph = max(PLAYER_MIN_H, parent_bottom - title_bottom)
+    py = parent_bottom - ph
+    if py < title_bottom:
+        py = title_bottom
+        ph = max(PLAYER_MIN_H, parent_bottom - py)
+    return px, py, pw, ph
 
 
 def _parent_title_bar_height(parent: tk.Misc) -> int:
+    try:
+        bar = getattr(parent, '_title_bar', None)
+        if bar is not None:
+            parent.update_idletasks()
+            bar.update_idletasks()
+            h = bar.winfo_height()
+            if h > 0:
+                return h
+    except (AttributeError, tk.TclError):
+        pass
     try:
         from stem_organizer_ui import TITLE_BAR_HEIGHT, _USE_CUSTOM_TITLE_BAR
 
@@ -216,36 +299,56 @@ def _parent_title_bar_height(parent: tk.Misc) -> int:
     return 0
 
 
+def _fit_toplevel_outer_bounds(
+    win: tk.Misc, x: int, y: int, w: int, h: int,
+) -> None:
+    """Position a decorated Toplevel so its outer window bounds match the target rect."""
+    target_right = x + w
+    target_bottom = y + h
+    gx, gy, gw, gh = x, y, max(PLAYER_MIN_W, w), max(PLAYER_MIN_H, h)
+    for _ in range(8):
+        try:
+            win.geometry(f'{int(gw)}x{int(gh)}+{int(gx)}+{int(gy)}')
+        except tk.TclError:
+            return
+        win.update_idletasks()
+        outer = _win_window_rect(win)
+        if outer is None:
+            rx, ry = win.winfo_rootx(), win.winfo_rooty()
+            gw += w - win.winfo_width()
+            gh += h - win.winfo_height()
+            gx += x - rx
+            gy += y - ry
+            try:
+                win.geometry(f'{int(gw)}x{int(gh)}+{int(gx)}+{int(gy)}')
+            except tk.TclError:
+                pass
+            return
+        ox, oy, ow, oh = outer
+        gx += x - ox
+        gy += y - oy
+        gw += w - ow
+        gh += h - oh
+        if (
+            abs(ox - x) <= 1 and abs(oy - y) <= 1
+            and abs(ox + ow - target_right) <= 1
+            and abs(oy + oh - target_bottom) <= 1
+        ):
+            break
+        gw = max(PLAYER_MIN_W, gw)
+        gh = max(PLAYER_MIN_H, gh)
+
+
 def _place_over_parent(
     parent: tk.Misc, child: tk.Misc, width: int, height: int,
 ) -> None:
-    """Match parent width; fill main content below the title bar, bottom-aligned."""
+    """Cover the parent below its title bar, aligned to the main window bottom."""
     parent.update_idletasks()
     child.update_idletasks()
-    px, py, pw, ph = _parent_window_rect(parent)
-    top_inset = _parent_title_bar_height(parent)
+    px, py, pw, ph = _parent_content_rect(parent)
     width = max(PLAYER_MIN_W, int(pw))
-    height = max(PLAYER_MIN_H, min(int(height), ph - top_inset))
-    x = px
-    y = py + ph - height
-    geo = f'{width}x{height}+{x}+{y}'
-    try:
-        child.geometry(geo)
-    except tk.TclError:
-        pass
-    if sys.platform == 'win32' and ctypes is not None:
-        try:
-            from stem_organizer_ui import _win_toplevel_hwnd
-
-            hwnd = _win_toplevel_hwnd(child)
-            SWP_NOZORDER = 0x0004
-            SWP_NOACTIVATE = 0x0010
-            ctypes.windll.user32.SetWindowPos(
-                hwnd, None, int(x), int(y), int(width), int(height),
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            )
-        except Exception:
-            pass
+    height = max(PLAYER_MIN_H, min(int(height), int(ph)))
+    _fit_toplevel_outer_bounds(child, px, py, width, height)
     child.lift(parent)
 
 
@@ -259,10 +362,8 @@ def _ensure_player_audio_deps() -> None:
     global _sf, _np, _ffmpeg, _audio_deps_ready
     if _audio_deps_ready:
         return
-    from deps_bootstrap import init_external_deps
     from ffmpeg_bootstrap import ffmpeg_path
 
-    init_external_deps()
     import numpy as np
     import soundfile as sf
 
@@ -278,24 +379,29 @@ def _normalize_player_audio(audio, file_sr: int, sr: int, ch: int):
         audio = _np.repeat(audio, ch, axis=0)
     elif audio.shape[0] > ch:
         audio = audio[:ch]
-    if file_sr != sr:
-        try:
-            import resampy
-            audio = resampy.resample(audio, file_sr, sr, axis=1)
-        except ImportError:
-            raise RuntimeError(
-                f'Sample rate mismatch ({file_sr} Hz vs {sr} Hz) and resampy is not installed.'
-            )
+    if file_sr == sr:
+        return audio.astype(_np.float32)
+    try:
+        import resampy
+        audio = resampy.resample(audio, file_sr, sr, axis=1)
+    except ImportError:
+        raise RuntimeError(
+            f'Sample rate mismatch ({file_sr} Hz vs {sr} Hz) and resampy is not installed.'
+        )
     return audio.astype(_np.float32)
 
 
 def _read_soundfile_player(path: str, sr: int, ch: int):
     _ensure_player_audio_deps()
     try:
-        data, file_sr = _sf.read(path, dtype='float32', always_2d=True)
+        data, file_sr = _sf.read(path, dtype='float32', always_2d=True, mmap=True)
         return _normalize_player_audio(data.T, file_sr, sr, ch)
     except Exception:
-        return None
+        try:
+            data, file_sr = _sf.read(path, dtype='float32', always_2d=True)
+            return _normalize_player_audio(data.T, file_sr, sr, ch)
+        except Exception:
+            return None
 
 
 def _read_via_ffmpeg_player(path: str, sr: int, ch: int):
@@ -390,23 +496,146 @@ def find_stem_file(folder: Path, stem: str) -> Path | None:
     return None
 
 
-def detect_stem_folder(folder: Path) -> list[tuple[str, Path]]:
-    """Return ordered (stem_name, path) pairs for a stem output folder."""
-    four = {s: find_stem_file(folder, s) for s in STEM_ORDER_4}
-    four = {k: v for k, v in four.items() if v is not None}
-    two = {s: find_stem_file(folder, s) for s in STEM_ORDER_2}
-    two = {k: v for k, v in two.items() if v is not None}
+def _collect_stem_roles(folder: Path) -> dict[str, Path]:
+    """Map stem role names to audio files in a song folder."""
+    from stem_align import classify_audio_file
 
-    has_drums_bass_other = any(s in four for s in ('drums', 'bass', 'other'))
-    if has_drums_bass_other:
-        return [(s, four[s]) for s in STEM_ORDER_4 if s in four]
-    if len(two) >= 2:
-        return [(s, two[s]) for s in STEM_ORDER_2 if s in two]
-    if len(four) >= 2:
-        return [(s, four[s]) for s in STEM_ORDER_4 if s in four]
-    if two:
-        return [(s, two[s]) for s in STEM_ORDER_2 if s in two]
-    return []
+    roles: dict[str, Path] = {}
+    for path in sorted(folder.iterdir()):
+        if path.name == BACKUP_DIR_NAME or not path.is_file():
+            continue
+        if path.suffix.lower() not in AUDIO_EXTS:
+            continue
+        role = classify_audio_file(path)
+        if role and role not in roles:
+            roles[role] = path
+    for stem in FILE_STEM_NAMES:
+        if stem not in roles:
+            found = find_stem_file(folder, stem)
+            if found is not None:
+                roles[stem] = found
+    return roles
+
+
+def _vocal_stem_role(roles: dict[str, Path]) -> str | None:
+    if 'acapella' in roles:
+        return 'acapella'
+    if 'vocals' in roles:
+        return 'vocals'
+    return None
+
+
+def _order_stem_roles(roles: dict[str, Path]) -> list[str]:
+    """Top-to-bottom display order for loaded stems."""
+    vocal = _vocal_stem_role(roles)
+    names = set(roles)
+
+    if vocal and all(k in names for k in DEMUCS_LAYOUT_STEMS):
+        return [vocal, 'other', 'drums', 'bass']
+
+    if vocal and 'instrumental' in names and 'original' in names:
+        return [vocal, 'instrumental', 'original']
+
+    if vocal and 'instrumental' in names:
+        return [vocal, 'instrumental']
+
+    if vocal and names.intersection(DEMUCS_LAYOUT_STEMS):
+        order = [vocal]
+        for stem in DEMUCS_LAYOUT_STEMS:
+            if stem in names:
+                order.append(stem)
+        return order
+
+    fallback = (
+        'acapella', 'vocals', 'instrumental',
+        'other', 'drums', 'bass', 'original',
+    )
+    order = [name for name in fallback if name in names]
+    for name in sorted(names):
+        if name not in order:
+            order.append(name)
+    return order
+
+
+def detect_stem_folder(folder: Path) -> list[tuple[str, Path]]:
+    """Return ordered (stem_name, path) pairs for a song folder."""
+    roles = _collect_stem_roles(folder)
+    if len(roles) < 2:
+        return []
+    return [(name, roles[name]) for name in _order_stem_roles(roles)]
+
+
+def list_player_song_folders(library_root: Path) -> list[Path]:
+    if not library_root.is_dir():
+        return []
+    folders = [
+        path for path in library_root.iterdir()
+        if path.is_dir() and path.name != BACKUP_DIR_NAME
+    ]
+    return sorted(folders, key=lambda path: _strip_review_tag(path.name).casefold())
+
+
+def _strip_review_tag(name: str) -> str:
+    """Remove pass/fail review suffix or legacy prefix from a folder name."""
+    import re
+
+    text = name.strip()
+    text = re.sub(r'_(?:\[pass\]|\[fail\])\s*$', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^\[(?:pass|fail)\]\s*', '', text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def rename_folder_review(folder: Path, verdict: str) -> Path:
+    verdict = verdict.strip().lower()
+    if verdict not in {'pass', 'fail'}:
+        raise ValueError(f'Invalid verdict: {verdict}')
+    clean = _strip_review_tag(folder.name)
+    new_name = f'{clean}_[{verdict}]'
+    dest = folder.parent / new_name
+    if folder.name == new_name:
+        return folder.resolve()
+    if dest.exists():
+        raise FileExistsError(f'Folder already exists: {new_name}')
+    last_exc: OSError | None = None
+    for attempt in range(8):
+        try:
+            folder.rename(dest)
+            return dest.resolve()
+        except OSError as exc:
+            last_exc = exc
+            denied = (
+                getattr(exc, 'winerror', None) == 5
+                or exc.errno in {13, 32}  # EACCES, EBUSY
+            )
+            if not denied or attempt >= 7:
+                raise
+            gc.collect()
+            time.sleep(0.05 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f'Could not rename folder: {folder.name}')
+
+
+def _path_same(a: Path, b: Path) -> bool:
+    try:
+        if a.resolve() == b.resolve():
+            return True
+    except OSError:
+        pass
+    return os.path.normcase(str(a)) == os.path.normcase(str(b))
+
+
+def _index_song_folder(folders: list[Path], folder: Path) -> int:
+    """Locate a song folder in the library list after renames (resolved paths)."""
+    for i, candidate in enumerate(folders):
+        if _path_same(candidate, folder):
+            return i
+    clean = _strip_review_tag(folder.name).casefold()
+    if clean:
+        for i, candidate in enumerate(folders):
+            if _strip_review_tag(candidate.name).casefold() == clean:
+                return i
+    raise ValueError(folder)
 
 
 def format_time_ms(seconds: float) -> str:
@@ -450,6 +679,19 @@ def compute_waveform_peaks(mono, num_bins: int):
     return peaks.astype(_np.float32)
 
 
+_PEAKS_FAST_MAX_SAMPLES = 600_000
+
+
+def _compute_peaks_full_fast(mono) -> 'np.ndarray':
+    """Build full-zoom peaks from downsampled audio (much faster on long songs)."""
+    _ensure_player_audio_deps()
+    mono = _np.asarray(mono, dtype=_np.float32).ravel()
+    if mono.size > _PEAKS_FAST_MAX_SAMPLES:
+        step = max(1, mono.size // _PEAKS_FAST_MAX_SAMPLES)
+        mono = mono[::step]
+    return compute_waveform_peaks(mono, WAVE_PEAK_BINS_FULL)
+
+
 def _to_stereo(audio):
     _ensure_player_audio_deps()
     a = _np.asarray(audio, dtype=_np.float32)
@@ -482,6 +724,69 @@ class _TrackState:
         self.wave_canvas: tk.Canvas | None = None
         self._solo_btn = None
         self._mute_btn = None
+
+
+def _load_one_stem(name: str, path: Path) -> _TrackState:
+    try:
+        audio = load_player_audio(str(path), PLAYER_SR, 2)
+    except Exception as exc:
+        raise RuntimeError(f'Failed to load {path.name}:\n{exc}') from exc
+    color = STEM_COLORS.get(name, '#9aa0b4')
+    track = _TrackState(name, path, audio, color)
+    track.peaks_full = _compute_peaks_full_fast(track.audio.mean(axis=0))
+    return track
+
+
+def _load_tracks_from_stems(stems: list[tuple[str, Path]]) -> list[_TrackState]:
+    if not stems:
+        return []
+    if len(stems) == 1:
+        name, path = stems[0]
+        return [_load_one_stem(name, path)]
+    tracks: list[_TrackState | None] = [None] * len(stems)
+    workers = min(len(stems), 4)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_load_one_stem, stems[i][0], stems[i][1]): i
+            for i in range(len(stems))
+        }
+        for fut in as_completed(futures):
+            tracks[futures[fut]] = fut.result()
+    return tracks  # type: ignore[return-value]
+
+
+def _folder_cache_key(folder: Path, stems: list[tuple[str, Path]]) -> str:
+    parts = [str(folder.resolve())]
+    for name, path in sorted(stems, key=lambda item: item[0]):
+        st = path.stat()
+        parts.append(f'{name}:{st.st_mtime_ns}:{st.st_size}')
+    return '|'.join(parts)
+
+
+def _tracks_cache_snapshot(tracks: list[_TrackState]) -> list[_TrackState]:
+    snap: list[_TrackState] = []
+    for track in tracks:
+        copy = _TrackState(track.name, track.path, track.audio, track.color)
+        copy.peaks_full = track.peaks_full
+        copy.volume = track.volume
+        copy.muted = track.muted
+        copy.solo = track.solo
+        snap.append(copy)
+    return snap
+
+
+def _tracks_from_cache(cached: list[_TrackState], stems: list[tuple[str, Path]]) -> list[_TrackState]:
+    path_by_name = {name: path for name, path in stems}
+    tracks: list[_TrackState] = []
+    for track in cached:
+        path = path_by_name.get(track.name, track.path)
+        copy = _TrackState(track.name, path, track.audio, track.color)
+        copy.peaks_full = track.peaks_full
+        copy.volume = track.volume
+        copy.muted = track.muted
+        copy.solo = track.solo
+        tracks.append(copy)
+    return tracks
 
 
 class _AudioEngine:
@@ -600,6 +905,9 @@ class StemPlayerWindow(tk.Toplevel):
         self._engine: _AudioEngine | None = None
         self._tracks: list[_TrackState] = []
         self._folder: Path | None = None
+        self._library_root: Path | None = None
+        self._song_folders: list[Path] = []
+        self._folder_index = -1
         self._wave_w = 0
         self._view_zoom = WAVE_ZOOM_MIN
         self._view_start = 0.0
@@ -610,19 +918,31 @@ class StemPlayerWindow(tk.Toplevel):
         self._title_var = tk.StringVar(value='No folder loaded')
         self._time_var = tk.StringVar(value='00:00:000')
         self._master_var = tk.DoubleVar(value=85.0)
+        self._title_flash_after_id: str | None = None
+        self._title_flash_verdict: str | None = None
+        self._folder_nav_keys_bound = False
         self._default_w = PLAYER_MIN_W
         self._default_h = PLAYER_WIN_H
         self._resize_guard = False
         self._was_maximized = False
+        self._busy_generation = 0
+        self._busy_dot_last = 0.0
+        self._busy_word = 'Loading'
+        self._busy_dot_i = 0
+        self._busy_mode = 'loading'
+        self._busy_started_at = 0.0
+        self._busy_hide_after_id: str | None = None
+        self._folder_job_active = False
+        self._folder_cache: OrderedDict[str, list[_TrackState]] = OrderedDict()
+        self._folder_cache_lock = threading.Lock()
+        self._prefetch_lock = threading.Lock()
+        self._prefetch_inflight: set[str] = set()
+        self._main_jobs: queue.Queue = queue.Queue()
+        self._pending_open: tuple[Path, int | None] | None = None
 
         self.title('STEM player')
         self.configure(bg=colors['bg'])
-        try:
-            from stem_organizer_ui import apply_window_icon
-
-            self._window_icon = apply_window_icon(self)
-        except Exception:
-            self._window_icon = None
+        self._window_icon = None
 
         self._build_ui()
         self._bind_keys()
@@ -656,19 +976,17 @@ class StemPlayerWindow(tk.Toplevel):
 
     def _default_open_size(self, parent: tk.Misc | None = None) -> tuple[int, int]:
         parent = parent or self._parent_ref
-        _, _, pw, ph = _parent_window_rect(parent)
+        _, _, pw, ph = _parent_content_rect(parent)
         if pw < PLAYER_MIN_W:
             pw, _ = _parse_window_size(parent)
         if pw < PLAYER_MIN_W:
             try:
-                from stem_organizer_ui import WIN_DEFAULT_W
+                from ui_theme import WIN_DEFAULT_W
 
                 pw = WIN_DEFAULT_W
             except ImportError:
                 pw = PLAYER_WIN_W
-        top_inset = _parent_title_bar_height(parent)
-        height = max(PLAYER_MIN_H, ph - top_inset)
-        return max(PLAYER_MIN_W, pw), height
+        return max(PLAYER_MIN_W, pw), max(PLAYER_MIN_H, ph)
 
     def _apply_default_open_geometry(self) -> None:
         if self._is_maximized():
@@ -684,19 +1002,16 @@ class StemPlayerWindow(tk.Toplevel):
         parent = self._parent_ref
         parent.update_idletasks()
         self.update_idletasks()
-        win_w, win_h = self._default_open_size(parent)
-        _place_over_parent(parent, self, win_w, win_h)
-        self._init_window_geometry(win_w, win_h)
-        self.update_idletasks()
         self.deiconify()
+        self._apply_default_open_geometry()
+        self._init_window_geometry(self._default_w, self._default_h)
         self.lift(parent)
         self.focus_force()
-        # Tk can revert to a smaller size on first map; re-apply once layout is live.
         self.after_idle(self._apply_default_open_geometry)
 
     def _build_ui(self) -> None:
         C = self._colors
-        from stem_organizer_ui import ACTION_BTN_FONT, ACTION_BTN_PADX, ACTION_BTN_PADY, CTRL_BTN_PADY
+        from ui_theme import ACTION_BTN_FONT, ACTION_BTN_PADX, ACTION_BTN_PADY, CTRL_BTN_PADY
 
         self._shortcuts_footer = tk.Frame(self, bg=C['bg'])
         self._shortcuts_footer.pack(side='bottom', fill='x')
@@ -716,6 +1031,7 @@ class StemPlayerWindow(tk.Toplevel):
             padx=ACTION_BTN_PADX, pady=ACTION_BTN_PADY, cursor='hand2',
         )
         load_btn.pack(side='left', padx=(8, 12))
+        _bind_tooltip(load_btn, 'Choose a song folder to load stems. Use [ and ] for prev/next song.')
 
         def _load_enter(_e=None):
             load_btn.configure(bg=C['accent'], fg='white')
@@ -752,6 +1068,19 @@ class StemPlayerWindow(tk.Toplevel):
             activebackground=C['panel'], relief='flat', borderwidth=0,
             width=3, height=1, padx=2, pady=CTRL_BTN_PADY, cursor='hand2',
         )
+
+        nav = tk.Frame(header, bg=C['panel'])
+        nav.pack(side='left', padx=(0, 8))
+        self._btn_prev_song = tk.Button(
+            nav, text='◀', command=self._prev_song_folder,
+            **transport_btn,
+        )
+        self._btn_prev_song.pack(side='left', padx=1)
+        self._btn_next_song = tk.Button(
+            nav, text='▶', command=self._next_song_folder,
+            **transport_btn,
+        )
+        self._btn_next_song.pack(side='left', padx=1)
 
         self._btn_skip_back = tk.Button(
             transport, text='⏮', command=lambda: self._seek_relative(-SEEK_JUMP_SEC),
@@ -828,7 +1157,293 @@ class StemPlayerWindow(tk.Toplevel):
         self._tracks_inner = tk.Frame(self._tracks_outer, bg=C['bg'])
         self._tracks_inner.place(relx=0, rely=0, relwidth=1, relheight=1)
 
+        busy_bg = _blend_hex(C['log_bg'], C['bg'], 0.35)
+        busy_border = _blend_hex(C['border'], C['panel'], 0.5)
+        self._busy_badge = tk.Frame(
+            self, bg=busy_bg,
+            highlightthickness=1, highlightbackground=busy_border,
+        )
+        busy_inner = tk.Frame(self._busy_badge, bg=busy_bg)
+        busy_inner.pack(padx=(16, 12), pady=6)
+        self._busy_word_lbl = tk.Label(
+            busy_inner, text='Loading', bg=busy_bg, fg=C['fg_dim'],
+            font=BUSY_FONT, width=BUSY_WORD_WIDTH, anchor='e',
+        )
+        self._busy_dots_lbl = tk.Label(
+            busy_inner, text='.', bg=busy_bg, fg=C['fg_dim'],
+            font=BUSY_FONT, width=BUSY_DOTS_WIDTH, anchor='w',
+        )
+        self._busy_word_lbl.pack(side='left')
+        self._busy_dots_lbl.pack(side='left')
+
         self._start_ui_tick()
+
+    def _title_bar_bg(self) -> str:
+        if self._title_flash_verdict == 'pass':
+            return TITLE_FLASH_PASS_BG
+        if self._title_flash_verdict == 'fail':
+            return TITLE_FLASH_FAIL_BG
+        return self._colors['panel']
+
+    def _cancel_title_flash(self) -> None:
+        if self._title_flash_after_id is not None:
+            try:
+                self.after_cancel(self._title_flash_after_id)
+            except tk.TclError:
+                pass
+            self._title_flash_after_id = None
+
+    def _end_title_flash(self) -> None:
+        self._title_flash_after_id = None
+        self._title_flash_verdict = None
+        panel_bg = self._colors['panel']
+        for widget in (self._title_frame, self._title_lbl):
+            widget.configure(bg=panel_bg)
+
+    def _flash_title_bar(self, verdict: str) -> None:
+        self._cancel_title_flash()
+        self._title_flash_verdict = verdict
+        flash_bg = TITLE_FLASH_PASS_BG if verdict == 'pass' else TITLE_FLASH_FAIL_BG
+        for widget in (self._title_frame, self._title_lbl):
+            widget.configure(bg=flash_bg)
+        self._title_flash_after_id = self.after(TITLE_FLASH_MS, self._end_title_flash)
+
+    def _begin_busy(self, mode: str) -> int:
+        self._busy_generation += 1
+        gen = self._busy_generation
+        self._busy_mode = mode
+        self._busy_started_at = time.monotonic()
+        if self._busy_hide_after_id is not None:
+            try:
+                self.after_cancel(self._busy_hide_after_id)
+            except tk.TclError:
+                pass
+            self._busy_hide_after_id = None
+        self._busy_word = 'Saving' if mode == 'saving' else 'Loading'
+        self._busy_dot_i = 0
+        self._busy_word_lbl.configure(text=self._busy_word)
+        self._busy_dots_lbl.configure(text=_BUSY_DOT_FRAMES[0])
+        self._busy_badge.place(relx=0.5, rely=0.5, anchor='center')
+        self.tk.call('raise', self._busy_badge._w)
+        self._busy_dot_last = time.monotonic()
+        self.update_idletasks()
+        return gen
+
+    def _enqueue_main(self, callback, /, *args) -> None:
+        """Schedule work on the Tk main thread from a background worker."""
+        self._main_jobs.put((callback, args))
+
+    def _drain_main_jobs(self, *, max_jobs: int = 1) -> None:
+        for _ in range(max_jobs):
+            try:
+                callback, args = self._main_jobs.get_nowait()
+            except queue.Empty:
+                break
+            callback(*args)
+
+    def _poll_busy_dots(self) -> None:
+        if not self._busy_badge.winfo_ismapped():
+            return
+        now = time.monotonic()
+        step_sec = BUSY_DOT_CYCLE_SEC / len(_BUSY_DOT_FRAMES)
+        if now - self._busy_dot_last < step_sec:
+            return
+        self._busy_dot_last = now
+        self._busy_dot_i = (self._busy_dot_i + 1) % len(_BUSY_DOT_FRAMES)
+        self._busy_dots_lbl.configure(text=_BUSY_DOT_FRAMES[self._busy_dot_i])
+
+    def _end_busy(self, gen: int) -> None:
+        if gen != self._busy_generation:
+            return
+        remaining = MIN_BUSY_BADGE_SEC - (time.monotonic() - self._busy_started_at)
+        if remaining > 0:
+            delay_ms = int(remaining * 1000) + 1
+            if self._busy_hide_after_id is not None:
+                try:
+                    self.after_cancel(self._busy_hide_after_id)
+                except tk.TclError:
+                    pass
+            self._busy_hide_after_id = self.after(
+                delay_ms,
+                lambda g=gen: self._finish_end_busy(g),
+            )
+            return
+        self._finish_end_busy(gen)
+
+    def _finish_end_busy(self, gen: int) -> None:
+        self._busy_hide_after_id = None
+        if gen != self._busy_generation:
+            return
+        self._busy_badge.place_forget()
+
+    def _set_folder_metadata(
+        self,
+        folder: Path,
+        *,
+        library_index: int | None,
+        refresh_library: bool = True,
+    ) -> None:
+        self._folder = folder
+        self._resolve_library_root(folder)
+        if refresh_library and self._library_root is not None:
+            self._refresh_song_library(keep_folder=folder)
+        if library_index is not None:
+            self._folder_index = library_index
+        elif self._song_folders:
+            try:
+                self._folder_index = _index_song_folder(self._song_folders, folder)
+            except ValueError:
+                self._folder_index = -1
+        self._title_var.set(folder.name)
+        self._set_title_interactive(True)
+
+    def _get_folder_cache(self, key: str) -> list[_TrackState] | None:
+        with self._folder_cache_lock:
+            cached = self._folder_cache.get(key)
+            if cached is None:
+                return None
+            self._folder_cache.move_to_end(key)
+            return cached
+
+    def _put_folder_cache(self, key: str, tracks: list[_TrackState]) -> None:
+        with self._folder_cache_lock:
+            self._folder_cache[key] = _tracks_cache_snapshot(tracks)
+            while len(self._folder_cache) > FOLDER_CACHE_MAX:
+                self._folder_cache.popitem(last=False)
+
+    def _prefetch_folder(self, folder: Path) -> None:
+        stems = detect_stem_folder(folder)
+        if not stems:
+            return
+        try:
+            cache_key = _folder_cache_key(folder, stems)
+        except OSError:
+            return
+        with self._folder_cache_lock:
+            if cache_key in self._folder_cache:
+                return
+        with self._prefetch_lock:
+            if cache_key in self._prefetch_inflight:
+                return
+            self._prefetch_inflight.add(cache_key)
+
+        def worker() -> None:
+            try:
+                tracks = _load_tracks_from_stems(stems)
+                self._put_folder_cache(cache_key, tracks)
+            except Exception:
+                pass
+            finally:
+                with self._prefetch_lock:
+                    self._prefetch_inflight.discard(cache_key)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _prefetch_adjacent_songs(self) -> None:
+        if not self._song_folders or self._folder_index < 0:
+            return
+        idx = self._folder_index
+        if idx > 0:
+            self._prefetch_folder(self._song_folders[idx - 1])
+        if idx + 1 < len(self._song_folders):
+            self._prefetch_folder(self._song_folders[idx + 1])
+
+    def _restart_engine(self) -> bool:
+        if not self._tracks:
+            return False
+        self._engine = _AudioEngine(self._tracks, PLAYER_SR)
+        self._on_master_volume()
+        try:
+            self._engine.start_stream()
+        except Exception as exc:
+            messagebox.showerror('STEM player', f'Audio output failed:\n{exc}', parent=self)
+            self._engine = None
+            return False
+        return True
+
+    def _finish_open_folder_ui(self, gen: int) -> None:
+        if gen != self._busy_generation:
+            return
+        try:
+            self._resize_guard = True
+            self._clear_track_rows()
+            self._tracks_inner.columnconfigure(0, weight=1)
+            self._pending_stem_roles = {track.name for track in self._tracks}
+            self.after(0, lambda g=gen: self._rebuild_track_rows_step(g, 0))
+        except Exception:
+            self._resize_guard = False
+            self._folder_job_active = False
+            self._end_busy(gen)
+            raise
+
+    def _rebuild_track_rows_step(self, gen: int, index: int) -> None:
+        if gen != self._busy_generation:
+            return
+        n = len(self._tracks)
+        if index < n:
+            self._build_one_track_row(
+                self._tracks[index], index, n, self._pending_stem_roles,
+            )
+            self.after(0, lambda g=gen, i=index + 1: self._rebuild_track_rows_step(g, i))
+            return
+        self._resize_guard = False
+        self._bind_keys_on_widget(self._tracks_inner)
+        self._refresh_shortcuts_footer()
+        self.focus_set()
+        self._redraw_sig = None
+        self.after(0, lambda g=gen: self._draw_loaded_waveforms_step(g, 0))
+
+    def _draw_loaded_waveforms_step(self, gen: int, index: int) -> None:
+        if gen != self._busy_generation:
+            return
+        if not self._tracks or self._engine is None:
+            self._folder_job_active = False
+            self._end_busy(gen)
+            return
+
+        if index == 0:
+            self._tracks_outer.update_idletasks()
+            wave_w = self._waveform_width()
+            self._wave_w = wave_w
+            self._pending_draw_bins = max(100, min(wave_w, 1024))
+
+        if index < len(self._tracks):
+            track = self._tracks[index]
+            track.peaks = self._peaks_for_view(track, self._pending_draw_bins)
+            self._draw_waveform(track)
+            self.after(0, lambda g=gen, i=index + 1: self._draw_loaded_waveforms_step(g, i))
+            return
+
+        self._draw_timeline(self._wave_w, self._duration())
+        self._update_playhead(self._engine.position)
+        self._folder_job_active = False
+        self._end_busy(gen)
+        self._prefetch_adjacent_songs()
+
+    def _install_loaded_folder(
+        self,
+        folder: Path,
+        *,
+        library_index: int | None,
+        tracks: list[_TrackState],
+    ) -> bool:
+        self._set_folder_metadata(folder, library_index=library_index)
+        self._tracks = tracks
+        self._view_zoom = WAVE_ZOOM_MIN
+        self._view_start = 0.0
+        if not self._restart_engine():
+            return False
+
+        self._resize_guard = True
+        try:
+            self._rebuild_track_rows()
+            self._refresh_shortcuts_footer()
+            self.focus_set()
+            self._redraw_sig = None
+        finally:
+            self._resize_guard = False
+        self.after_idle(self._schedule_redraw)
+        return True
 
     def _set_title_interactive(self, active: bool) -> None:
         cursor = 'hand2' if active else ''
@@ -846,7 +1461,7 @@ class StemPlayerWindow(tk.Toplevel):
             widget.configure(bg=TITLE_HOVER_BG)
 
     def _on_title_leave(self, _event=None) -> None:
-        bg = self._colors['panel']
+        bg = self._title_bar_bg()
         for widget in (self._title_frame, self._title_lbl):
             widget.configure(bg=bg)
 
@@ -905,6 +1520,22 @@ class StemPlayerWindow(tk.Toplevel):
             self._seek_relative(SEEK_JUMP_SEC)
             return 'break'
 
+        def _pass(_e=None):
+            self._mark_folder_review('pass')
+            return 'break'
+
+        def _fail(_e=None):
+            self._mark_folder_review('fail')
+            return 'break'
+
+        def _prev(_e=None):
+            self._prev_song_folder()
+            return 'break'
+
+        def _next(_e=None):
+            self._next_song_folder()
+            return 'break'
+
         self._key_handlers = (_space, _left, _right)
         self._stem_key_bindings: list[tuple[str, object]] = []
         for i in range(4):
@@ -916,16 +1547,78 @@ class StemPlayerWindow(tk.Toplevel):
             ('<KeyPress-space>', _space),
             ('<Left>', _left),
             ('<Right>', _right),
+            ('<KeyPress-p>', _pass),
+            ('<KeyPress-P>', _pass),
+            ('<KeyPress-f>', _fail),
+            ('<KeyPress-F>', _fail),
+            ('<KeyPress-bracketleft>', _prev),
+            ('<KeyPress-bracketright>', _next),
+            ('<bracketleft>', _prev),
+            ('<bracketright>', _next),
         ):
             self.bind(seq, handler, add='+')
         for seq, handler in self._stem_key_bindings:
             self.bind(seq, handler, add='+')
+        self._bind_folder_nav_keys_global()
+
+    def _bind_folder_nav_keys_global(self) -> None:
+        if self._folder_nav_keys_bound:
+            return
+
+        def _route_prev(event=None):
+            if event is not None:
+                try:
+                    if event.widget.winfo_toplevel() != self:
+                        return
+                except tk.TclError:
+                    return
+            self._prev_song_folder()
+            return 'break'
+
+        def _route_next(event=None):
+            if event is not None:
+                try:
+                    if event.widget.winfo_toplevel() != self:
+                        return
+                except tk.TclError:
+                    return
+            self._next_song_folder()
+            return 'break'
+
+        self._folder_nav_prev_handler = _route_prev
+        self._folder_nav_next_handler = _route_next
+        self.bind_all('<KeyPress-bracketleft>', _route_prev, add='+')
+        self.bind_all('<KeyPress-bracketright>', _route_next, add='+')
+        self.bind_all('<bracketleft>', _route_prev, add='+')
+        self.bind_all('<bracketright>', _route_next, add='+')
+        self._folder_nav_keys_bound = True
+
+    def _unbind_folder_nav_keys_global(self) -> None:
+        if not self._folder_nav_keys_bound:
+            return
+        for seq in (
+            '<KeyPress-bracketleft>', '<KeyPress-bracketright>',
+            '<bracketleft>', '<bracketright>',
+        ):
+            try:
+                self.unbind_all(seq)
+            except tk.TclError:
+                pass
+        self._folder_nav_keys_bound = False
 
     def _bind_keys_on_widget(self, widget: tk.Misc) -> None:
         bindings: list[tuple[str, object]] = [
             ('<KeyPress-space>', self._key_handlers[0]),
             ('<Left>', self._key_handlers[1]),
             ('<Right>', self._key_handlers[2]),
+            ('<KeyPress-p>', lambda _e: self._mark_folder_review('pass') or 'break'),
+            ('<KeyPress-P>', lambda _e: self._mark_folder_review('pass') or 'break'),
+            ('<KeyPress-f>', lambda _e: self._mark_folder_review('fail') or 'break'),
+            ('<KeyPress-F>', lambda _e: self._mark_folder_review('fail') or 'break'),
+            ('<KeyPress-bracketleft>', lambda _e: self._prev_song_folder() or 'break'),
+            ('<KeyPress-bracketright>', lambda _e: self._next_song_folder() or 'break'),
+            ('<bracketleft>', lambda _e: self._prev_song_folder() or 'break'),
+            ('<bracketright>', lambda _e: self._next_song_folder() or 'break'),
         ] + self._stem_key_bindings
         for seq, handler in bindings:
             widget.bind(seq, handler, add='+')
@@ -933,6 +1626,8 @@ class StemPlayerWindow(tk.Toplevel):
             self._bind_keys_on_widget(child)
 
     def _start_ui_tick(self) -> None:
+        self._drain_main_jobs(max_jobs=1)
+        self._poll_busy_dots()
         self._ui_tick()
         self._tick_id = self.after(UI_TICK_MS, self._start_ui_tick)
 
@@ -987,7 +1682,7 @@ class StemPlayerWindow(tk.Toplevel):
         if self._engine is not None:
             self._engine.master_volume = float(self._master_var.get()) / 100.0
 
-    def _output_folder_from_parent(self) -> Path | None:
+    def _organize_library_from_parent(self) -> Path | None:
         parent = self._parent_ref
         try:
             var = getattr(parent, 'output_dir', None)
@@ -1003,39 +1698,313 @@ class StemPlayerWindow(tk.Toplevel):
             pass
         return None
 
+    def _align_library_from_parent(self) -> Path | None:
+        parent = self._parent_ref
+        panel = getattr(parent, 'pair_panel', None)
+        attrs_host = panel if panel is not None else parent
+        try:
+            from stem_align import default_with_original_dir, resolve_with_original_dir
+
+            for attr in ('align_with_original_dir', 'align_stems_root'):
+                var = getattr(attrs_host, attr, None)
+                if var is None:
+                    continue
+                text = var.get().strip()
+                if not text:
+                    continue
+                path = Path(text)
+                if attr == 'align_stems_root' and path.is_dir():
+                    resolved = resolve_with_original_dir(path)
+                    if resolved.is_dir():
+                        return resolved
+                elif path.is_dir():
+                    return path
+            stems_root = getattr(attrs_host, 'align_stems_root', None)
+            if stems_root is not None:
+                text = stems_root.get().strip()
+                if text:
+                    candidate = default_with_original_dir(Path(text))
+                    if candidate.is_dir():
+                        return candidate
+        except (AttributeError, tk.TclError, OSError):
+            pass
+        return None
+
+    def _library_from_parent(self) -> Path | None:
+        parent = self._parent_ref
+        if hasattr(parent, '_classify_mode_active') and parent._classify_mode_active():
+            return self._organize_library_from_parent()
+        return self._align_library_from_parent()
+
+    def _refresh_song_library(self, *, keep_folder: Path | None = None) -> None:
+        if self._library_root is None or not self._library_root.is_dir():
+            self._song_folders = []
+            self._folder_index = -1
+            return
+        self._song_folders = list_player_song_folders(self._library_root)
+        if keep_folder is not None:
+            try:
+                self._folder_index = _index_song_folder(self._song_folders, keep_folder)
+                return
+            except ValueError:
+                pass
+        if self._folder is not None:
+            try:
+                self._folder_index = _index_song_folder(self._song_folders, self._folder)
+                return
+            except ValueError:
+                pass
+        if self._folder_index >= len(self._song_folders):
+            self._folder_index = max(0, len(self._song_folders) - 1)
+
+    def _sync_folder_index(self, folder: Path | None = None) -> None:
+        target = folder if folder is not None else self._folder
+        if target is None or not self._song_folders:
+            return
+        try:
+            self._folder_index = _index_song_folder(self._song_folders, target)
+        except ValueError:
+            self._folder_index = -1
+
+    def _resolve_library_root(self, folder: Path | None = None) -> Path | None:
+        if self._library_root is not None and self._library_root.is_dir():
+            return self._library_root
+        configured = self._library_from_parent()
+        if configured is not None and configured.is_dir():
+            self._library_root = configured
+            return configured
+        probe = folder if folder is not None else self._folder
+        if probe is not None:
+            parent = probe.parent
+            if parent.is_dir() and any(
+                child.is_dir() and child.name != BACKUP_DIR_NAME
+                for child in parent.iterdir()
+            ):
+                self._library_root = parent
+                return parent
+        return None
+
+    def _ensure_song_library(self) -> bool:
+        library = self._resolve_library_root()
+        if library is None:
+            return False
+        if self._library_root != library or not self._song_folders:
+            self._library_root = library
+            self._refresh_song_library(keep_folder=self._folder)
+        if self._folder is not None:
+            self._sync_folder_index()
+        elif self._folder_index >= len(self._song_folders):
+            self._folder_index = max(-1, len(self._song_folders) - 1)
+        return bool(self._song_folders)
+
+    def _prepare_library(self, library_root: Path) -> None:
+        """Remember library root and song list without loading any folder."""
+        if not library_root.is_dir():
+            return
+        self._library_root = library_root
+        keep = self._folder if self._folder is not None else None
+        self._refresh_song_library(keep_folder=keep)
+        if self._folder is None:
+            self._folder_index = -1
+
+    def _open_library(self, library_root: Path, *, start_index: int = 0) -> None:
+        self._prepare_library(library_root)
+        if not self._song_folders:
+            messagebox.showwarning(
+                'Stem player',
+                f'No song folders found in:\n{library_root}',
+                parent=self,
+            )
+            return
+        index = max(0, min(start_index, len(self._song_folders) - 1))
+        self._open_folder(self._song_folders[index], library_index=index)
+
+    def _prev_song_folder(self) -> None:
+        if self._folder_job_active:
+            return
+        if not self._ensure_song_library():
+            return
+        idx = self._folder_index
+        if idx <= 0:
+            return
+        self._open_folder(
+            self._song_folders[idx - 1],
+            library_index=idx - 1,
+        )
+
+    def _next_song_folder(self) -> None:
+        if self._folder_job_active:
+            return
+        if not self._ensure_song_library():
+            return
+        idx = self._folder_index
+        if idx < 0:
+            if self._folder is None and self._song_folders:
+                self._open_folder(self._song_folders[0], library_index=0)
+            return
+        if idx >= len(self._song_folders) - 1:
+            return
+        self._open_folder(
+            self._song_folders[idx + 1],
+            library_index=idx + 1,
+        )
+
+    def _stop_playback_only(self) -> None:
+        """Stop audio output but keep decoded stems in memory."""
+        self._stop()
+        if self._engine is not None:
+            self._engine.set_playing(False)
+            self._engine.stop_stream()
+            self._engine = None
+        if sys.platform == 'win32':
+            self.update_idletasks()
+            time.sleep(0.05)
+
+    def _mark_folder_review(self, verdict: str) -> None:
+        if self._folder is None or self._folder_job_active:
+            return
+        if not self._tracks:
+            return
+        folder = self._folder
+        library_index = self._folder_index if self._folder_index >= 0 else None
+
+        self._folder_job_active = True
+        gen = self._begin_busy('saving')
+        self._stop_playback_only()
+
+        def worker() -> None:
+            result: dict = {'new_path': None, 'err': None, 'kind': None}
+            try:
+                new_path = rename_folder_review(folder, verdict)
+                result['new_path'] = new_path
+            except FileExistsError as exc:
+                result['err'] = exc
+                result['kind'] = 'exists'
+            except OSError as exc:
+                result['err'] = exc
+                result['kind'] = 'os'
+            except Exception as exc:
+                result['err'] = exc
+                result['kind'] = 'load'
+            self._enqueue_main(
+                self._apply_mark_review, gen, folder, library_index, verdict, result,
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_mark_review(
+        self,
+        gen: int,
+        folder: Path,
+        library_index: int | None,
+        verdict: str,
+        result: dict,
+    ) -> None:
+        reload_folder = False
+        try:
+            if gen != self._busy_generation:
+                return
+            err = result['err']
+            if err is not None:
+                reload_folder = folder.is_dir()
+                if result['kind'] == 'exists':
+                    messagebox.showerror('Stem player', str(err), parent=self)
+                elif result['kind'] == 'os':
+                    msg = f'Could not rename folder:\n{err}'
+                    if getattr(err, 'winerror', None) == 5:
+                        msg += (
+                            '\n\nClose any File Explorer window showing this folder, '
+                            'then try again.'
+                        )
+                    messagebox.showerror('Stem player', msg, parent=self)
+                else:
+                    messagebox.showerror('STEM player', str(err), parent=self)
+                return
+
+            new_path = result['new_path']
+            for track in self._tracks:
+                track.path = new_path / track.path.name
+
+            self._folder = new_path
+            self._title_var.set(new_path.name)
+            self._set_title_interactive(True)
+            if self._library_root is None:
+                library = self._library_from_parent()
+                if library is not None:
+                    self._prepare_library(library)
+            self._refresh_song_library(keep_folder=new_path)
+            if library_index is not None:
+                self._folder_index = library_index
+            elif self._folder_index < 0:
+                self._sync_folder_index(new_path)
+
+            if not self._restart_engine():
+                return
+            self.after_idle(self._schedule_redraw)
+            self._flash_title_bar(verdict)
+        finally:
+            self._folder_job_active = False
+            self._end_busy(gen)
+        if reload_folder:
+            self._open_folder(folder, library_index=library_index)
+
+    def _output_folder_from_parent(self) -> Path | None:
+        return self._library_from_parent()
+
     def _load_folder(self) -> None:
         if sd is None:
             messagebox.showerror(
-                'STEM player',
+                'Stem player',
                 'Audio playback requires the sounddevice package.\n\n'
                 'Re-run install-deps.bat to install it, then restart the app.',
                 parent=self,
             )
             return
 
-        output = self._output_folder_from_parent()
-        if output is not None and detect_stem_folder(output):
-            self._open_folder(output)
-            return
+        library = self._library_from_parent()
+        if library is not None and self._library_root != library:
+            self._library_root = library
 
-        initial = str(output or self._folder or '')
+        initial = self._folder or library or self._library_root
+        initial_dir = str(initial) if initial is not None and Path(initial).is_dir() else None
+
         folder = filedialog.askdirectory(
             title='Load stem folder',
-            initialdir=initial or None,
+            initialdir=initial_dir,
             parent=self,
         )
         if not folder:
             return
         self._open_folder(Path(folder))
 
-    def _open_folder(self, folder: Path) -> None:
+    def _open_folder(
+        self,
+        folder: Path,
+        *,
+        library_index: int | None = None,
+        busy_mode: str = 'loading',
+    ) -> None:
+        if self._folder_job_active:
+            return
+        self._end_title_flash()
+        self._folder_job_active = True
+        self._pending_open = (folder, library_index)
+        gen = self._begin_busy(busy_mode)
+        self.after(0, lambda g=gen: self._open_folder_begin(g))
+
+    def _open_folder_begin(self, gen: int) -> None:
+        if gen != self._busy_generation or self._pending_open is None:
+            return
+        folder, library_index = self._pending_open
+        self._pending_open = None
         stems = detect_stem_folder(folder)
         if not stems:
+            self._folder_job_active = False
+            self._end_busy(gen)
             messagebox.showwarning(
-                'STEM player',
+                'Stem player',
                 'No stem files found in this folder.\n\n'
-                'Expected names like vocals.wav, drums.flac, bass.wav, other.wav\n'
-                'or vocals + instrumental.',
+                'Expected instrumental, acapella, and/or (original song) audio files.',
                 parent=self,
             )
             return
@@ -1045,45 +2014,62 @@ class StemPlayerWindow(tk.Toplevel):
             self._engine.stop_stream()
             self._engine = None
 
-        self._folder = folder
-        self._title_var.set(folder.name)
-        self._set_title_interactive(True)
+        target = folder
+        lib_idx = library_index
+        cache_key = _folder_cache_key(target, stems)
+        cached = self._get_folder_cache(cache_key)
 
-        tracks: list[_TrackState] = []
-        for name, path in stems:
+        def worker() -> None:
+            err: Exception | None = None
+            tracks: list[_TrackState] | None = None
             try:
-                audio = load_player_audio(str(path), PLAYER_SR, 2)
+                if cached is not None:
+                    tracks = _tracks_from_cache(cached, stems)
+                else:
+                    tracks = _load_tracks_from_stems(stems)
+                    self._put_folder_cache(cache_key, tracks)
             except Exception as exc:
-                messagebox.showerror('STEM player', f'Failed to load {path.name}:\n{exc}', parent=self)
-                return
-            color = STEM_COLORS.get(name, self._colors['fg_dim'])
-            track = _TrackState(name, path, audio, color)
-            track.peaks_full = compute_waveform_peaks(
-                track.audio.mean(axis=0), WAVE_PEAK_BINS_FULL,
+                err = exc
+            self._enqueue_main(
+                self._apply_open_folder, gen, target, lib_idx, tracks, err,
             )
-            tracks.append(track)
 
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_open_folder(
+        self,
+        gen: int,
+        folder: Path,
+        library_index: int | None,
+        tracks: list[_TrackState] | None,
+        err: Exception | None,
+    ) -> None:
+        if gen != self._busy_generation:
+            return
+        if err is not None or tracks is None:
+            messagebox.showerror(
+                'STEM player',
+                str(err) if err is not None else 'Load failed.',
+                parent=self,
+            )
+            self._folder_job_active = False
+            self._end_busy(gen)
+            return
+
+        self._set_folder_metadata(
+            folder,
+            library_index=library_index,
+            refresh_library=library_index is None,
+        )
         self._tracks = tracks
         self._view_zoom = WAVE_ZOOM_MIN
         self._view_start = 0.0
-        self._engine = _AudioEngine(tracks, PLAYER_SR)
-        self._on_master_volume()
-        try:
-            self._engine.start_stream()
-        except Exception as exc:
-            messagebox.showerror('STEM player', f'Audio output failed:\n{exc}', parent=self)
-            self._engine = None
+        if not self._restart_engine():
+            self._folder_job_active = False
+            self._end_busy(gen)
             return
 
-        self._resize_guard = True
-        try:
-            self._rebuild_track_rows()
-            self._refresh_shortcuts_footer()
-            self.focus_set()
-            self._redraw_sig = None
-        finally:
-            self._resize_guard = False
-        self.after_idle(self._schedule_redraw)
+        self.after(0, lambda g=gen: self._finish_open_folder_ui(g))
 
     def _clear_track_rows(self) -> None:
         for child in self._tracks_inner.winfo_children():
@@ -1092,97 +2078,119 @@ class StemPlayerWindow(tk.Toplevel):
         for i in range(8):
             self._tracks_inner.rowconfigure(i, weight=0, uniform='')
 
+    def _build_one_track_row(
+        self,
+        track: _TrackState,
+        index: int,
+        total: int,
+        stem_roles: set[str],
+    ) -> None:
+        C = self._colors
+        self._tracks_inner.rowconfigure(index, weight=1, uniform='track')
+        pad_bottom = TRACK_ROW_GAP if index < total - 1 else 0
+        row = tk.Frame(self._tracks_inner, bg=C['bg'])
+        row.grid(row=index, column=0, sticky='nsew', pady=(0, pad_bottom))
+        track.row = row
+
+        ctrl = tk.Frame(row, bg=C['bg'], width=CONTROLS_W)
+        ctrl.pack(side='left', fill='y', padx=(0, 8))
+        ctrl.pack_propagate(False)
+
+        tk.Label(
+            ctrl, text=_stem_row_label(track.name, stem_roles),
+            bg=C['bg'], fg=track.color, font=('Segoe UI Semibold', 10),
+            anchor='w', width=12,
+        ).pack(anchor='w', padx=(4, 0))
+
+        btn_row = tk.Frame(ctrl, bg=C['bg'])
+        btn_row.pack(anchor='w', pady=(4, 0), padx=2)
+
+        solo_btn = tk.Button(
+            btn_row, text='S', width=2,
+            font=('Segoe UI Semibold', 9),
+            bg=C['panel2'], fg=C['fg_dim'],
+            activebackground=C['panel'], relief='flat', borderwidth=0,
+            cursor='hand2',
+            command=lambda t=track: self._toggle_solo(t),
+        )
+        solo_btn.pack(side='left', padx=(0, 4))
+        _bind_tooltip(solo_btn, 'Solo')
+        mute_btn = tk.Button(
+            btn_row, text='M', width=2,
+            font=('Segoe UI Semibold', 9),
+            bg=C['panel2'], fg=C['fg_dim'],
+            activebackground=C['panel'], relief='flat', borderwidth=0,
+            cursor='hand2',
+            command=lambda t=track: self._toggle_mute(t),
+        )
+        mute_btn.pack(side='left')
+        _bind_tooltip(mute_btn, 'Mute')
+
+        vol_var = tk.DoubleVar(value=100.0)
+
+        def _vol_cb(_v, t=track, vv=vol_var):
+            t.volume = float(vv.get()) / 100.0
+
+        vol_scale = ttk.Scale(
+            ctrl, from_=0, to=100, orient='horizontal',
+            variable=vol_var, command=_vol_cb, length=CONTROLS_W - 16,
+        )
+        vol_scale.pack(fill='x', padx=4, pady=(6, 0))
+
+        wave = tk.Canvas(
+            row, bg=C['log_bg'],
+            highlightthickness=1, highlightbackground=C['border'],
+            highlightcolor=C['border'], takefocus=0,
+        )
+        wave.pack(side='left', fill='both', expand=True)
+        wave.bind('<Button-1>', lambda e, t=track: self._on_waveform_click(e, t))
+        self._bind_zoom_wheel(wave)
+        track.wave_canvas = wave
+
+        track._solo_btn = solo_btn
+        track._mute_btn = mute_btn
+
     def _rebuild_track_rows(self) -> None:
         self._clear_track_rows()
-        C = self._colors
         n = len(self._tracks)
         self._tracks_inner.columnconfigure(0, weight=1)
-
+        stem_roles = {track.name for track in self._tracks}
         for i, track in enumerate(self._tracks):
-            self._tracks_inner.rowconfigure(i, weight=1, uniform='track')
-            pad_bottom = TRACK_ROW_GAP if i < n - 1 else 0
-            row = tk.Frame(self._tracks_inner, bg=C['bg'])
-            row.grid(row=i, column=0, sticky='nsew', pady=(0, pad_bottom))
-            track.row = row
-
-            ctrl = tk.Frame(row, bg=C['bg'], width=CONTROLS_W)
-            ctrl.pack(side='left', fill='y', padx=(0, 8))
-            ctrl.pack_propagate(False)
-
-            tk.Label(
-                ctrl, text=STEM_LABELS.get(track.name, track.name.title()),
-                bg=C['bg'], fg=track.color, font=('Segoe UI Semibold', 10),
-                anchor='w', width=12,
-            ).pack(anchor='w', padx=(4, 0))
-
-            btn_row = tk.Frame(ctrl, bg=C['bg'])
-            btn_row.pack(anchor='w', pady=(4, 0), padx=2)
-
-            solo_btn = tk.Button(
-                btn_row, text='S', width=2,
-                font=('Segoe UI Semibold', 9),
-                bg=C['panel2'], fg=C['fg_dim'],
-                activebackground=C['panel'], relief='flat', borderwidth=0,
-                cursor='hand2',
-                command=lambda t=track: self._toggle_solo(t),
-            )
-            solo_btn.pack(side='left', padx=(0, 4))
-            _bind_tooltip(solo_btn, 'Solo')
-            mute_btn = tk.Button(
-                btn_row, text='M', width=2,
-                font=('Segoe UI Semibold', 9),
-                bg=C['panel2'], fg=C['fg_dim'],
-                activebackground=C['panel'], relief='flat', borderwidth=0,
-                cursor='hand2',
-                command=lambda t=track: self._toggle_mute(t),
-            )
-            mute_btn.pack(side='left')
-            _bind_tooltip(mute_btn, 'Mute')
-
-            vol_var = tk.DoubleVar(value=100.0)
-
-            def _vol_cb(_v, t=track, vv=vol_var):
-                t.volume = float(vv.get()) / 100.0
-
-            vol_scale = ttk.Scale(
-                ctrl, from_=0, to=100, orient='horizontal',
-                variable=vol_var, command=_vol_cb, length=CONTROLS_W - 16,
-            )
-            vol_scale.pack(fill='x', padx=4, pady=(6, 0))
-
-            wave = tk.Canvas(
-                row, bg=C['log_bg'],
-                highlightthickness=1, highlightbackground=C['border'],
-                highlightcolor=C['border'], takefocus=0,
-            )
-            wave.pack(side='left', fill='both', expand=True)
-            wave.bind('<Button-1>', lambda e, t=track: self._on_waveform_click(e, t))
-            self._bind_zoom_wheel(wave)
-            track.wave_canvas = wave
-
-            track._solo_btn = solo_btn
-            track._mute_btn = mute_btn
-
+            self._build_one_track_row(track, i, n, stem_roles)
         self._bind_keys_on_widget(self._tracks_inner)
+
+    def _update_solo_btn(self, track: _TrackState) -> None:
+        btn = track._solo_btn
+        if btn is None:
+            return
+        if track.solo:
+            btn.configure(bg=self._colors['accent'], fg='white')
+        else:
+            btn.configure(bg=self._colors['panel2'], fg=self._colors['fg_dim'])
+
+    def _update_mute_btn(self, track: _TrackState) -> None:
+        btn = track._mute_btn
+        if btn is None:
+            return
+        if track.muted:
+            btn.configure(bg=self._colors['danger'], fg='white')
+        else:
+            btn.configure(bg=self._colors['panel2'], fg=self._colors['fg_dim'])
 
     def _toggle_solo(self, track: _TrackState) -> None:
         track.solo = not track.solo
-        btn = track._solo_btn
-        if btn is not None:
-            if track.solo:
-                btn.configure(bg=self._colors['accent'], fg='white')
-            else:
-                btn.configure(bg=self._colors['panel2'], fg=self._colors['fg_dim'])
+        if track.solo:
+            track.muted = False
+        self._update_solo_btn(track)
+        self._update_mute_btn(track)
         self._redraw_track_waveforms()
 
     def _toggle_mute(self, track: _TrackState) -> None:
         track.muted = not track.muted
-        btn = track._mute_btn
-        if btn is not None:
-            if track.muted:
-                btn.configure(bg=self._colors['danger'], fg='white')
-            else:
-                btn.configure(bg=self._colors['panel2'], fg=self._colors['fg_dim'])
+        if track.muted:
+            track.solo = False
+        self._update_mute_btn(track)
+        self._update_solo_btn(track)
         self._redraw_track_waveforms()
 
     def _any_solo(self) -> bool:
@@ -1514,6 +2522,38 @@ class StemPlayerWindow(tk.Toplevel):
         bot = _np.column_stack([x_right[::-1], y_bot[::-1]])
         pts = _np.vstack([top, bot]).reshape(-1).tolist()
         c.create_polygon(pts, fill=color, outline='')
+        self._draw_waveform_filename(c, track, w, h)
+
+    def _draw_waveform_filename(
+        self, canvas: tk.Canvas, track: _TrackState, width: int, height: int,
+    ) -> None:
+        name = track.path.name
+        font = ('Segoe UI', 8)
+        pad_x, pad_y = 10, 8
+        text_x = width - pad_x
+        text_y = height - pad_y
+
+        measure = canvas.create_text(0, 0, text=name, font=font, anchor='se')
+        bbox = canvas.bbox(measure)
+        canvas.delete(measure)
+        if not bbox:
+            return
+
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        inset = 4
+        x0 = max(2, text_x - tw - inset)
+        y0 = text_y - th - inset
+        x1 = min(width - 2, text_x + inset)
+        y1 = min(height - 2, text_y + inset)
+        bg = self._colors['log_bg']
+        canvas.create_rectangle(
+            x0, y0, x1, y1, fill=bg, outline=bg, tags='filename',
+        )
+        canvas.create_text(
+            text_x, text_y, text=name, anchor='se',
+            fill=self._colors['fg_dim'], font=font, tags='filename',
+        )
 
     def _update_playhead(self, position: float) -> None:
         dur = self._duration()
@@ -1537,6 +2577,7 @@ class StemPlayerWindow(tk.Toplevel):
         tc.create_line(tx, 0, tx, TIMELINE_H, fill='#ffffff', width=1, tags='playhead')
 
     def _on_close(self) -> None:
+        self._unbind_folder_nav_keys_global()
         if self._resize_after is not None:
             try:
                 self.after_cancel(self._resize_after)
@@ -1547,6 +2588,11 @@ class StemPlayerWindow(tk.Toplevel):
                 self.after_cancel(self._tick_id)
             except tk.TclError:
                 pass
+        if self._busy_hide_after_id is not None:
+            try:
+                self.after_cancel(self._busy_hide_after_id)
+            except tk.TclError:
+                pass
         if self._engine is not None:
             self._engine.set_playing(False)
             self._engine.stop_stream()
@@ -1555,15 +2601,26 @@ class StemPlayerWindow(tk.Toplevel):
 
 def open_stem_player(parent: tk.Misc) -> None:
     """Open (or focus) the stem preview player window."""
-    from stem_organizer_ui import COLORS, _init_ml
+    from ui_theme import COLORS
 
-    _init_ml()
+    _ensure_player_audio_deps()
 
     existing = getattr(parent, '_stem_player_window', None)
     if existing is not None and existing.winfo_exists():
         existing._place_and_show()
+        library = existing._library_from_parent()
+        if library is not None:
+            if library != existing._library_root:
+                existing._prepare_library(library)
+            else:
+                existing._refresh_song_library(keep_folder=existing._folder)
+                if existing._folder is not None:
+                    existing._sync_folder_index()
         return
 
     win = StemPlayerWindow(parent, colors=COLORS)
     parent._stem_player_window = win  # type: ignore[attr-defined]
+    library = win._library_from_parent()
+    if library is not None:
+        win._prepare_library(library)
     win.after_idle(win._place_and_show)
