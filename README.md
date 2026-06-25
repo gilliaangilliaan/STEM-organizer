@@ -31,7 +31,7 @@ A second tab runs **SI-SDR** checks on already-organized folders and can recycle
 
 Use the **Match & Align** tab in the left panel for the downstream workflow:
 
-1. **Pair** — match acapella and instrumental files by ID3/FLAC tags (with filename fallback), then organize into `Artist - Title` folders.
+1. **Match** — match acapella and instrumental files by ID3/FLAC tags (with filename fallback), then organize into `Artist - Title` folders.
 2. **Align** — export a song list, distribute downloaded originals into song folders, sort into `with_original` / `without_original`, and cross-correlate-align instrumental and acapella to the original timeline.
 3. **Play** — audition aligned stems in the STEM player (instrumental → acapella → original), with pass/fail folder tagging.
 
