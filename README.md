@@ -134,7 +134,7 @@ Settings are saved to `settings.json` beside the app (ignored by git).
 | File | Role |
 |------|------|
 | `stem_organizer_ui.py` | Main application UI and processing logic |
-| `pair_finder_panel.py` | Match & Align UI (Pair + Align sub-tabs) |
+| `pair_finder_panel.py` | Match & Align UI (Match + Align sub-tabs) |
 | `pair_matcher.py` | Acapella/instrumental tag matching and organize |
 | `stem_align.py` | Distribute originals, sort folders, cross-correlation align |
 | `stem_player.py` | STEM preview player window |
