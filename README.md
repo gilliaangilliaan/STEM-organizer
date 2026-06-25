@@ -4,7 +4,7 @@
 
 # STEM organizer
 
-Desktop app for batch-organizing multitracks to stem exports (2-stem/4-stem) based on RMS and SI-SDR classification. Includes a built-in **STEM player** for auditioning mixes, plus an integrated **Pair Finder** workflow for matching acapella/instrumental pairs and aligning stems to downloaded originals.
+Desktop app for batch-organizing multitracks to stem exports (2-stem/4-stem) based on RMS and SI-SDR classification. Includes a built-in **STEM player** for auditioning mixes, plus an integrated **Match & Align** workflow for matching acapella/instrumental pairs and aligning stems to downloaded originals.
 
 **By:** Gilliaan & Bas Curtiz  
 **Repository:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  
@@ -27,15 +27,15 @@ Point the app at a folder of multitrack exports (one song per subfolder). For ea
 
 A second tab runs **SI-SDR** checks on already-organized folders and can recycle stems or whole songs that fall below per-stem thresholds.
 
-### Pair Finder (integrated)
+### Match & Align (integrated)
 
-Use the **Pair Finder** tab in the left panel for the downstream workflow:
+Use the **Match & Align** tab in the left panel for the downstream workflow:
 
 1. **Pair** — match acapella and instrumental files by ID3/FLAC tags (with filename fallback), then organize into `Artist - Title` folders.
 2. **Align** — export a song list, distribute downloaded originals into song folders, sort into `with_original` / `without_original`, and cross-correlate-align instrumental and acapella to the original timeline.
 3. **Play** — audition aligned stems in the STEM player (instrumental → acapella → original), with pass/fail folder tagging.
 
-Pair Finder settings are stored in the same `settings.json` as the organizer. `install-deps.bat` also installs `mutagen`, `scipy`, and `librosa` for pairing and alignment.
+Match & Align settings are stored in the same `settings.json` as the organizer. `install-deps.bat` also installs `mutagen`, `scipy`, and `librosa` for pairing and alignment.
 
 ---
 
@@ -49,8 +49,8 @@ Pair Finder settings are stored in the same `settings.json` as the organizer. `i
 | **GPU** | CUDA when PyTorch matches your GPU; automatic CPU fallback |
 | **Dedup** | Phase-inversion null test; GPU batching on cards with ≥ 8 GiB VRAM |
 | **SI-SDR** | Per-stem quality scoring with recycle-bin actions |
-| **STEM player** | Multi-track preview with solo/mute, seek, zoom, and Pair Finder library review |
-| **Pair Finder** | Tag-based pairing, folder organize, original distribution, stem alignment |
+| **STEM player** | Multi-track preview with solo/mute, seek, zoom, and Match & Align library review |
+| **Match & Align** | Tag-based pairing, folder organize, original distribution, stem alignment |
 | **Batch tools** | Skip existing, sequential naming + `index.json`, mixture export, min-duration filter |
 
 Hover the **?** tooltips in the UI for detailed explanations of each setting.
@@ -134,7 +134,7 @@ Settings are saved to `settings.json` beside the app (ignored by git).
 | File | Role |
 |------|------|
 | `stem_organizer_ui.py` | Main application UI and processing logic |
-| `pair_finder_panel.py` | Pair Finder UI (Pair + Align tabs) |
+| `pair_finder_panel.py` | Match & Align UI (Pair + Align sub-tabs) |
 | `pair_matcher.py` | Acapella/instrumental tag matching and organize |
 | `stem_align.py` | Distribute originals, sort folders, cross-correlation align |
 | `stem_player.py` | STEM preview player window |
