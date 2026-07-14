@@ -1,4 +1,4 @@
-"""Locate ffmpeg/ffprobe next to the app or on PATH and expose them to subprocess/demucs."""
+"""Locate FFmpeg tools next to the app or on PATH and expose them to subprocess/demucs."""
 from __future__ import annotations
 
 import os
@@ -9,9 +9,14 @@ from pathlib import Path
 
 _FFMPEG: str | None = None
 _FFPROBE: str | None = None
+_FFPLAY: str | None = None
 _INITIALIZED = False
 _SUBPROCESS_PATCHED = False
-_FFMPEG_EXE_NAMES = frozenset({'ffmpeg', 'ffmpeg.exe', 'ffprobe', 'ffprobe.exe'})
+_FFMPEG_EXE_NAMES = frozenset({
+    'ffmpeg', 'ffmpeg.exe',
+    'ffprobe', 'ffprobe.exe',
+    'ffplay', 'ffplay.exe',
+})
 
 
 def subprocess_kwargs() -> dict:
@@ -164,8 +169,8 @@ def _resolve_tool(exe_name: str, path_name: str, sibling_of: str | None) -> str 
 
 
 def setup_ffmpeg() -> tuple[str | None, str | None]:
-    """Resolve ffmpeg/ffprobe once and prepend their directory to PATH."""
-    global _FFMPEG, _FFPROBE, _INITIALIZED
+    """Resolve FFmpeg tools once and prepend their directory to PATH."""
+    global _FFMPEG, _FFPROBE, _FFPLAY, _INITIALIZED
     _patch_subprocess_hide_console()
     if _INITIALIZED:
         return _FFMPEG, _FFPROBE
@@ -173,15 +178,18 @@ def setup_ffmpeg() -> tuple[str | None, str | None]:
 
     exe = 'ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'
     probe = 'ffprobe.exe' if sys.platform == 'win32' else 'ffprobe'
+    play = 'ffplay.exe' if sys.platform == 'win32' else 'ffplay'
 
     ffmpeg = _resolve_tool(exe, 'ffmpeg', None)
     ffprobe = _resolve_tool(probe, 'ffprobe', ffmpeg)
+    ffplay = _resolve_tool(play, 'ffplay', ffmpeg)
 
     if ffmpeg:
         _prepend_path(Path(ffmpeg).parent)
 
     _FFMPEG = ffmpeg
     _FFPROBE = ffprobe
+    _FFPLAY = ffplay
     return ffmpeg, ffprobe
 
 
@@ -203,9 +211,14 @@ def ffprobe_path() -> str | None:
     return _FFPROBE
 
 
+def ffplay_path() -> str | None:
+    setup_ffmpeg()
+    return _FFPLAY
+
+
 def ffmpeg_missing_message() -> str:
     return (
         'ffmpeg not found — some stems may fail to decode. '
-        'Put ffmpeg.exe and ffprobe.exe in an ffmpeg\\ folder next to the app, '
+        'Put ffmpeg.exe, ffprobe.exe, and ffplay.exe in an ffmpeg\\ folder next to the app, '
         'or re-run install-deps.bat / add ffmpeg to PATH.'
     )

@@ -638,6 +638,26 @@ def _index_song_folder(folders: list[Path], folder: Path) -> int:
     raise ValueError(folder)
 
 
+def _folder_in_song_library(folder: Path, library_root: Path) -> bool:
+    if not library_root.is_dir():
+        return False
+    try:
+        _index_song_folder(list_player_song_folders(library_root), folder)
+        return True
+    except ValueError:
+        return False
+
+
+def _library_root_containing(folder: Path) -> Path | None:
+    """Return parent directory when it is a song library that contains folder."""
+    parent = folder.parent
+    if not parent.is_dir():
+        return None
+    if not _folder_in_song_library(folder, parent):
+        return None
+    return parent
+
+
 def format_time_ms(seconds: float) -> str:
     if seconds < 0:
         seconds = 0.0
@@ -1767,14 +1787,23 @@ class StemPlayerWindow(tk.Toplevel):
             self._folder_index = -1
 
     def _resolve_library_root(self, folder: Path | None = None) -> Path | None:
-        if self._library_root is not None and self._library_root.is_dir():
-            return self._library_root
-        configured = self._library_from_parent()
-        if configured is not None and configured.is_dir():
-            self._library_root = configured
-            return configured
         probe = folder if folder is not None else self._folder
+        configured = self._library_from_parent()
+
+        if configured is not None and configured.is_dir():
+            if probe is None or _folder_in_song_library(probe, configured):
+                self._library_root = configured
+                return configured
+
+        if self._library_root is not None and self._library_root.is_dir():
+            if probe is None or _folder_in_song_library(probe, self._library_root):
+                return self._library_root
+
         if probe is not None:
+            containing = _library_root_containing(probe)
+            if containing is not None:
+                self._library_root = containing
+                return containing
             parent = probe.parent
             if parent.is_dir() and any(
                 child.is_dir() and child.name != BACKUP_DIR_NAME
@@ -1782,10 +1811,14 @@ class StemPlayerWindow(tk.Toplevel):
             ):
                 self._library_root = parent
                 return parent
+
+        if configured is not None and configured.is_dir():
+            self._library_root = configured
+            return configured
         return None
 
     def _ensure_song_library(self) -> bool:
-        library = self._resolve_library_root()
+        library = self._resolve_library_root(self._folder)
         if library is None:
             return False
         if self._library_root != library or not self._song_folders:
@@ -1933,10 +1966,7 @@ class StemPlayerWindow(tk.Toplevel):
                 if library is not None:
                     self._prepare_library(library)
             self._refresh_song_library(keep_folder=new_path)
-            if library_index is not None:
-                self._folder_index = library_index
-            elif self._folder_index < 0:
-                self._sync_folder_index(new_path)
+            self._sync_folder_index(new_path)
 
             if not self._restart_engine():
                 return
@@ -1962,8 +1992,6 @@ class StemPlayerWindow(tk.Toplevel):
             return
 
         library = self._library_from_parent()
-        if library is not None and self._library_root != library:
-            self._library_root = library
 
         initial = self._folder or library or self._library_root
         initial_dir = str(initial) if initial is not None and Path(initial).is_dir() else None
@@ -1975,7 +2003,13 @@ class StemPlayerWindow(tk.Toplevel):
         )
         if not folder:
             return
-        self._open_folder(Path(folder))
+        folder_path = Path(folder)
+        containing = _library_root_containing(folder_path)
+        if containing is not None:
+            self._library_root = containing
+        elif library is not None and library.is_dir():
+            self._library_root = library
+        self._open_folder(folder_path)
 
     def _open_folder(
         self,

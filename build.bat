@@ -41,7 +41,7 @@ if not exist "%PY%" (
 
 echo   Installing PyInstaller and packager deps ...
 "%PY%" -m pip install -q -U pip
-"%PY%" -m pip install -q pyinstaller requests packaging
+"%PY%" -m pip install -q pyinstaller requests packaging customtkinter psutil
 if errorlevel 1 (
     echo ERROR: Failed to install build dependencies.
     pause

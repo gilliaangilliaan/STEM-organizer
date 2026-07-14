@@ -131,10 +131,134 @@ def save_settings(data: dict) -> None:
         pass
 
 
+def show_match_align_help_dialog(parent: tk.Misc, mode: str) -> None:
+    is_match = mode == 'match'
+    title = 'Match help' if is_match else 'Align help'
+    heading = 'Match acapellas & instrumentals' if is_match else 'Align stems to the original'
+    intro = (
+        'Find matching versions by artist and title, then turn them into an organized library.'
+        if is_match else
+        'Use the original song as the master timeline for its instrumental and acapella.'
+    )
+    sections = (
+        (
+            'Workflow',
+            '1. Choose the Acapella and Instrumental source folders.\n'
+            '2. Choose where matched files should be moved.\n'
+            '3. Set the reference side and matching strictness.\n'
+            '4. Click Find pairs, review the log, then organize the matched folder.',
+        ),
+        (
+            'How matching works',
+            'Artist and title tags are compared separately. The reference folder drives the scan: '
+            'each reference file searches for its best partner in the other folder. Filename fallback '
+            'can recover artist and title when tags are missing.',
+        ),
+        (
+            'Tune the result',
+            'Lower strictness accepts small differences such as extra artists, spacing, or “&” versus '
+            '“and”. Ignore rules remove brackets, extra spaces, and custom words before comparison; '
+            'they do not rename the source files.',
+        ),
+        (
+            'File safety',
+            'Find pairs moves only confirmed matches into the output folder. Organize folder then groups '
+            'those matched files into Artist - Title subfolders. Unmatched files remain in their source folder.',
+        ),
+    ) if is_match else (
+        (
+            'Required layout',
+            'Stems root contains one folder per song, with an instrumental and acapella inside. '
+            'Downloaded original songs first go into the Originals inbox.',
+        ),
+        (
+            'Four-step workflow',
+            '1. Export the song-folder names as a download list.\n'
+            '2. Put downloaded originals in the inbox and distribute them.\n'
+            '3. Sort song folders into with_original and without_original.\n'
+            '4. Align folders that have an original.',
+        ),
+        (
+            'How alignment works',
+            'The original song is the master timeline. Audio is analyzed to estimate the offset; silence '
+            'is added or the beginning is trimmed so the instrumental and acapella start at the correct time. '
+            'A longer analysis window can help difficult material but takes more time.',
+        ),
+        (
+            'File safety',
+            'Keep Backup stems before align enabled to preserve the untouched files in '
+            '_backup_before_align. Skip if output already exists makes interrupted batches safe to resume.',
+        ),
+    )
+
+    dialog = tk.Toplevel(parent)
+    dialog.title(title)
+    dialog.configure(bg=COLORS['panel'])
+    dialog.resizable(False, False)
+    dialog.transient(parent.winfo_toplevel())
+
+    outer = tk.Frame(dialog, bg=COLORS['panel'])
+    outer.pack(fill='both', expand=True, padx=22, pady=18)
+    tk.Label(
+        outer, text=heading, font=('Segoe UI Semibold', 18),
+        fg=COLORS['fg'], bg=COLORS['panel'],
+    ).pack(anchor='w')
+    tk.Label(
+        outer, text=intro, font=('Segoe UI', 10),
+        fg=COLORS['fg_dim'], bg=COLORS['panel'],
+    ).pack(anchor='w', pady=(2, 14))
+
+    for section_title, body in sections:
+        card = tk.Frame(
+            outer, bg=COLORS['panel2'],
+            highlightbackground=COLORS['border'], highlightthickness=1,
+        )
+        card.pack(fill='x', pady=(0, 10))
+        tk.Label(
+            card, text=section_title.upper(), font=('Segoe UI Semibold', 9),
+            fg=COLORS['accent_hov'], bg=COLORS['panel2'],
+        ).pack(anchor='w', padx=14, pady=(10, 4))
+        tk.Label(
+            card, text=body, font=('Segoe UI', 10),
+            fg=COLORS['fg_dim'], bg=COLORS['panel2'],
+            justify='left', anchor='w', wraplength=600,
+        ).pack(fill='x', padx=14, pady=(0, 11))
+
+    footer = tk.Frame(outer, bg=COLORS['panel'])
+    footer.pack(fill='x', pady=(2, 0))
+    tk.Label(
+        footer,
+        text='Hover over individual controls for more detail.',
+        font=('Segoe UI', 9), fg=COLORS['fg_dim'], bg=COLORS['panel'],
+    ).pack(side='left')
+    close = tk.Button(
+        footer, text='Close', command=dialog.destroy,
+        font=('Segoe UI Semibold', 10),
+        bg=COLORS['accent'], fg='#ffffff',
+        activebackground=COLORS['accent_hov'], activeforeground='#ffffff',
+        relief='flat', borderwidth=0, highlightthickness=0,
+        padx=18, pady=5, cursor='hand2',
+    )
+    close.pack(side='right')
+
+    dialog.bind('<Escape>', lambda _event: dialog.destroy())
+    dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
+    dialog.update_idletasks()
+    width = 680
+    height = max(540, outer.winfo_reqheight() + 36)
+    top = parent.winfo_toplevel()
+    x = top.winfo_rootx() + max(0, (top.winfo_width() - width) // 2)
+    y = top.winfo_rooty() + max(0, (top.winfo_height() - height) // 2)
+    dialog.geometry(f'{width}x{height}+{x}+{y}')
+    dialog.grab_set()
+    close.focus_set()
+
+
 class PairFinderPanel(ttk.Frame):
-    def __init__(self, host: tk.Misc, parent: tk.Misc) -> None:
+    def __init__(self, host: tk.Misc, parent: tk.Misc, info_icon_factory=None) -> None:
         super().__init__(parent)
         self._host = host
+        self._info_icon_factory = info_icon_factory
 
         self.acapella_dir = tk.StringVar()
         self.instrumental_dir = tk.StringVar()
@@ -181,15 +305,56 @@ class PairFinderPanel(ttk.Frame):
         self._build_pair_tab(pair_tab)
         self._build_align_tab(align_tab)
 
-    def _build_pair_tab(self, left: ttk.Frame) -> None:
-        header = ttk.Frame(left)
-        header.pack(fill='x', padx=SECTION_PADX, pady=(HEADER_TOP_PAD, 12))
+    def _make_info_icon(self, parent: tk.Misc, command) -> None:
+        if self._info_icon_factory is not None:
+            self._info_icon_factory(parent, command).pack(side='left', padx=(4, 0))
+            return
+        fallback = tk.Label(
+            parent, text='?', font=('Segoe UI Semibold', 9),
+            fg=COLORS['fg_dim'], bg=COLORS['bg'], cursor='hand2',
+        )
+        fallback.pack(side='left', padx=(5, 0))
+        fallback.bind('<Button-1>', lambda _event: command())
+        Tooltip(fallback, 'Show more info/help.')
+
+    def _show_match_help(self) -> None:
+        show_match_align_help_dialog(self._host, 'match')
+
+    def _show_align_help(self) -> None:
+        show_match_align_help_dialog(self._host, 'align')
+
+    def _description_with_info(
+        self,
+        parent: tk.Misc,
+        first_line: str,
+        final_line: str,
+        command,
+    ) -> None:
         tk.Label(
-            header,
-            text='Match acapella and instrumental FLAC/MP3 files by artist/title tags, then organize pairs into song folders.',
+            parent,
+            text=first_line,
             font=HEADER_DESC_FONT, fg=COLORS['fg'], bg=COLORS['bg'],
             wraplength=520, justify='left',
         ).pack(anchor='w')
+        final_row = tk.Frame(parent, bg=COLORS['bg'])
+        final_row.pack(fill='x', anchor='w')
+        tk.Label(
+            final_row,
+            text=final_line,
+            font=HEADER_DESC_FONT, fg=COLORS['fg'], bg=COLORS['bg'],
+            justify='left',
+        ).pack(side='left')
+        self._make_info_icon(final_row, command)
+
+    def _build_pair_tab(self, left: ttk.Frame) -> None:
+        header = ttk.Frame(left)
+        header.pack(fill='x', padx=SECTION_PADX, pady=(HEADER_TOP_PAD, 12))
+        self._description_with_info(
+            header,
+            'Match acapella and instrumental FLAC/MP3 files by artist/title tags, then organize pairs',
+            'into song folders.',
+            self._show_match_help,
+        )
 
         paths = ttk.LabelFrame(left, text='  FOLDERS  ', padding=SECTION_INNER_PAD)
         paths.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
@@ -338,12 +503,12 @@ class PairFinderPanel(ttk.Frame):
     def _build_align_tab(self, parent: ttk.Frame) -> None:
         header = ttk.Frame(parent)
         header.pack(fill='x', padx=SECTION_PADX, pady=(HEADER_TOP_PAD, 12))
-        tk.Label(
+        self._description_with_info(
             header,
-            text='Align instrumental and acapella to the original song. The original is the master timeline; silence is added or the start is trimmed so stems line up with it.',
-            font=HEADER_DESC_FONT, fg=COLORS['fg'], bg=COLORS['bg'],
-            wraplength=520, justify='left',
-        ).pack(anchor='w')
+            'Align instrumental and acapella to the original song. The original is the master',
+            'timeline; silence is added or the start is trimmed so stems line up with it.',
+            self._show_align_help,
+        )
 
         library = ttk.LabelFrame(parent, text='  STEM LIBRARY  ', padding=SECTION_INNER_PAD)
         library.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))

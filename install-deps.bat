@@ -119,8 +119,8 @@ python -m pip install "cffi>=1.16" -t "%DEST%" --only-binary=:all: --upgrade --n
 if errorlevel 1 goto failed
 
 echo.
-echo [3/3] demucs, soundfile, numpy, sounddevice ...
-python -m pip install soundfile numpy sounddevice -t "%DEST%" --upgrade --no-cache-dir
+echo [3/3] demucs, audio, and Track Renamer dependencies ...
+python -m pip install soundfile numpy sounddevice customtkinter psutil -t "%DEST%" --upgrade --no-cache-dir
 echo Installing Pair Finder dependencies (mutagen, scipy, librosa)...
 python -m pip install mutagen scipy librosa resampy audioread -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 goto failed

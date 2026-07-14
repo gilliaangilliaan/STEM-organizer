@@ -65,7 +65,8 @@ AMBIG_MODES = {
     'Skip the entire song':     'skip_song',
 }
 
-STEM_FILE_EXTS = ('.flac', '.wav')
+STEM_FILE_EXTS = ('.flac', '.wav', '.mp3')
+SDR_STEM_EXT_LABEL = '/'.join(STEM_FILE_EXTS)
 
 SDR_DEFAULT_THRESHOLDS = {
     'bass': 25,
@@ -269,7 +270,7 @@ SI_SDR_URL = (
     'https://source-separation.github.io/tutorial/basics/evaluation.html'
     '?highlight=sdr#si-sdr'
 )
-APP_VERSION = '1.0.3'
+APP_VERSION = '1.0.4'
 SPLASH_SIZE = 512
 SPLASH_PAD = 28
 SPLASH_CHROMA = '#010101'
@@ -339,6 +340,54 @@ def format_elapsed(seconds: float) -> str:
     if hours:
         return f'{hours}:{minutes:02d}:{secs:02d}'
     return f'{minutes}:{secs:02d}'
+
+
+class PhaseTimer:
+    """Accumulate monotonic durations keyed by phase name."""
+
+    def __init__(self) -> None:
+        self._times: dict[str, float] = {}
+
+    def add(self, phase: str, seconds: float) -> None:
+        if seconds > 0:
+            self._times[phase] = self._times.get(phase, 0.0) + seconds
+
+    def get(self, phase: str) -> float:
+        return self._times.get(phase, 0.0)
+
+    def log_summary(
+        self,
+        log_fn,
+        labels: dict[str, str],
+        *,
+        title: str = 'Phase timing',
+        prefix: str = '  ',
+    ) -> None:
+        if not self._times:
+            return
+        log_fn(f'{prefix}{title}:')
+        for phase, sec in sorted(self._times.items(), key=lambda kv: (-kv[1], kv[0])):
+            label = labels.get(phase, phase)
+            log_fn(f'{prefix}  {label}: {format_duration_log(sec)}')
+
+
+ORGANIZE_PHASE_LABELS = {
+    'model_load': 'Model load',
+    'input_scan': 'Input scan',
+    'dedup': 'De-dupe',
+    'prescan': 'Pre-scan',
+    'classification': 'RMS classification',
+    'mixing': 'Mix stems',
+    'export': 'Write output',
+}
+
+SDR_PHASE_LABELS = {
+    'model_load': 'Model load',
+    'target_scan': 'Target scan',
+    'audio_load': 'Load audio',
+    'separation': 'Separation (Demucs)',
+    'sdr_compute': 'SDR computation',
+}
 
 
 def folder_name_with_duration(name: str, duration_sec: float | None, append: bool) -> str:
@@ -904,6 +953,35 @@ def find_duplicates(
     return keep
 
 
+def prescan_stems(paths):
+    """
+    Fast pre-classification check for zero-byte or header-empty stems.
+    Returns (issues, ok_paths) where issues is [(path, reason), ...].
+    """
+    issues = []
+    ok = []
+    for p in paths:
+        path = Path(p)
+        try:
+            if path.stat().st_size == 0:
+                issues.append((path, 'empty file (0 bytes)'))
+                continue
+        except OSError as exc:
+            issues.append((path, f'unreadable: {exc}'))
+            continue
+
+        if path.suffix.lower() in SF_READ_EXTS and sf is not None:
+            try:
+                if sf.info(str(path)).frames == 0:
+                    issues.append((path, 'empty audio (0 frames)'))
+                    continue
+            except Exception:
+                pass
+
+        ok.append(path)
+    return issues, ok
+
+
 def classify_batch(model, file_paths, device: str, batch_size: int = 4, stop_event=None):
     sr = model.samplerate
     sources = list(model.sources)
@@ -922,8 +1000,12 @@ def classify_batch(model, file_paths, device: str, batch_size: int = 4, stop_eve
             except Exception as e:
                 yield (fp, None, f'load failed: {format_load_error(e)}')
                 continue
+            n_samples = int(a.shape[-1])
+            if n_samples == 0:
+                yield (fp, None, 'empty audio (0 samples)')
+                continue
             audios.append(a)
-            lengths.append(a.shape[1])
+            lengths.append(n_samples)
             valid.append(fp)
 
         if not audios:
@@ -932,13 +1014,14 @@ def classify_batch(model, file_paths, device: str, batch_size: int = 4, stop_eve
         max_len = max(lengths)
         batch = np.zeros((len(audios), 2, max_len), dtype=np.float32)
         for i, a in enumerate(audios):
-            batch[i, :, :a.shape[1]] = a
+            batch[i, :, :lengths[i]] = a
 
         try:
             with torch.no_grad():
                 out = apply_model(
                     model, torch.from_numpy(batch).to(device),
-                    device=device, progress=False, split=True, overlap=0.25,
+                    device=device, progress=False, shifts=0,
+                    split=True, overlap=0.25,
                 )
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
@@ -956,6 +1039,13 @@ def classify_batch(model, file_paths, device: str, batch_size: int = 4, stop_eve
                 continue
             for fp in valid:
                 yield (fp, None, str(e))
+            continue
+        except AssertionError:
+            if len(valid) == 1:
+                yield (valid[0], None, 'audio too short for model')
+                continue
+            for fp in valid:
+                yield from classify_batch(model, [fp], device, batch_size=1)
             continue
 
         out_np = out.cpu().numpy()
@@ -1034,11 +1124,16 @@ def folder_has_all_stems(folder: Path, categories: tuple[str, ...]) -> bool:
 SDR_LAYOUT_MUSDB = 'musdb'   # Type 1: one folder per song, stems named vocals.wav etc.
 SDR_LAYOUT_STEMS = 'stems'   # Type 2: one folder per stem category, songs as files inside
 SDR_LAYOUT_SINGLE_FLAT = 'single_flat'  # loose single-category files (vocals, instrumental, …)
+SDR_LAYOUT_MIXED_FLAT = 'mixed_flat'  # loose vocals + instrumental files classified by name
 
 SDR_VOCALS_ONLY_CATEGORIES = ('vocals',)
 SDR_INSTRUMENTAL_ONLY_CATEGORIES = ('instrumental',)
+SDR_MIXED_FLAT_CATEGORIES = ('instrumental', 'vocals')
 
-SDR_SINGLE_FLAT_LAYOUTS = frozenset({SDR_LAYOUT_SINGLE_FLAT})
+SDR_SINGLE_FLAT_LAYOUTS = frozenset({
+    SDR_LAYOUT_SINGLE_FLAT,
+    SDR_LAYOUT_MIXED_FLAT,
+})
 
 SDR_STEM_PICK_ORDER = ('instrumental', 'vocals', 'bass', 'drums', 'other')
 
@@ -1202,6 +1297,21 @@ def collect_instrumental_only_targets(root: Path, scan_mode: str) -> list[dict[s
     )
 
 
+def collect_mixed_flat_targets(
+    root: Path, scan_mode: str,
+) -> list[dict[str, Path]]:
+    """Classify loose vocals/instrumental files independently by filename."""
+    targets: list[dict[str, Path]] = []
+    for path in sorted(iter_sdr_audio_files(root, scan_mode)):
+        is_vocals = is_vocals_only_stem_file(path)
+        is_instrumental = is_instrumental_only_stem_file(path)
+        if is_vocals and not is_instrumental:
+            targets.append({'vocals': path})
+        elif is_instrumental and not is_vocals:
+            targets.append({'instrumental': path})
+    return targets
+
+
 def find_category_folder(root: Path, category: str) -> Path | None:
     direct = root / category
     if direct.is_dir():
@@ -1300,9 +1410,7 @@ def resolve_sdr_layout_and_categories(
     if instrumental and not vocals:
         return SDR_INSTRUMENTAL_ONLY_CATEGORIES, SDR_LAYOUT_SINGLE_FLAT
     if vocals and instrumental:
-        if len(vocals) >= len(instrumental):
-            return SDR_VOCALS_ONLY_CATEGORIES, SDR_LAYOUT_SINGLE_FLAT
-        return SDR_INSTRUMENTAL_ONLY_CATEGORIES, SDR_LAYOUT_SINGLE_FLAT
+        return SDR_MIXED_FLAT_CATEGORIES, SDR_LAYOUT_MIXED_FLAT
     type1_vocals = [
         f for f in collect_sdr_song_folders(root, scan_mode)
         if folder_has_all_stems(f, SDR_VOCALS_ONLY_CATEGORIES)
@@ -1333,7 +1441,7 @@ def describe_sdr_scan_failure(
     folders = collect_sdr_song_folders(root, scan_mode)
     lines = ['No complete stem sets found.\n']
     if not folders:
-        lines.append(f'No stem files (.flac/.wav) found under:\n{root}')
+        lines.append(f'No stem files ({SDR_STEM_EXT_LABEL}) found under:\n{root}')
         return '\n'.join(lines)
 
     lines.append(f'Scanned {len(folders)} folder(s) under:\n{root}\n')
@@ -1349,7 +1457,7 @@ def describe_sdr_scan_failure(
     n_inst = len(collect_instrumental_only_targets(root, scan_mode))
     n_audio = sum(1 for _ in iter_sdr_audio_files(root, scan_mode))
     if n_audio:
-        lines.append(f'  • {n_audio:,} audio file(s) total (.flac/.wav)')
+        lines.append(f'  • {n_audio:,} audio file(s) total ({SDR_STEM_EXT_LABEL})')
     if n_vocals:
         lines.append(
             f'  • {n_vocals:,} vocals keyword match(es) '
@@ -1372,7 +1480,7 @@ def describe_sdr_scan_failure(
             f'missing in example: {", ".join(missing)}'
         )
 
-    expected = ', '.join(f'{c}.flac/.wav' for c in preferred_categories)
+    expected = ', '.join(f'{c}{SDR_STEM_EXT_LABEL}' for c in preferred_categories)
     lines.append(
         f'\nType 1 (MUSDB): each song folder contains:\n{expected}\n\n'
         f'Type 2 (Stems): each stem has its own folder:\n'
@@ -1393,6 +1501,8 @@ def collect_sdr_targets(
     process_all: bool = False,
 ) -> list[Path | dict[str, Path]]:
     """Return song targets for the detected layout (folder paths or stem-path dicts)."""
+    if layout == SDR_LAYOUT_MIXED_FLAT:
+        return collect_mixed_flat_targets(root, scan_mode)
     if layout == SDR_LAYOUT_SINGLE_FLAT:
         cat = categories[0]
         if process_all:
@@ -1504,6 +1614,7 @@ class Worker(threading.Thread):
         self._completed_stems = 0
         self._run_started_at = 0.0
         self._stats: dict = {}
+        self._phase_timer = PhaseTimer()
 
     def _reset_stats(self, folders_total: int) -> None:
         self._stats = {
@@ -1591,6 +1702,7 @@ class Worker(threading.Thread):
                     self.log(f'    {_skip_reason_label(reason)}: {len(items)}')
                     for label in items:
                         self.log(f'      {label}')
+        self._phase_timer.log_summary(self.log, ORGANIZE_PHASE_LABELS)
         self.log('')
         self.log('Done.')
 
@@ -1752,8 +1864,12 @@ class Worker(threading.Thread):
 
         if self.p['dedup']:
             self.log('Starting de-duping...')
+            t0 = time.monotonic()
             before = len(stems)
             stems = find_duplicates(stems, sr=sr, log_fn=self.log, device=device)
+            dedup_dt = time.monotonic() - t0
+            self._phase_timer.add('dedup', dedup_dt)
+            self.log(f'  [dedup] finished in {format_duration_log(dedup_dt)}')
             if len(stems) < before:
                 self.log(f"  [dedup] {before} -> {len(stems)} stems after deduplication")
 
@@ -1763,7 +1879,23 @@ class Worker(threading.Thread):
         folder_had_errors = False
         skip_reasons: dict[str, int] = {'confidence': 0, 'margin': 0, 'both': 0, 'error': 0}
 
+        self.log('Scanning stems...')
+        t0 = time.monotonic()
+        prescan_issues, stems = prescan_stems(stems)
+        prescan_dt = time.monotonic() - t0
+        self._phase_timer.add('prescan', prescan_dt)
+        self.log(f'  [prescan] finished in {format_duration_log(prescan_dt)}')
+        for path, reason in prescan_issues:
+            tag = '[empty]' if reason.startswith('empty') else '[skip]'
+            self.log(f"  {tag} {path.name} — {reason}")
+            self._mark_stems_done(1)
+            skipped += 1
+            skip_reasons['error'] += 1
+            folder_had_errors = True
+            self._record_stem_skip(rel, path, 'error')
+
         self.log('Starting RMS classification...')
+        t0 = time.monotonic()
         for path, energies, err in classify_batch(
                 model, stems, device, batch_size=int(self.p['batch_size']), stop_event=self._stop):
             self._mark_stems_done(1)
@@ -1793,12 +1925,16 @@ class Worker(threading.Thread):
                     self._record_stem_skip(rel, path, skip_reason)
             else:
                 buckets[label].append(path)
+        class_dt = time.monotonic() - t0
+        self._phase_timer.add('classification', class_dt)
+        self.log(f'  [classification] finished in {format_duration_log(class_dt)}')
 
         if had_ambig and self.p['ambig_mode'] == 'skip_song':
             self.log('  [skip song] ambiguous stem(s) detected; skipping entire song')
             self._record_folder_outcome('skip_song')
             return manifest, next_n_ref[0]
 
+        t0 = time.monotonic()
         mixes = {}
         for cat, paths in buckets.items():
             if not paths:
@@ -1809,6 +1945,10 @@ class Worker(threading.Thread):
                 folder_had_errors = True
                 continue
             mixes[cat] = m
+        mix_dt = time.monotonic() - t0
+        if mixes:
+            self._phase_timer.add('mixing', mix_dt)
+            self.log(f'  [mixing] finished in {format_duration_log(mix_dt)}')
 
         cut = min((m.shape[1] for m in mixes.values()), default=0)
         if cut == 0:
@@ -1821,6 +1961,7 @@ class Worker(threading.Thread):
             out_dir, rel, manifest, next_n_ref, duration_sec=duration_sec,
         )
         self.log('Starting to write output...')
+        t0 = time.monotonic()
         target_dir.mkdir(parents=True, exist_ok=True)
         gain = self._compute_gain(mixes, cut)
 
@@ -1840,6 +1981,9 @@ class Worker(threading.Thread):
             except Exception as e:
                 folder_had_errors = True
                 self.log(f"  [export error] mixture: {e}")
+        export_dt = time.monotonic() - t0
+        self._phase_timer.add('export', export_dt)
+        self.log(f'  [export] finished in {format_duration_log(export_dt)}')
 
         manifest, delete_outcome = self._maybe_cleanup_output_folder(
             target_dir, duration_sec, written_cats, mode_cfg, manifest, out_dir,
@@ -1862,6 +2006,7 @@ class Worker(threading.Thread):
     def _run(self):
         model = None
         device = 'cpu'
+        self._phase_timer = PhaseTimer()
         try:
             p = self.p
             device, device_warnings = resolve_processing_device(bool(p['use_cuda']))
@@ -1881,7 +2026,11 @@ class Worker(threading.Thread):
             if not demucs_models_present():
                 self.log('  Downloading Demucs model weights (~450 MB)...')
             self.log(f"  Loading model '{p['model_id']}' ...")
+            t0 = time.monotonic()
             model = load_demucs_model(p['model_id']).eval().to(device)
+            model_load_dt = time.monotonic() - t0
+            self._phase_timer.add('model_load', model_load_dt)
+            self.log(f'  [model load] finished in {format_duration_log(model_load_dt)}')
             self.log(f"  Model sources: {list(model.sources)}  (sr={model.samplerate})")
 
             in_dir, out_dir = Path(p['input_dir']), Path(p['output_dir'])
@@ -1890,7 +2039,11 @@ class Worker(threading.Thread):
             sr = model.samplerate
 
             self.log('  Scanning input folders...')
+            t0 = time.monotonic()
             groups = collect_song_groups(in_dir, p['scan_mode'])
+            input_scan_dt = time.monotonic() - t0
+            self._phase_timer.add('input_scan', input_scan_dt)
+            self.log(f'  [input scan] finished in {format_duration_log(input_scan_dt)}')
 
             if not groups:
                 self.log(f"[skip] no audio files found under {in_dir}")
@@ -1957,6 +2110,7 @@ class SdrWorker(threading.Thread):
         self._completed_folders = 0
         self._run_started_at = 0.0
         self._stats: dict = {}
+        self._phase_timer = PhaseTimer()
 
     def _reset_stats(self, folders_total: int) -> None:
         self._stats = {
@@ -2046,6 +2200,7 @@ class SdrWorker(threading.Thread):
             self.log(f'  Deleted (stem file): {len(stems)}')
             for name in stems:
                 self.log(f'    {name}')
+        self._phase_timer.log_summary(self.log, SDR_PHASE_LABELS)
         self.log('')
         self.log('SI-SDR Done.')
 
@@ -2067,6 +2222,7 @@ class SdrWorker(threading.Thread):
             return
 
         audios: dict[str, np.ndarray] = {}
+        t0 = time.monotonic()
         for cat, path in stem_paths.items():
             try:
                 audios[cat] = load_audio(str(path), sr=sr)
@@ -2074,6 +2230,8 @@ class SdrWorker(threading.Thread):
                 self.log(f'  [skip] {path.name}: load failed: {format_load_error(e)}')
                 self._stats['skipped_incomplete'] += 1
                 return
+        load_dt = time.monotonic() - t0
+        self._phase_timer.add('audio_load', load_dt)
 
         cut = min(a.shape[1] for a in audios.values())
         if cut == 0:
@@ -2082,8 +2240,11 @@ class SdrWorker(threading.Thread):
             return
 
         scores: dict[str, float] = {}
+        sep_dt = 0.0
+        sdr_dt = 0.0
         for cat in sdr_process_order(categories):
             ref = audios[cat][:, :cut]
+            t0 = time.monotonic()
             try:
                 out_np = separate_mixture(model, ref, device)
             except torch.cuda.OutOfMemoryError:
@@ -2095,10 +2256,12 @@ class SdrWorker(threading.Thread):
                 self.log(f'  [error] {cat}: separation failed: {e}')
                 self._stats['skipped_incomplete'] += 1
                 return
+            sep_dt += time.monotonic() - t0
 
             if device == 'cuda':
                 torch.cuda.empty_cache()
 
+            t0 = time.monotonic()
             try:
                 est = model_estimate_for_category(out_np[:, :, :cut], sources, cat, mixture=ref)
             except ValueError as e:
@@ -2106,7 +2269,16 @@ class SdrWorker(threading.Thread):
                 self._stats['skipped_incomplete'] += 1
                 return
             scores[cat] = compute_si_sdr(ref, est)
+            sdr_dt += time.monotonic() - t0
             self._log_sdr_line(stem_paths[cat].name, scores[cat], thresholds[cat])
+
+        self._phase_timer.add('separation', sep_dt)
+        self._phase_timer.add('sdr_compute', sdr_dt)
+        self.log(
+            f'  [timing] load {format_duration_log(load_dt)} | '
+            f'separation {format_duration_log(sep_dt)} | '
+            f'SDR {format_duration_log(sdr_dt)}'
+        )
 
         failed = [(cat, stem_paths[cat], scores[cat]) for cat in categories
                   if scores[cat] < thresholds[cat]]
@@ -2186,6 +2358,7 @@ class SdrWorker(threading.Thread):
     def _run(self):
         model = None
         device = 'cpu'
+        self._phase_timer = PhaseTimer()
         try:
             p = self.p
             device, device_warnings = resolve_processing_device(bool(p['use_cuda']))
@@ -2205,7 +2378,11 @@ class SdrWorker(threading.Thread):
             if not demucs_models_present():
                 self.log('  Downloading Demucs model weights (~450 MB)...')
             self.log(f"  Loading model '{p['model_id']}' ...")
+            t0 = time.monotonic()
             model = load_demucs_model(p['model_id']).eval().to(device)
+            model_load_dt = time.monotonic() - t0
+            self._phase_timer.add('model_load', model_load_dt)
+            self.log(f'  [model load] finished in {format_duration_log(model_load_dt)}')
             sources = list(model.sources)
             sr = model.samplerate
             self.log(f'  Model sources: {sources}  (sr={sr})')
@@ -2217,6 +2394,7 @@ class SdrWorker(threading.Thread):
             scan_mode = p['scan_mode']
 
             self.log('Starting SI-SDR determination...')
+            t0 = time.monotonic()
 
             if 'sdr_categories' in p and 'sdr_layout' in p:
                 categories = tuple(p['sdr_categories'])
@@ -2229,7 +2407,12 @@ class SdrWorker(threading.Thread):
                 self.log('[error] ' + describe_sdr_scan_failure(root, scan_mode, preferred))
                 return
 
-            if categories != preferred:
+            if layout == SDR_LAYOUT_MIXED_FLAT:
+                self.log(
+                    '[info] Mixed loose files detected; classifying each filename '
+                    'as instrumental or vocals.'
+                )
+            elif categories != preferred:
                 self.log(
                     f'[info] Folders contain {len(categories)}-stem sets '
                     f'({", ".join(categories)}); Stem mode is {p["stem_mode"]}.'
@@ -2260,17 +2443,22 @@ class SdrWorker(threading.Thread):
                 layout_label = 'Type 2 (Stems)'
             elif layout == SDR_LAYOUT_SINGLE_FLAT:
                 layout_label = f'Type 3 ({categories[0]}-only files)'
+            elif layout == SDR_LAYOUT_MIXED_FLAT:
+                layout_label = 'Type 3 (mixed vocals/instrumental files)'
             else:
                 layout_label = layout
             self.log(f'  Detected layout: {layout_label}')
 
             if not targets:
-                expected = ', '.join(f'{c}.flac/.wav' for c in categories)
+                expected = ', '.join(f'{c}{SDR_STEM_EXT_LABEL}' for c in categories)
                 self.log(
                     f'[error] No folders with all expected stems found under {root}.\n'
                     f'  Expected each song folder to contain: {expected}'
                 )
                 return
+
+            self._phase_timer.add('target_scan', time.monotonic() - t0)
+            self.log(f'  [target scan] finished in {format_duration_log(self._phase_timer.get("target_scan"))}')
 
             self._total_folders = len(targets)
             self._completed_folders = 0
@@ -2281,6 +2469,24 @@ class SdrWorker(threading.Thread):
             scanned = len(collect_sdr_song_folders(root, scan_mode)) if layout == SDR_LAYOUT_MUSDB else len(targets)
             if layout == SDR_LAYOUT_SINGLE_FLAT:
                 self.log(f'  Found {len(targets)} {categories[0]} file(s) to check.')
+            elif layout == SDR_LAYOUT_MIXED_FLAT:
+                counts = {
+                    category: sum(category in target for target in targets)
+                    for category in categories
+                }
+                self.log(
+                    f'  Found {counts["instrumental"]} instrumental and '
+                    f'{counts["vocals"]} vocals file(s) to check.'
+                )
+                unmatched = (
+                    sum(1 for _ in iter_sdr_audio_files(root, scan_mode))
+                    - len(targets)
+                )
+                if unmatched:
+                    self.log(
+                        f'  [skip] {unmatched} file(s) had no recognizable '
+                        'vocals/instrumental filename marker.'
+                    )
             else:
                 unit = 'folder(s)' if layout == SDR_LAYOUT_MUSDB else 'song(s)'
                 self.log(
@@ -2305,8 +2511,12 @@ class SdrWorker(threading.Thread):
                         stem_paths: dict[str, Path] = target
                         cat = next(iter(stem_paths))
                         display = stem_paths[cat].stem
+                        target_categories = (
+                            (cat,) if layout == SDR_LAYOUT_MIXED_FLAT else categories
+                        )
                         self._process_song(
-                            stem_paths, display, categories, thresholds, model, device, sources, sr,
+                            stem_paths, display, target_categories, thresholds,
+                            model, device, sources, sr,
                             fi, len(targets), layout=layout,
                         )
                     else:
@@ -4298,6 +4508,9 @@ class App(tk.Tk):
             self._resize_after_id: str | None = None
             self._resize_pending: tuple[int, int] | None = None
             self._resize_cursor_edge = ''
+            self._pre_minimize_bounds: tuple[int, int, int, int] | None = None
+            self._restore_after_minimize = False
+            self._minimize_restore_job: str | None = None
         self._build_ui()
         if _USE_CUSTOM_TITLE_BAR:
             self._enable_edge_resize()
@@ -4336,7 +4549,80 @@ class App(tk.Tk):
             self._save_settings()
 
     def _classify_mode_active(self) -> bool:
-        return self.mode_notebook.index(self.mode_notebook.select()) == 0
+        return self._active_mode() == 'classify'
+
+    def _match_mode_active(self) -> bool:
+        return self._active_mode() == 'match'
+
+    def _rename_mode_active(self) -> bool:
+        return self._active_mode() == 'rename'
+
+    def _active_mode(self) -> str:
+        selected = self.mode_notebook.select()
+        if selected == str(self._organize_tab):
+            return 'classify'
+        if selected == str(self._pair_finder_tab):
+            return 'match'
+        if selected == str(self._rename_tab):
+            return 'rename'
+        raise RuntimeError(f'Unknown mode tab: {selected}')
+
+    def _renamer_destructive_busy(self) -> bool:
+        return bool(
+            hasattr(self, 'renamer_panel')
+            and self.renamer_panel.destructive_busy
+        )
+
+    def _show_standard_mode_layout(self) -> None:
+        self._cover_rename_workspace()
+        self._left_frame.configure(width=540)
+        self._left_frame.pack_propagate(False)
+        self._content_frame.columnconfigure(0, weight=0, minsize=540)
+        self._content_frame.columnconfigure(1, weight=1)
+        self._left_frame.grid_configure(
+            row=0, column=0, columnspan=1, sticky='nsw', padx=(0, 14),
+        )
+        self._right_frame.grid()
+        if not self._actions_frame.winfo_manager():
+            self._actions_frame.pack(
+                side='bottom', fill='x', padx=SECTION_PADX,
+                pady=(4, ACTIONS_BOTTOM_PAD),
+            )
+
+    def _show_rename_mode_layout(self) -> None:
+        self._left_frame.pack_propagate(True)
+        self._actions_frame.pack_forget()
+        self._right_frame.grid_remove()
+        self._content_frame.columnconfigure(0, weight=1, minsize=540)
+        self._content_frame.columnconfigure(1, weight=0)
+        self._left_frame.grid_configure(
+            row=0, column=0, columnspan=2, sticky='nsew', padx=0,
+        )
+        self._schedule_rename_workspace_reveal()
+
+    def _cover_rename_workspace(self) -> None:
+        if self._rename_reveal_job is not None:
+            try:
+                self.after_cancel(self._rename_reveal_job)
+            except tk.TclError:
+                pass
+            self._rename_reveal_job = None
+        self._rename_reveal_overlay.place(
+            x=0, y=0, relwidth=1, relheight=1,
+        )
+        self._rename_reveal_overlay.lift()
+
+    def _schedule_rename_workspace_reveal(self) -> None:
+        self._cover_rename_workspace()
+
+        def reveal() -> None:
+            self._rename_reveal_job = None
+            if self._rename_mode_active():
+                self._rename_reveal_overlay.place_forget()
+                self.renamer_panel.focus_workspace()
+
+        # Let CTk complete its width-dependent geometry and queued row render.
+        self._rename_reveal_job = self.after(120, reveal)
 
     def _show_organize_action_bar(self) -> None:
         self.start_btn.pack(side='left')
@@ -4350,11 +4636,26 @@ class App(tk.Tk):
             widget.pack_forget()
 
     def _on_mode_tab_changed(self, _event=None) -> None:
-        if self._classify_mode_active():
+        mode = self._active_mode()
+        rename_visible = mode == 'rename'
+        if rename_visible != self._renamer_tab_visible:
+            if rename_visible:
+                self.renamer_panel.on_tab_shown()
+            else:
+                self.renamer_panel.on_tab_hidden()
+            self._renamer_tab_visible = rename_visible
+
+        if mode == 'rename':
+            self.pair_panel.hide_action_bar()
+            self._hide_organize_action_bar()
+            self._show_rename_mode_layout()
+        elif mode == 'classify':
+            self._show_standard_mode_layout()
             self.pair_panel.hide_action_bar()
             self._show_organize_action_bar()
             self._update_action_buttons_for_tab()
-        else:
+        elif mode == 'match':
+            self._show_standard_mode_layout()
             self._hide_organize_action_bar()
             self.pair_panel.show_action_bar()
             if not self._pair_busy:
@@ -4477,6 +4778,25 @@ class App(tk.Tk):
         if getattr(self, '_resize_active', False):
             return
         apply_native_window_frame(self)
+        if not self._restore_after_minimize or self._pre_minimize_bounds is None:
+            return
+        self._restore_after_minimize = False
+        bounds = self._pre_minimize_bounds
+        if getattr(self, '_minimize_restore_job', None) is not None:
+            try:
+                self.after_cancel(self._minimize_restore_job)
+            except tk.TclError:
+                pass
+
+        def restore_bounds() -> None:
+            self._minimize_restore_job = None
+            x, y, w, h = _clamp_window_bounds(self, *bounds)
+            if _USE_CUSTOM_TITLE_BAR:
+                _win_move_resize(self, x, y, w, h)
+            _sync_tk_geometry(self, x, y, w, h)
+
+        # Windows completes SW_RESTORE after the Map event is dispatched.
+        self._minimize_restore_job = self.after(30, restore_bounds)
 
     def _bind_title_drag(self, widget: tk.Widget) -> None:
         widget.bind('<Button-1>', self._title_start_move, add='+')
@@ -4635,6 +4955,17 @@ class App(tk.Tk):
 
     def _minimize_window(self) -> None:
         if _USE_CUSTOM_TITLE_BAR:
+            self.update_idletasks()
+            bounds = _win_window_rect(self)
+            if bounds is None:
+                bounds = (
+                    self.winfo_x(),
+                    self.winfo_y(),
+                    self.winfo_width(),
+                    self.winfo_height(),
+                )
+            self._pre_minimize_bounds = bounds
+            self._restore_after_minimize = True
             if _win_show_window(self, 6):  # SW_MINIMIZE
                 return
         self.iconify()
@@ -4728,12 +5059,15 @@ class App(tk.Tk):
         content = ttk.Frame(self)
         content.grid(row=content_row, column=0, sticky='nsew',
                      padx=CONTENT_PAD, pady=(0, CONTENT_PAD_Y))
+        self._content_frame = content
         content.columnconfigure(0, weight=0, minsize=540)
         content.columnconfigure(1, weight=1)
         content.rowconfigure(0, weight=1)
 
-        left = ttk.Frame(content)
+        left = ttk.Frame(content, width=540)
         left.grid(row=0, column=0, sticky='nsw', padx=(0, 14))
+        left.pack_propagate(False)
+        self._left_frame = left
 
         actions = ttk.Frame(left)
         actions.pack(side='bottom', fill='x', padx=SECTION_PADX, pady=(4, ACTIONS_BOTTOM_PAD))
@@ -4807,17 +5141,41 @@ class App(tk.Tk):
         self.mode_notebook.pack(fill='both', expand=True)
         organize_tab = ttk.Frame(self.mode_notebook)
         pair_finder_tab = ttk.Frame(self.mode_notebook)
+        rename_tab = ttk.Frame(self.mode_notebook)
+        self._organize_tab = organize_tab
+        self._pair_finder_tab = pair_finder_tab
+        self._rename_tab = rename_tab
         self.mode_notebook.add(organize_tab, text='  Classify  ')
         self.mode_notebook.add(pair_finder_tab, text='  Match & Align  ')
+        self.mode_notebook.add(rename_tab, text='  Rename  ')
 
         from pair_finder_panel import PairFinderPanel
-        self.pair_panel = PairFinderPanel(self, pair_finder_tab)
+        self.pair_panel = PairFinderPanel(
+            self, pair_finder_tab, info_icon_factory=InfoIcon,
+        )
         self.pair_panel.pack(fill='both', expand=True)
         self.pair_panel.attach_action_bar(actions)
+
+        from track_renamer_panel import TrackRenamerPanel
+        self.renamer_panel = TrackRenamerPanel(rename_tab, host=self)
+        self.renamer_panel.pack(fill='both', expand=True)
+        self._rename_reveal_job = None
+        self._rename_reveal_overlay = tk.Frame(
+            rename_tab,
+            bg=COLORS['bg'],
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self._rename_reveal_overlay.place(
+            x=0, y=0, relwidth=1, relheight=1,
+        )
+        self._rename_reveal_overlay.lift()
+        self._renamer_tab_visible = None
         self.mode_notebook.bind('<<NotebookTabChanged>>', self._on_mode_tab_changed)
 
         right = ttk.Frame(content)
         right.grid(row=0, column=1, sticky='nsew')
+        self._right_frame = right
         right.rowconfigure(0, weight=1)
         right.columnconfigure(0, weight=1)
 
@@ -5508,6 +5866,14 @@ class App(tk.Tk):
         save_settings(self._settings_snapshot())
 
     def _on_close(self) -> None:
+        if self._renamer_destructive_busy():
+            messagebox.showwarning(
+                'Rename in progress',
+                'Files are currently being renamed or moved.\n\n'
+                'Wait for the operation to finish before closing.',
+                parent=self,
+            )
+            return
         self._save_settings()
         self._stop_resource_monitor()
         if self._resource_monitor is not None:
@@ -5517,6 +5883,19 @@ class App(tk.Tk):
             self.worker.stop()
         if self.sdr_worker and self.sdr_worker.is_alive():
             self.sdr_worker.stop()
+        if self._rename_reveal_job is not None:
+            try:
+                self.after_cancel(self._rename_reveal_job)
+            except tk.TclError:
+                pass
+            self._rename_reveal_job = None
+        if getattr(self, '_minimize_restore_job', None) is not None:
+            try:
+                self.after_cancel(self._minimize_restore_job)
+            except tk.TclError:
+                pass
+            self._minimize_restore_job = None
+        self.renamer_panel.shutdown()
         self.destroy()
 
     def _open_folder(self, var: tk.StringVar, label: str) -> None:
@@ -5568,7 +5947,7 @@ class App(tk.Tk):
             self._save_settings()
 
     def _start(self):
-        if self._pair_busy:
+        if self._pair_busy or self._renamer_destructive_busy():
             return
         if self.worker and self.worker.is_alive():
             return
@@ -5619,7 +5998,7 @@ class App(tk.Tk):
         self.worker.start()
 
     def _start_sdr(self):
-        if self._pair_busy:
+        if self._pair_busy or self._renamer_destructive_busy():
             return
         if self.sdr_worker and self.sdr_worker.is_alive():
             return
@@ -5735,6 +6114,7 @@ class App(tk.Tk):
         return (
             (self.worker is not None and self.worker.is_alive())
             or (self.sdr_worker is not None and self.sdr_worker.is_alive())
+            or self._renamer_destructive_busy()
         )
 
     def _set_pair_busy(self, busy: bool, status: str, panel) -> None:

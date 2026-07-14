@@ -2,6 +2,7 @@
 """Slim PyInstaller spec — UI only; PyTorch/Demucs live in site-packages beside the exe."""
 from pathlib import Path
 import sys
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 root = Path(SPECPATH)
@@ -39,7 +40,7 @@ datas = [
     (str(root / 'logo.png'), '.'),
     (str(root / 'install-deps.bat'), '.'),
     (str(root / 'verify_torch_install.py'), '.'),
-]
+] + collect_data_files('customtkinter')
 # ffmpeg is installed beside the exe by install-deps.bat — do not embed it in the onefile build.
 
 hiddenimports = [
@@ -57,7 +58,8 @@ hiddenimports = [
     'ffmpeg_bootstrap',
     'resource_monitor',
     'single_instance',
-] + _ml_stdlib_imports
+    'track_renamer_panel',
+] + collect_submodules('track_renamer') + collect_submodules('customtkinter') + _ml_stdlib_imports
 
 a = Analysis(
     [str(root / 'run_stem_organizer.py')],
@@ -81,7 +83,6 @@ a = Analysis(
         'IPython',
         'notebook',
         'pytest',
-        'customtkinter',
         'torchvision',
         'transformers',
         'tensorflow',

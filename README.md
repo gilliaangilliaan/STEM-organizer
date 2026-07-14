@@ -4,7 +4,7 @@
 
 # STEM organizer
 
-Desktop app for batch-organizing multitracks to stem exports (2-stem/4-stem) based on RMS and SI-SDR classification. Includes a built-in **STEM player** for auditioning mixes, plus an integrated **Match & Align** workflow for matching acapella/instrumental pairs and aligning stems to downloaded originals.
+Desktop app for batch-organizing multitracks to stem exports (2-stem/4-stem) based on RMS and SI-SDR classification. Includes a built-in **STEM player**, an integrated **Match & Align** workflow, and a full **Track Renamer** for rule-based sample organization.
 
 **By:** Gilliaan & Bas Curtiz  
 **Repository:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  
@@ -37,6 +37,14 @@ Use the **Match & Align** tab in the left panel for the downstream workflow:
 
 Match & Align settings are stored in the same `settings.json` as the organizer. `install-deps.bat` also installs `mutagen`, `scipy`, and `librosa` for pairing and alignment.
 
+### Track Renamer (integrated)
+
+Use the **Rename** tab to scan sample folders, build ordered filename rules, preview changes, and audition audio with a category-colored waveform. Large folders use a virtualized, background-computed preview.
+
+Selected files are renamed safely with automatic `_1`, `_2`, and subsequent conflict suffixes. After renaming, the app can create `BASS`, `DRUMS`, `VOCALS`, and other prefix folders inside a destination selected by the user and move each renamed file into the matching folder.
+
+Track Renamer presets remain in `~/.track_renamer/presets`. Audio preview uses the `ffmpeg`, `ffprobe`, and `ffplay` executables installed by `install-deps.bat`.
+
 ---
 
 ## Features
@@ -51,6 +59,7 @@ Match & Align settings are stored in the same `settings.json` as the organizer. 
 | **SI-SDR** | Per-stem quality scoring with recycle-bin actions |
 | **STEM player** | Multi-track preview with solo/mute, seek, zoom, and Match & Align library review |
 | **Match & Align** | Tag-based pairing, folder organize, original distribution, stem alignment |
+| **Track Renamer** | Rule stack, lazy preview, audio waveform, conflict-safe rename, prefix-folder organization |
 | **Batch tools** | Skip existing, sequential naming + `index.json`, mixture export, min-duration filter |
 
 Hover the **?** tooltips in the UI for detailed explanations of each setting.
@@ -61,7 +70,7 @@ Hover the **?** tooltips in the UI for detailed explanations of each setting.
 
 - **Windows** (primary target; the UI uses a custom title bar on Windows)
 - **Python 3.10.x or 3.11.x** (required for `install-deps.bat` and for building from source)
-- Enough disk space for `site-packages/` (PyTorch + Demucs) and optional `ffmpeg/`
+- Enough disk space for `site-packages/` (PyTorch, Demucs, CustomTkinter, psutil) and optional `ffmpeg/`
 
 ---
 
@@ -135,6 +144,8 @@ Settings are saved to `settings.json` beside the app (ignored by git).
 |------|------|
 | `stem_organizer_ui.py` | Main application UI and processing logic |
 | `pair_finder_panel.py` | Match & Align UI (Match + Align sub-tabs) |
+| `track_renamer_panel.py` | Embedded Track Renamer controller and workspace |
+| `track_renamer/` | Track Renamer engine, scanner, audio service, and GUI components |
 | `pair_matcher.py` | Acapella/instrumental tag matching and organize |
 | `stem_align.py` | Distribute originals, sort folders, cross-correlation align |
 | `stem_player.py` | STEM preview player window |
