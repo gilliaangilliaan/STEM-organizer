@@ -99,6 +99,7 @@ class RulesPanel(ctk.CTkFrame):
             button_color=t["border"],
             button_hover_color=t["accent"],
             dropdown_fg_color=t["panel_2"],
+            dropdown_text_color=t["text"],
             text_color=t["text"],
             width=200,
         )
@@ -118,6 +119,7 @@ class RulesPanel(ctk.CTkFrame):
             button_color=theme["border"],
             button_hover_color=theme["accent"],
             dropdown_fg_color=theme["panel_2"],
+            dropdown_text_color=theme["text"],
             text_color=theme["text"],
         )
         self.set_apply_pending(self._apply_pending)
@@ -242,7 +244,7 @@ class RulesPanel(ctk.CTkFrame):
         ctk.CTkLabel(cond_row, text="IF", text_color=t["text_mute"], width=24).pack(side="left")
         field_menu = ctk.CTkOptionMenu(
             cond_row, values=["filename"], width=90, fg_color=t["card"], button_color=t["border"],
-            text_color=t["text"],
+            text_color=t["text"], dropdown_text_color=t["text"],
         )
         field_menu.pack(side="left", padx=4)
         self._tip(field_menu, "condition_field")
@@ -253,6 +255,7 @@ class RulesPanel(ctk.CTkFrame):
             fg_color=t["card"],
             button_color=t["border"],
             text_color=t["text"],
+            dropdown_text_color=t["text"],
             command=lambda v, g=group: self._update_condition_op(g, v),
         )
         if group.conditions:
@@ -293,6 +296,7 @@ class RulesPanel(ctk.CTkFrame):
             button_color=t["border"],
             width=180,
             text_color=t["text_dim"],
+            dropdown_text_color=t["text"],
         )
         add_child.set("+ Add child rule…")
         add_child.pack(anchor="w", padx=12, pady=(4, 0))
@@ -343,7 +347,8 @@ class RulesPanel(ctk.CTkFrame):
         if rule.op == "removeText":
             text_var = ctk.StringVar(value=rule.params.get("text", ""))
             entry = ctk.CTkEntry(
-                row, textvariable=text_var, width=100, fg_color=t["input"], border_color=t["border"]
+                row, textvariable=text_var, width=100, fg_color=t["input"],
+                border_color=t["border"], text_color=t["text"],
             )
             entry.pack(side="right", padx=8, pady=4)
             entry.bind(
@@ -418,12 +423,14 @@ class RulesPanel(ctk.CTkFrame):
             kw_var = ctk.StringVar(value=cat.keywords)
 
             prefix_entry = ctk.CTkEntry(
-                row, textvariable=prefix_var, width=100, fg_color=t["input"], border_color=t["border"]
+                row, textvariable=prefix_var, width=100, fg_color=t["input"],
+                border_color=t["border"], text_color=t["text"],
             )
             prefix_entry.pack(side="left", padx=(0, 8))
             self._tip(prefix_entry, "prefix_field")
             kw_entry = ctk.CTkEntry(
-                row, textvariable=kw_var, fg_color=t["input"], border_color=t["border"]
+                row, textvariable=kw_var, fg_color=t["input"],
+                border_color=t["border"], text_color=t["text"],
             )
             kw_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
             self._tip(kw_entry, "keywords_field")

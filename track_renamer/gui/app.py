@@ -105,6 +105,7 @@ class TrackRenamerApp(ctk.CTk):
             button_color=t["border"],
             button_hover_color=t["accent"],
             dropdown_fg_color=t["panel_2"],
+            dropdown_text_color=t["text"],
             text_color=t["text"],
         )
         self.preset_menu.set("Default")
@@ -411,6 +412,7 @@ class TrackRenamerApp(ctk.CTk):
             button_color=t["border"],
             button_hover_color=t["accent"],
             dropdown_fg_color=t["panel_2"],
+            dropdown_text_color=t["text"],
         )
         self.rename_btn.configure(
             fg_color=t["accent"],

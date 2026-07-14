@@ -26,6 +26,7 @@ class TrackRenamerPanel(ctk.CTkFrame):
     """The standalone TrackRenamerApp controller hosted inside a CTkFrame."""
 
     def __init__(self, master, host=None) -> None:
+        ctk.set_appearance_mode("dark")
         super().__init__(master, fg_color=DARK["bg"])
         self.host = host
         self.dark_mode = True
