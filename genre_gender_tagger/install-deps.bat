@@ -125,7 +125,7 @@ if /I "%TORCH_LABEL%"=="CPU" (
 echo.
 if /I "%STEM_GG_BUNDLED%"=="1" (
     echo Use STEM organizer - Genre ^& Gender tab.
-    echo MAEST downloads on first genre run; gender .pb models ship in models\.
+    echo MAEST downloads on first genre run; gender .pb models ship in models.
 ) else (
     echo To run:
     echo   run.bat
