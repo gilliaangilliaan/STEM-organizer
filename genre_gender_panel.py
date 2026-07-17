@@ -10,6 +10,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from ffmpeg_bootstrap import subprocess_kwargs
 from ui_theme import (
     ACTIONS_BOTTOM_PAD,
     ACTION_BTN_FONT,
@@ -588,6 +589,7 @@ class GenreGenderPanel(ttk.Frame):
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                **subprocess_kwargs(),  # hide console window on Windows
             )
             self._proc = proc
 
