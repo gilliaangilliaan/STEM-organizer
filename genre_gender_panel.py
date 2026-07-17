@@ -230,6 +230,7 @@ class GenreGenderPanel(ttk.Frame):
         self._host = host
         self._info_icon_factory = info_icon_factory
         self._busy = False
+        self._stop_requested = False
         self._proc: subprocess.Popen | None = None
         self._worker: threading.Thread | None = None
 
@@ -442,12 +443,31 @@ class GenreGenderPanel(ttk.Frame):
     # ------------------------------------------------------------------
 
     def attach_action_bar(self, parent: tk.Misc) -> None:
+        # Same pattern as Classify: accent Start + dim ■ Stop beside it.
         self.genre_btn = self._action_button(
             parent, "▶  Tag genre", self._start_genre, accent=True,
         )
         self.gender_btn = self._action_button(
             parent, "▶  Tag gender", self._start_gender, accent=True,
         )
+        C = COLORS
+        self.stop_btn = tk.Button(
+            parent,
+            text="■  Stop",
+            command=self._request_stop,
+            font=ACTION_BTN_FONT,
+            bg=C["panel2"],
+            fg=C["fg_dim"],
+            activebackground=C["panel"],
+            activeforeground=C["danger"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            padx=ACTION_BTN_PADX,
+            pady=ACTION_BTN_PADY,
+            cursor="arrow",
+        )
+        tip(self.stop_btn, text="Stop the running tagger.")
 
     def _genre_tab_active(self) -> bool:
         return self._notebook.index(self._notebook.select()) == 0
@@ -463,18 +483,43 @@ class GenreGenderPanel(ttk.Frame):
     def show_action_bar(self) -> None:
         self.genre_btn.pack_forget()
         self.gender_btn.pack_forget()
+        self.stop_btn.pack_forget()
         if self._genre_tab_active():
             self.genre_btn.pack(side="left")
         else:
             self.gender_btn.pack(side="left")
+        self.stop_btn.pack(side="left", padx=(8, 0))
+        self._refresh_run_buttons()
 
     def hide_action_bar(self) -> None:
         self.genre_btn.pack_forget()
         self.gender_btn.pack_forget()
+        self.stop_btn.pack_forget()
 
     def set_buttons_state(self, state: str) -> None:
-        for btn in (self.genre_btn, self.gender_btn):
-            btn.configure(state=state)
+        # Match Classify: only swap colors/cursors — never state=disabled
+        # (avoids button size jumps on Windows).
+        if self._busy:
+            self._refresh_run_buttons(running=True)
+        elif state == "disabled":
+            # Another mode is busy — dim Tag + Stop.
+            self.genre_btn.configure(fg=COLORS["fg_dim"], cursor="arrow")
+            self.gender_btn.configure(fg=COLORS["fg_dim"], cursor="arrow")
+            self.stop_btn.configure(fg=COLORS["fg_dim"], cursor="arrow")
+        else:
+            self._refresh_run_buttons(running=False)
+
+    def _refresh_run_buttons(self, *, running: bool | None = None) -> None:
+        if running is None:
+            running = self._busy
+        if running:
+            self.genre_btn.configure(fg=COLORS["fg_dim"], cursor="arrow")
+            self.gender_btn.configure(fg=COLORS["fg_dim"], cursor="arrow")
+            self.stop_btn.configure(fg=COLORS["danger"], cursor="hand2")
+        else:
+            self.genre_btn.configure(fg="white", cursor="hand2")
+            self.gender_btn.configure(fg="white", cursor="hand2")
+            self.stop_btn.configure(fg=COLORS["fg_dim"], cursor="arrow")
 
     # ------------------------------------------------------------------
     # Start / stop
@@ -489,6 +534,7 @@ class GenreGenderPanel(ttk.Frame):
             return
         self._clear_log()
         self._log(f"Starting genre tagger on: {input_dir}", "info")
+        self._stop_requested = False
         self._set_busy(True, "Tagging genre…")
         self._worker = threading.Thread(
             target=self._run_tagger,
@@ -514,6 +560,7 @@ class GenreGenderPanel(ttk.Frame):
             return
         self._clear_log()
         self._log(f"Starting gender tagger on: {input_dir}", "info")
+        self._stop_requested = False
         self._set_busy(True, "Tagging gender…")
         self._worker = threading.Thread(
             target=self._run_tagger,
@@ -529,6 +576,13 @@ class GenreGenderPanel(ttk.Frame):
             daemon=True,
         )
         self._worker.start()
+
+    def _request_stop(self) -> None:
+        if not self._busy:
+            return
+        self._stop_requested = True
+        self._log("Stop requested…", "warn")
+        self.stop()
 
     def stop(self) -> None:
         """Kill the running tagger process if any."""
@@ -607,7 +661,10 @@ class GenreGenderPanel(ttk.Frame):
                     self._host.log_queue.put((PAIR_LOG_TAG, line, "info"))
 
             proc.wait()
-            if proc.returncode == 0:
+            if self._stop_requested:
+                self._host.log_queue.put((PAIR_LOG_TAG, "[tagger stopped]", "warn"))
+                self._finish_worker("Stopped")
+            elif proc.returncode == 0:
                 self._finish_worker("Done")
             else:
                 self._host.log_queue.put(
@@ -616,10 +673,15 @@ class GenreGenderPanel(ttk.Frame):
                 self._finish_worker(f"Failed (exit {proc.returncode})")
 
         except Exception as exc:
-            self._host.log_queue.put((PAIR_LOG_TAG, str(exc), "err"))
-            self._finish_worker("Failed")
+            if self._stop_requested:
+                self._host.log_queue.put((PAIR_LOG_TAG, "[tagger stopped]", "warn"))
+                self._finish_worker("Stopped")
+            else:
+                self._host.log_queue.put((PAIR_LOG_TAG, str(exc), "err"))
+                self._finish_worker("Failed")
         finally:
             self._proc = None
+            self._stop_requested = False
 
     # ------------------------------------------------------------------
     # Busy / status
