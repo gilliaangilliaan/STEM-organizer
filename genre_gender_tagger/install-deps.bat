@@ -123,12 +123,17 @@ if /I "%TORCH_LABEL%"=="CPU" (
     echo Installed %TORCH_LABEL% PyTorch.
 )
 echo.
-echo To run:
-echo   run.bat
+if /I "%STEM_GG_BUNDLED%"=="1" (
+    echo Use STEM organizer - Genre ^& Gender tab.
+    echo MAEST downloads on first genre run; gender .pb models ship in models\.
+) else (
+    echo To run:
+    echo   run.bat
+    echo.
+    echo Models download on first run ^(Hugging Face MAEST / Essentia .pb^).
+)
 echo.
-echo Models download on first run (Hugging Face MAEST / Essentia .pb).
-echo.
-pause
+if /I not "%STEM_GG_BUNDLED%"=="1" pause
 exit /b 0
 
 :failed

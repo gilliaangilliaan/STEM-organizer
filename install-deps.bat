@@ -281,7 +281,9 @@ if exist "%~dp0genre_gender_tagger\install-deps.bat" (
     choice /C YN /N /M "Install Genre ^& Gender deps now? [Y/N]: "
     if not errorlevel 2 (
         echo.
+        set "STEM_GG_BUNDLED=1"
         call "%~dp0genre_gender_tagger\install-deps.bat"
+        set "STEM_GG_BUNDLED="
     ) else (
         echo Skipped. Run genre_gender_tagger\install-deps.bat later if needed.
         echo.

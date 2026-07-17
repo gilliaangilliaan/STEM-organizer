@@ -4,7 +4,7 @@
 
 # STEM organizer
 
-Desktop app for batch-organizing multitracks to stem exports (2-stem/4-stem) based on RMS and SI-SDR classification. Includes a built-in **STEM player**, an integrated **Match & Align** workflow, and a full **Track Renamer** for rule-based sample organization.
+Desktop app for batch-organizing multitracks to stem exports (2-stem/4-stem) based on RMS and SI-SDR classification. Includes a built-in **STEM player**, an integrated **Match & Align** workflow, **Genre & Gender** tagging (MAEST / EffNet), and a full **Track Renamer** for rule-based sample organization.
 
 **By:** Gilliaan & Bas Curtiz  
 **Repository:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  

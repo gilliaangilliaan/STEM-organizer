@@ -4083,8 +4083,12 @@ def bind_mousewheel(widget: tk.Widget, yview) -> None:
     widget.bind('<Leave>', on_leave, add='+')
 
 
-def _patch_hand_cursor_controls() -> None:
-    """Default hand cursor on radio/check/slider controls (ttk, tk, and CTk)."""
+def _patch_hand_cursor_controls(*, include_ctk: bool = False) -> None:
+    """Default hand cursor on radio/check/slider controls (ttk, tk, and optionally CTk).
+
+    Do not import customtkinter during early theme setup — that can interact badly
+    with the splash→main window handoff on Windows (withdrawn / invisible UI).
+    """
 
     def _wrap(cls, name: str):
         if getattr(cls, "_stem_hand_cursor", False):
@@ -4107,6 +4111,9 @@ def _patch_hand_cursor_controls() -> None:
     tk.Checkbutton = _wrap(tk.Checkbutton, "Checkbutton")  # type: ignore[misc, assignment]
     tk.Scale = _wrap(tk.Scale, "Scale")  # type: ignore[misc, assignment]
 
+    if not include_ctk:
+        return
+
     try:
         import customtkinter as ctk
     except ImportError:
@@ -4120,7 +4127,7 @@ def _patch_hand_cursor_controls() -> None:
 
 
 def apply_theme(root: tk.Tk) -> None:
-    _patch_hand_cursor_controls()
+    _patch_hand_cursor_controls(include_ctk=False)
     style = ttk.Style(root)
     try:
         style.theme_use('clam')
@@ -4630,9 +4637,29 @@ class App(tk.Tk):
             self.bind('<Map>', self._on_window_map, add='+')
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         self.update_idletasks()
-        self.deiconify()
+        self._force_main_window_visible()
         self.after(100, self._drain_log)
         self.after(300, self._maybe_show_device_notice)
+        # Re-assert visibility after any deferred widget init (e.g. CTk).
+        self.after(250, self._force_main_window_visible)
+
+    def _force_main_window_visible(self) -> None:
+        """Ensure the main window is not left withdrawn/off-screen after splash."""
+        try:
+            self.deiconify()
+            self.state('normal')
+            self.lift()
+            self.focus_force()
+            if sys.platform == 'win32':
+                try:
+                    hwnd = _win_toplevel_hwnd(self, flush=True)
+                    # SW_SHOW / SW_RESTORE
+                    ctypes.windll.user32.ShowWindow(hwnd, 9)
+                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+                except Exception:
+                    pass
+        except tk.TclError:
+            pass
 
     @staticmethod
     def _device_status_text() -> str:
@@ -4681,10 +4708,38 @@ class App(tk.Tk):
         raise RuntimeError(f'Unknown mode tab: {selected}')
 
     def _renamer_destructive_busy(self) -> bool:
-        return bool(
-            hasattr(self, 'renamer_panel')
-            and self.renamer_panel.destructive_busy
-        )
+        panel = getattr(self, 'renamer_panel', None)
+        return panel is not None and bool(panel.destructive_busy)
+
+    def _ensure_renamer_panel(self) -> bool:
+        """Lazy-load Rename (CustomTkinter) so startup is not blocked/hidden."""
+        if getattr(self, 'renamer_panel', None) is not None:
+            return True
+        try:
+            from track_renamer_panel import TrackRenamerPanel
+            _patch_hand_cursor_controls(include_ctk=True)
+            self.renamer_panel = TrackRenamerPanel(self._rename_tab, host=self)
+            self.renamer_panel.pack(fill='both', expand=True)
+            if hasattr(self, '_rename_reveal_overlay'):
+                self._rename_reveal_overlay.lift()
+            self._force_main_window_visible()
+            return True
+        except Exception as exc:
+            self.renamer_panel = None
+            messagebox.showerror(
+                'Rename tab',
+                'Could not load Track Renamer.\n\n'
+                f'{exc}\n\n'
+                'Other tabs still work. See startup_error.log beside the exe if present.',
+                parent=self,
+            )
+            try:
+                (APP_DIR / 'startup_error.log').write_text(
+                    traceback.format_exc(), encoding='utf-8',
+                )
+            except OSError:
+                pass
+            return False
 
     def _show_standard_mode_layout(self) -> None:
         self._cover_rename_workspace()
@@ -4730,7 +4785,7 @@ class App(tk.Tk):
 
         def reveal() -> None:
             self._rename_reveal_job = None
-            if self._rename_mode_active():
+            if self._rename_mode_active() and getattr(self, 'renamer_panel', None):
                 self._rename_reveal_overlay.place_forget()
                 self.renamer_panel.focus_workspace()
 
@@ -4751,11 +4806,19 @@ class App(tk.Tk):
     def _on_mode_tab_changed(self, _event=None) -> None:
         mode = self._active_mode()
         rename_visible = mode == 'rename'
+        if rename_visible and not self._ensure_renamer_panel():
+            try:
+                self.mode_notebook.select(self._organize_tab)
+            except Exception:
+                pass
+            return
         if rename_visible != self._renamer_tab_visible:
-            if rename_visible:
-                self.renamer_panel.on_tab_shown()
-            else:
-                self.renamer_panel.on_tab_hidden()
+            panel = getattr(self, 'renamer_panel', None)
+            if panel is not None:
+                if rename_visible:
+                    panel.on_tab_shown()
+                else:
+                    panel.on_tab_hidden()
             self._renamer_tab_visible = rename_visible
 
         if mode == 'rename':
@@ -5304,10 +5367,9 @@ class App(tk.Tk):
         self.gg_panel.pack(fill='both', expand=True)
         self.gg_panel.attach_action_bar(actions)
 
-        from track_renamer_panel import TrackRenamerPanel
-        _patch_hand_cursor_controls()  # CTk may load here; ensure checkboxes get hand cursor
-        self.renamer_panel = TrackRenamerPanel(rename_tab, host=self)
-        self.renamer_panel.pack(fill='both', expand=True)
+        # Rename / CustomTkinter is loaded on first tab visit (keeps splash→UI
+        # handoff reliable; avoids a withdrawn main window on some VMs).
+        self.renamer_panel = None
         self._rename_reveal_job = None
         self._rename_reveal_overlay = tk.Frame(
             rename_tab,
@@ -6044,7 +6106,9 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
             self._minimize_restore_job = None
-        self.renamer_panel.shutdown()
+        panel = getattr(self, 'renamer_panel', None)
+        if panel is not None:
+            panel.shutdown()
         self.destroy()
 
     def _open_folder(self, var: tk.StringVar, label: str) -> None:
@@ -6519,7 +6583,28 @@ def main():
 
         from update_checker import run_check_in_thread
 
-        app = App()
+        try:
+            app = App()
+        except Exception as exc:
+            err_text = traceback.format_exc()
+            try:
+                (APP_DIR / 'startup_error.log').write_text(
+                    err_text, encoding='utf-8',
+                )
+            except OSError:
+                pass
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(
+                'Startup failed',
+                f'Could not open the main window.\n\n{exc}\n\n'
+                'Details were written to startup_error.log beside the exe.\n'
+                'End any leftover STEM-organizer process in Task Manager, then retry.',
+                parent=root,
+            )
+            root.destroy()
+            raise SystemExit(1) from exc
+
         run_check_in_thread(APP_VERSION, app)
         app.mainloop()
 
