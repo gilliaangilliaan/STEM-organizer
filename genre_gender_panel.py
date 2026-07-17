@@ -47,7 +47,11 @@ TAGGER_PYTHON = TAGGER_DIR / "venv" / "Scripts" / "python.exe"
 TIPS = {
     "genre_input": "Folder containing instrumental FLAC/MP3/WAV files to tag with genre.",
     "gender_input": "Folder containing acapella FLAC/MP3/WAV files to tag with voice gender.",
-    "batch_mode": "Batch: fast GPU pipeline. Per-file: slower but prints each result live.",
+    "batch_mode": (
+        "Batch: fast on NVIDIA GPU; on CPU/VM it can sit on one long progress "
+        "bar for a while (still working). Per-file: recommended for CPU/VM — "
+        "slower overall but prints each file as it finishes."
+    ),
     "tag_style": (
         "Combined writes a single GENRE tag as 'Genre/Style'. "
         "Split writes separate GENRE and STYLE tags."
@@ -577,12 +581,16 @@ class GenreGenderPanel(ttk.Frame):
         env["GG_TAG_STYLE"]    = tag_style
         env["GG_GENDER_FIELD"] = gender_field
         env["GG_WRITE_META"]   = "1" if write_meta else "0"
+        # Hidden console is not a TTY — without this, tqdm/log lines buffer
+        # and the UI looks frozen mid-progress (e.g. stuck at Audio 61/100).
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         if csv_path:
             env["GG_CSV"] = csv_path
 
         try:
             proc = subprocess.Popen(
-                [str(TAGGER_PYTHON), str(TAGGER_SCRIPT)],
+                [str(TAGGER_PYTHON), "-u", str(TAGGER_SCRIPT)],
                 env=env,
                 cwd=str(TAGGER_DIR),
                 stdout=subprocess.PIPE,
