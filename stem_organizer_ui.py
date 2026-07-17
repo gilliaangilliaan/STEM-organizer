@@ -4083,7 +4083,44 @@ def bind_mousewheel(widget: tk.Widget, yview) -> None:
     widget.bind('<Leave>', on_leave, add='+')
 
 
+def _patch_hand_cursor_controls() -> None:
+    """Default hand cursor on radio/check/slider controls (ttk, tk, and CTk)."""
+
+    def _wrap(cls, name: str):
+        if getattr(cls, "_stem_hand_cursor", False):
+            return cls
+
+        class Wrapped(cls):  # type: ignore[valid-type, misc]
+            def __init__(self, *args, **kwargs):
+                kwargs.setdefault("cursor", "hand2")
+                super().__init__(*args, **kwargs)
+
+        Wrapped.__name__ = name
+        Wrapped.__qualname__ = name
+        Wrapped._stem_hand_cursor = True  # type: ignore[attr-defined]
+        return Wrapped
+
+    ttk.Radiobutton = _wrap(ttk.Radiobutton, "Radiobutton")  # type: ignore[misc, assignment]
+    ttk.Checkbutton = _wrap(ttk.Checkbutton, "Checkbutton")  # type: ignore[misc, assignment]
+    ttk.Scale = _wrap(ttk.Scale, "Scale")  # type: ignore[misc, assignment]
+    tk.Radiobutton = _wrap(tk.Radiobutton, "Radiobutton")  # type: ignore[misc, assignment]
+    tk.Checkbutton = _wrap(tk.Checkbutton, "Checkbutton")  # type: ignore[misc, assignment]
+    tk.Scale = _wrap(tk.Scale, "Scale")  # type: ignore[misc, assignment]
+
+    try:
+        import customtkinter as ctk
+    except ImportError:
+        return
+
+    ctk.CTkCheckBox = _wrap(ctk.CTkCheckBox, "CTkCheckBox")  # type: ignore[misc, assignment]
+    if hasattr(ctk, "CTkRadioButton"):
+        ctk.CTkRadioButton = _wrap(ctk.CTkRadioButton, "CTkRadioButton")  # type: ignore[misc, assignment]
+    if hasattr(ctk, "CTkSlider"):
+        ctk.CTkSlider = _wrap(ctk.CTkSlider, "CTkSlider")  # type: ignore[misc, assignment]
+
+
 def apply_theme(root: tk.Tk) -> None:
+    _patch_hand_cursor_controls()
     style = ttk.Style(root)
     try:
         style.theme_use('clam')
@@ -4139,8 +4176,16 @@ def apply_theme(root: tk.Tk) -> None:
                                       'bordercolor': C['border'], 'padding': CTRL_FIELD_PAD,
                                       'selectbackground': select_active, 'selectforeground': C['fg'],
                                       'insertcolor': C['fg']},
-        'TCheckbutton':              {'background': C['bg'], 'foreground': C['fg'],
-                                      'indicatorcolor': C['panel2']},
+        'TCheckbutton':              {
+            'background': C['bg'], 'foreground': C['fg'],
+            'focuscolor': C['bg'], 'indicatorcolor': C['panel2'],
+            'indicatorbackground': C['panel2'], 'indicatorforeground': C['fg'],
+        },
+        'TRadiobutton':              {
+            'background': C['bg'], 'foreground': C['fg'],
+            'focuscolor': C['bg'],
+            'indicatorbackground': C['panel2'], 'indicatorforeground': C['fg'],
+        },
         'TButton':                   {'background': C['panel2'], 'foreground': C['fg'],
                                       'bordercolor': C['border'], 'padding': (14, 8), 'borderwidth': 1},
         'Path.TButton':              {'background': C['panel2'], 'foreground': C['fg'],
@@ -4220,6 +4265,39 @@ def apply_theme(root: tk.Tk) -> None:
     for btn_style in ('TButton', 'Path.TButton'):
         style.layout(btn_style, _btn_layout)
 
+    # clam wraps radio/check labels in a Focus element that paints a solid white
+    # hover slab on Windows — drop that wrapper so hover stays readable.
+    style.layout(
+        'TRadiobutton',
+        [
+            (
+                'Radiobutton.padding',
+                {
+                    'sticky': 'nswe',
+                    'children': [
+                        ('Radiobutton.indicator', {'side': 'left', 'sticky': ''}),
+                        ('Radiobutton.label', {'side': 'left', 'sticky': 'nswe'}),
+                    ],
+                },
+            )
+        ],
+    )
+    style.layout(
+        'TCheckbutton',
+        [
+            (
+                'Checkbutton.padding',
+                {
+                    'sticky': 'nswe',
+                    'children': [
+                        ('Checkbutton.indicator', {'side': 'left', 'sticky': ''}),
+                        ('Checkbutton.label', {'side': 'left', 'sticky': 'nswe'}),
+                    ],
+                },
+            )
+        ],
+    )
+
     style.layout(
         'Mode.TNotebook.Tab',
         [('Notebook.tab', {
@@ -4268,11 +4346,41 @@ def apply_theme(root: tk.Tk) -> None:
               arrowcolor=[('hover', C['fg']), ('active', C['fg'])],
               bordercolor=[('focus', C['accent'])])
     style.map('TCheckbutton',
-              background=[('active', C['bg']), ('hover', C['bg'])],
-              foreground=[('disabled', C['fg_dim']), ('active', C['fg']),
-                          ('hover', C['fg']), ('focus', C['fg']), ('selected', C['fg'])],
-              indicatorcolor=[('selected', C['accent']),
-                              ('active', C['panel2']), ('hover', C['panel2'])])
+              background=[
+                  ('active', C['bg']), ('pressed', C['bg']),
+                  ('selected', C['bg']), ('hover', C['bg']),
+              ],
+              foreground=[
+                  ('disabled', C['fg_dim']), ('active', C['fg']),
+                  ('hover', C['fg']), ('focus', C['fg']), ('selected', C['fg']),
+              ],
+              indicatorbackground=[
+                  ('selected', C['accent']), ('pressed', C['accent']),
+                  ('active', C['panel']), ('hover', C['panel']),
+                  ('!disabled', C['panel2']),
+              ],
+              indicatorcolor=[
+                  ('selected', C['accent']),
+                  ('active', C['panel2']), ('hover', C['panel2']),
+              ])
+    style.map('TRadiobutton',
+              background=[
+                  ('active', C['bg']), ('pressed', C['bg']),
+                  ('selected', C['bg']), ('hover', C['bg']),
+              ],
+              foreground=[
+                  ('disabled', C['fg_dim']), ('active', C['fg']),
+                  ('hover', C['fg']), ('focus', C['fg']), ('selected', C['fg']),
+              ],
+              indicatorbackground=[
+                  ('selected', C['accent']), ('pressed', C['accent']),
+                  ('active', C['panel']), ('hover', C['panel']),
+                  ('!disabled', C['panel2']),
+              ],
+              indicatorcolor=[
+                  ('selected', C['accent']),
+                  ('active', C['panel2']), ('hover', C['panel2']),
+              ])
     style.map('TButton',
               background=[('active', C['panel']), ('disabled', C['panel'])],
               foreground=[('disabled', C['fg_dim']), ('active', C['fg']), ('hover', C['fg'])])
@@ -4554,6 +4662,9 @@ class App(tk.Tk):
     def _match_mode_active(self) -> bool:
         return self._active_mode() == 'match'
 
+    def _gg_mode_active(self) -> bool:
+        return self._active_mode() == 'genre_gender'
+
     def _rename_mode_active(self) -> bool:
         return self._active_mode() == 'rename'
 
@@ -4563,6 +4674,8 @@ class App(tk.Tk):
             return 'classify'
         if selected == str(self._pair_finder_tab):
             return 'match'
+        if selected == str(self._genre_gender_tab):
+            return 'genre_gender'
         if selected == str(self._rename_tab):
             return 'rename'
         raise RuntimeError(f'Unknown mode tab: {selected}')
@@ -4647,24 +4760,39 @@ class App(tk.Tk):
 
         if mode == 'rename':
             self.pair_panel.hide_action_bar()
+            if hasattr(self, 'gg_panel'):
+                self.gg_panel.hide_action_bar()
             self._hide_organize_action_bar()
             self._show_rename_mode_layout()
         elif mode == 'classify':
             self._show_standard_mode_layout()
             self.pair_panel.hide_action_bar()
+            if hasattr(self, 'gg_panel'):
+                self.gg_panel.hide_action_bar()
             self._show_organize_action_bar()
             self._update_action_buttons_for_tab()
         elif mode == 'match':
             self._show_standard_mode_layout()
             self._hide_organize_action_bar()
+            if hasattr(self, 'gg_panel'):
+                self.gg_panel.hide_action_bar()
             self.pair_panel.show_action_bar()
             if not self._pair_busy:
                 self.pair_panel.set_buttons_state('normal')
+        elif mode == 'genre_gender':
+            self._show_standard_mode_layout()
+            self._hide_organize_action_bar()
+            self.pair_panel.hide_action_bar()
+            self.gg_panel.show_action_bar()
+            if not self._pair_busy:
+                self.gg_panel.set_buttons_state('normal')
 
     def _set_action_buttons(self, running: bool, *, sdr: bool = False) -> None:
         """Only swap colors — never disabled/style changes (ttk shrinks on both)."""
         if hasattr(self, 'pair_panel'):
             self.pair_panel.set_buttons_state('disabled' if running else 'normal')
+        if hasattr(self, 'gg_panel'):
+            self.gg_panel.set_buttons_state('disabled' if running else 'normal')
         if not self._classify_mode_active():
             return
         if running:
@@ -4862,8 +4990,17 @@ class App(tk.Tk):
                 return 's'
             return ''
 
+        def _event_pos_in_window(event) -> tuple[int, int]:
+            # Motion/press bubble from children; event.x/y are child-local.
+            # Hit-test must use coords relative to the toplevel window.
+            return (
+                int(event.x_root - self.winfo_rootx()),
+                int(event.y_root - self.winfo_rooty()),
+            )
+
         def _on_motion(event) -> None:
-            edge = _hit_test(event.x, event.y)
+            x, y = _event_pos_in_window(event)
+            edge = _hit_test(x, y)
             if edge == self._resize_cursor_edge:
                 return
             self._resize_cursor_edge = edge
@@ -4882,7 +5019,8 @@ class App(tk.Tk):
             )
 
         def _on_press(event) -> None:
-            edge = _hit_test(event.x, event.y)
+            x, y = _event_pos_in_window(event)
+            edge = _hit_test(x, y)
             if not edge:
                 return
             ox, oy, ow, oh = _window_bounds()
@@ -5141,12 +5279,15 @@ class App(tk.Tk):
         self.mode_notebook.pack(fill='both', expand=True)
         organize_tab = ttk.Frame(self.mode_notebook)
         pair_finder_tab = ttk.Frame(self.mode_notebook)
+        genre_gender_tab = ttk.Frame(self.mode_notebook)
         rename_tab = ttk.Frame(self.mode_notebook)
         self._organize_tab = organize_tab
         self._pair_finder_tab = pair_finder_tab
+        self._genre_gender_tab = genre_gender_tab
         self._rename_tab = rename_tab
         self.mode_notebook.add(organize_tab, text='  Classify  ')
         self.mode_notebook.add(pair_finder_tab, text='  Match & Align  ')
+        self.mode_notebook.add(genre_gender_tab, text='  Genre & Gender  ')
         self.mode_notebook.add(rename_tab, text='  Rename  ')
 
         from pair_finder_panel import PairFinderPanel
@@ -5156,7 +5297,15 @@ class App(tk.Tk):
         self.pair_panel.pack(fill='both', expand=True)
         self.pair_panel.attach_action_bar(actions)
 
+        from genre_gender_panel import GenreGenderPanel
+        self.gg_panel = GenreGenderPanel(
+            self, genre_gender_tab, info_icon_factory=InfoIcon,
+        )
+        self.gg_panel.pack(fill='both', expand=True)
+        self.gg_panel.attach_action_bar(actions)
+
         from track_renamer_panel import TrackRenamerPanel
+        _patch_hand_cursor_controls()  # CTk may load here; ensure checkboxes get hand cursor
         self.renamer_panel = TrackRenamerPanel(rename_tab, host=self)
         self.renamer_panel.pack(fill='both', expand=True)
         self._rename_reveal_job = None
@@ -6115,6 +6264,7 @@ class App(tk.Tk):
             (self.worker is not None and self.worker.is_alive())
             or (self.sdr_worker is not None and self.sdr_worker.is_alive())
             or self._renamer_destructive_busy()
+            or self._pair_busy
         )
 
     def _set_pair_busy(self, busy: bool, status: str, panel) -> None:

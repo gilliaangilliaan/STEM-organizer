@@ -228,8 +228,16 @@ def apply_theme(root: tk.Tk) -> None:
                                       'bordercolor': C['border'], 'padding': CTRL_FIELD_PAD,
                                       'selectbackground': select_active,
                                       'selectforeground': C['fg']},
-        'TCheckbutton':              {'background': C['bg'], 'foreground': C['fg']},
-        'TRadiobutton':              {'background': C['bg'], 'foreground': C['fg']},
+        'TCheckbutton':              {
+            'background': C['bg'], 'foreground': C['fg'],
+            'focuscolor': C['bg'], 'indicatorbackground': C['panel2'],
+            'indicatorforeground': C['fg'],
+        },
+        'TRadiobutton':              {
+            'background': C['bg'], 'foreground': C['fg'],
+            'focuscolor': C['bg'], 'indicatorbackground': C['panel2'],
+            'indicatorforeground': C['fg'],
+        },
         'TButton':                   {'background': C['panel2'], 'foreground': C['fg'],
                                       'bordercolor': C['border'], 'padding': (14, 8), 'borderwidth': 1},
         'Horizontal.TScale':         {'background': C['bg'], 'troughcolor': C['panel2'],
@@ -247,6 +255,39 @@ def apply_theme(root: tk.Tk) -> None:
     for name, opts in cfgs.items():
         style.configure(name, **opts)
 
+    # clam wraps the label in a Focus element that paints a solid white hover slab
+    # on Windows — drop that wrapper so hover keeps readable dark-theme text.
+    style.layout(
+        'TRadiobutton',
+        [
+            (
+                'Radiobutton.padding',
+                {
+                    'sticky': 'nswe',
+                    'children': [
+                        ('Radiobutton.indicator', {'side': 'left', 'sticky': ''}),
+                        ('Radiobutton.label', {'side': 'left', 'sticky': 'nswe'}),
+                    ],
+                },
+            )
+        ],
+    )
+    style.layout(
+        'TCheckbutton',
+        [
+            (
+                'Checkbutton.padding',
+                {
+                    'sticky': 'nswe',
+                    'children': [
+                        ('Checkbutton.indicator', {'side': 'left', 'sticky': ''}),
+                        ('Checkbutton.label', {'side': 'left', 'sticky': 'nswe'}),
+                    ],
+                },
+            )
+        ],
+    )
+
     style.map('TEntry',
               bordercolor=[('focus', C['accent'])],
               selectbackground=[('focus', select_active), ('!focus', select_inactive)],
@@ -258,11 +299,33 @@ def apply_theme(root: tk.Tk) -> None:
               selectbackground=[('focus', select_active), ('!focus', select_inactive)],
               selectforeground=[('focus', C['fg']), ('!focus', C['fg_dim'])])
     style.map('TCheckbutton',
-              background=[('active', C['bg']), ('hover', C['bg'])],
-              indicatorcolor=[('selected', C['accent'])])
+              background=[
+                  ('active', C['bg']), ('pressed', C['bg']),
+                  ('selected', C['bg']), ('hover', C['bg']),
+              ],
+              foreground=[
+                  ('active', C['fg']), ('selected', C['fg']),
+                  ('disabled', C['fg_dim']),
+              ],
+              indicatorbackground=[
+                  ('selected', C['accent']), ('pressed', C['accent']),
+                  ('active', C['panel']), ('!disabled', C['panel2']),
+              ],
+              indicatorcolor=[('selected', C['accent']), ('pressed', C['accent'])])
     style.map('TRadiobutton',
-              background=[('active', C['bg']), ('hover', C['bg'])],
-              indicatorcolor=[('selected', C['accent'])])
+              background=[
+                  ('active', C['bg']), ('pressed', C['bg']),
+                  ('selected', C['bg']), ('hover', C['bg']),
+              ],
+              foreground=[
+                  ('active', C['fg']), ('selected', C['fg']),
+                  ('disabled', C['fg_dim']),
+              ],
+              indicatorbackground=[
+                  ('selected', C['accent']), ('pressed', C['accent']),
+                  ('active', C['panel']), ('!disabled', C['panel2']),
+              ],
+              indicatorcolor=[('selected', C['accent']), ('pressed', C['accent'])])
     style.map('TButton',
               background=[('active', C['panel'])],
               foreground=[('active', C['fg'])])

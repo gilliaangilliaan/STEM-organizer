@@ -37,6 +37,21 @@ Use the **Match & Align** tab in the left panel for the downstream workflow:
 
 Match & Align settings are stored in the same `settings.json` as the organizer. `install-deps.bat` also installs `mutagen`, `scipy`, and `librosa` for pairing and alignment.
 
+### Genre & Gender (integrated)
+
+Use the **Genre & Gender** tab to tag audio files directly from STEM organizer without opening a terminal.
+
+- **Genre tab** — runs `discogs-maest-30s-pw-129e-519l` on instrumental FLAC/MP3 files and writes `GENRE` (and optionally `STYLE`) Vorbis tags.
+- **Gender tab** — runs `gender-discogs-effnet` on acapella FLAC/MP3 files and writes voice gender to `COMMENT` or `GENDER`.
+
+Both tabs support batch (GPU-accelerated) and per-file (live output) modes.  Output is streamed line-by-line into the STEM organizer log panel.
+
+The tagger is **bundled** under `genre_gender_tagger/` (same pattern as an external project, but shipped with STEM). It keeps its own `venv/` so TensorFlow / transformers stay isolated from Demucs.
+
+**One-time setup:** run `genre_gender_tagger\install-deps.bat`, or answer **Yes** when STEM’s `install-deps.bat` offers it. Gender `.pb` models ship in `genre_gender_tagger\models\`; MAEST downloads into the Hugging Face cache on first genre run.
+
+Settings (input folder, run mode, tag style/field, write metadata) are persisted in the same `settings.json` under `gg_*` keys.
+
 ### Track Renamer (integrated)
 
 Use the **Rename** tab to scan sample folders, build ordered filename rules, preview changes, and audition audio with a category-colored waveform. Large folders use a virtualized, background-computed preview.
@@ -59,6 +74,7 @@ Track Renamer presets remain in `~/.track_renamer/presets`. Audio preview uses t
 | **SI-SDR** | Per-stem quality scoring with recycle-bin actions |
 | **STEM player** | Multi-track preview with solo/mute, seek, zoom, and Match & Align library review |
 | **Match & Align** | Tag-based pairing, folder organize, original distribution, stem alignment |
+| **Genre & Gender** | Discogs genre/style tagging (MAEST) and voice-gender tagging (EffNet) |
 | **Track Renamer** | Rule stack, lazy preview, audio waveform, conflict-safe rename, prefix-folder organization |
 | **Batch tools** | Skip existing, sequential naming + `index.json`, mixture export, min-duration filter |
 
@@ -144,6 +160,8 @@ Settings are saved to `settings.json` beside the app (ignored by git).
 |------|------|
 | `stem_organizer_ui.py` | Main application UI and processing logic |
 | `pair_finder_panel.py` | Match & Align UI (Match + Align sub-tabs) |
+| `genre_gender_panel.py` | Genre & Gender UI (Genre + Gender sub-tabs, subprocess runner) |
+| `genre_gender_tagger/` | Bundled Genre / Gender Tagger (own venv via its install-deps.bat) |
 | `track_renamer_panel.py` | Embedded Track Renamer controller and workspace |
 | `track_renamer/` | Track Renamer engine, scanner, audio service, and GUI components |
 | `pair_matcher.py` | Acapella/instrumental tag matching and organize |

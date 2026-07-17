@@ -66,12 +66,24 @@ copy /Y install-deps.bat dist\install-deps.bat >nul
 copy /Y python-version.txt dist\python-version.txt >nul
 copy /Y verify_torch_install.py dist\verify_torch_install.py >nul
 
+echo   Copying genre_gender_tagger\ ^(bundled tagger, no venv^) ...
+if exist "dist\genre_gender_tagger" rmdir /S /Q "dist\genre_gender_tagger"
+mkdir "dist\genre_gender_tagger" >nul
+mkdir "dist\genre_gender_tagger\models" >nul
+copy /Y "genre_gender_tagger\genre_gender_tagger.py" "dist\genre_gender_tagger\" >nul
+copy /Y "genre_gender_tagger\install-deps.bat" "dist\genre_gender_tagger\" >nul
+copy /Y "genre_gender_tagger\run.bat" "dist\genre_gender_tagger\" >nul
+copy /Y "genre_gender_tagger\requirements.txt" "dist\genre_gender_tagger\" >nul
+copy /Y "genre_gender_tagger\readme.md" "dist\genre_gender_tagger\" >nul
+if exist "genre_gender_tagger\models\*.pb" copy /Y "genre_gender_tagger\models\*.pb" "dist\genre_gender_tagger\models\" >nul
+
 echo.
 echo ========================================
 echo   SUCCESS
 echo ========================================
 echo   dist\STEM-organizer.exe
 echo   dist\install-deps.bat  ^(run once for PyTorch/Demucs^)
+echo   dist\genre_gender_tagger\  ^(run its install-deps.bat for Genre ^& Gender^)
 echo.
 pause
 exit /b 0
