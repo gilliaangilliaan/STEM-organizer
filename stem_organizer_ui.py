@@ -270,7 +270,7 @@ SI_SDR_URL = (
     'https://source-separation.github.io/tutorial/basics/evaluation.html'
     '?highlight=sdr#si-sdr'
 )
-APP_VERSION = '1.0.4'
+APP_VERSION = '1.0.5'
 SPLASH_SIZE = 512
 SPLASH_PAD = 28
 SPLASH_CHROMA = '#010101'
