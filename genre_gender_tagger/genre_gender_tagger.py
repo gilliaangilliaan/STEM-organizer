@@ -62,7 +62,7 @@ INPUT_FOLDER = ""  # asked at runtime (see prompt below)
 
 # CONTENT_TYPE selects the classifier path at runtime (see prompt).
 #   "instrumental" -> Discogs MAEST genre/style -> GENRE(/STYLE) tags
-#   "acapella"     -> Essentia gender-discogs-effnet -> COMMENT or GENDER
+#   "acapella"     -> gender + vocal mel-CNN reverb -> COMMENT/GENDER (+ REVERB)
 CONTENT_TYPE = "instrumental"
 
 OUTPUT_CSV = "genre_gender_results.csv"
@@ -97,6 +97,14 @@ TAG_WRITE_MODE = "combined"
 #   "comment" -> COMMENT field, e.g. COMMENT = "female"
 #   "gender"  -> GENDER field,  e.g. GENDER  = "female"
 GENDER_TAG_FIELD = "comment"
+
+# REVERB_TAG_MODE controls how vocal dry/wet reverb is stored with gender.
+#
+#   "combined" -> gender field only, as "gender/reverb"
+#                 e.g. COMMENT = "female/wet"
+#   "split"    -> gender field = gender, REVERB field = dry|wet
+#                 e.g. COMMENT = "female", REVERB = "wet"
+REVERB_TAG_MODE = "combined"
 
 
 # BATCH_MODE toggles the two run styles.
@@ -253,6 +261,7 @@ if _GG_MODE:
     _gg_batch      = os.environ.get("GG_BATCH",        "1").strip()
     _gg_tag_style  = os.environ.get("GG_TAG_STYLE",    "combined").strip().lower()
     _gg_gender_fld = os.environ.get("GG_GENDER_FIELD", "comment").strip().lower()
+    _gg_reverb     = os.environ.get("GG_REVERB_MODE",  "combined").strip().lower()
     _gg_write_meta = os.environ.get("GG_WRITE_META",   "1").strip()
     _gg_csv        = os.environ.get("GG_CSV",          "").strip()
 
@@ -261,6 +270,7 @@ if _GG_MODE:
     BATCH_MODE       = (_gg_batch != "0")
     TAG_WRITE_MODE   = _gg_tag_style if _gg_tag_style in ("combined", "split") else "combined"
     GENDER_TAG_FIELD = _gg_gender_fld if _gg_gender_fld in ("comment", "gender") else "comment"
+    REVERB_TAG_MODE  = _gg_reverb if _gg_reverb in ("combined", "split") else "combined"
     WRITE_METADATA   = (_gg_write_meta != "0")
     RUNTIME_PROMPTS  = False
 
@@ -290,7 +300,12 @@ if _GG_MODE:
 
     print(
         f"[GG] mode={CONTENT_TYPE}  folder={INPUT_FOLDER}"
-        f"  batch={BATCH_MODE}  write_meta={WRITE_METADATA}",
+        f"  batch={BATCH_MODE}  write_meta={WRITE_METADATA}"
+        + (
+            f"  reverb={REVERB_TAG_MODE}"
+            if CONTENT_TYPE == "acapella"
+            else ""
+        ),
         flush=True,
     )
 
@@ -306,7 +321,7 @@ if not _GG_MODE:
     print("==============================")
     print()
     print("  1 = Instrumental - genre/style (discogs-maest-30s-pw-129e-519l)")
-    print("  2 = Acapella     - voice gender (gender-discogs-effnet)")
+    print("  2 = Acapella     - voice gender + dry/wet reverb (vocal mel-CNN)")
     print()
 
     while True:
@@ -615,6 +630,48 @@ elif RUNTIME_PROMPTS and CONTENT_TYPE == "acapella":
         else:
 
             print("Selected: GENDER field")
+
+        print()
+        print("==============================")
+        print("Reverb tagging (vocal mel-CNN)")
+        print("==============================")
+        print()
+        print("  1 = Combined with gender")
+        print("       e.g. COMMENT = female/wet")
+        print("  2 = Separate REVERB field")
+        print("       e.g. COMMENT = female, REVERB = wet")
+
+        while True:
+
+            reverb_tag_in = input(
+                "Reverb mode [1/2] (default 1): "
+            ).strip()
+
+            if reverb_tag_in == "":
+
+                reverb_tag_in = "1"
+
+            if reverb_tag_in in ("1", "2"):
+
+                REVERB_TAG_MODE = (
+                    "combined"
+                    if reverb_tag_in == "1"
+                    else "split"
+                )
+
+                break
+
+            print("Enter 1 or 2.")
+
+        print()
+
+        if REVERB_TAG_MODE == "combined":
+
+            print("Selected: combined gender/reverb")
+
+        else:
+
+            print("Selected: split gender + REVERB")
 
     else:
 
@@ -1027,9 +1084,9 @@ def classify_gender_file(filename, embed_fn, gender_fn):
 #   "split"    -> GENRE + STYLE
 #
 # Storage by format:
-#   FLAC -> Vorbis comments (genre / style / comment / gender)
-#   MP3 / WAV -> ID3 (TCON, COMM, TXXX:STYLE, TXXX:GENDER)
-#   M4A -> MP4 atoms (©gen, ©cmt, iTunes freeform STYLE/GENDER)
+#   FLAC -> Vorbis comments (genre / style / comment / gender / reverb)
+#   MP3 / WAV -> ID3 (TCON, COMM, TXXX:STYLE, TXXX:GENDER, TXXX:REVERB)
+#   M4A -> MP4 atoms (©gen, ©cmt, iTunes freeform STYLE/GENDER/REVERB)
 
 _MP4_STD = {
     "genre": "\xa9gen",
@@ -1038,6 +1095,7 @@ _MP4_STD = {
 _MP4_FREEFORM = {
     "style": "----:com.apple.iTunes:STYLE",
     "gender": "----:com.apple.iTunes:GENDER",
+    "reverb": "----:com.apple.iTunes:REVERB",
 }
 
 
@@ -1067,6 +1125,8 @@ def _apply_id3_updates(tags: ID3, updates: dict) -> None:
         _id3_set_text(tags, "COMM", updates["comment"])
     if "gender" in updates:
         _id3_set_text(tags, "TXXX", updates["gender"], txxx_desc="GENDER")
+    if "reverb" in updates:
+        _id3_set_text(tags, "TXXX", updates["reverb"], txxx_desc="REVERB")
 
 
 def _apply_mp4_updates(audio: MP4, updates: dict) -> None:
@@ -1148,39 +1208,57 @@ def write_metadata(filename, genre, style):
     return apply_audio_tags(filename, updates)
 
 
-def write_gender_metadata(filename, gender_value):
-    """Write voice-gender to COMMENT or GENDER (see GENDER_TAG_FIELD)."""
+def write_gender_metadata(filename, gender_value, reverb_value=None):
+    """Write voice-gender (+ optional reverb) per GENDER_TAG_FIELD / REVERB_TAG_MODE."""
 
     field = (
         GENDER_TAG_FIELD
         if GENDER_TAG_FIELD in ("comment", "gender")
         else "comment"
     )
-    return apply_audio_tags(filename, {field: gender_value})
+    reverb_value = (reverb_value or "").strip().lower() or None
+
+    if REVERB_TAG_MODE == "combined" and reverb_value:
+        return apply_audio_tags(
+            filename,
+            {field: f"{gender_value}/{reverb_value}"},
+        )
+
+    updates = {field: gender_value}
+    if reverb_value:
+        updates["reverb"] = reverb_value
+    return apply_audio_tags(filename, updates)
 
 
 # ==========================================================
-# ACAPELLA PATH (Essentia gender-discogs-effnet via TF)
+# ACAPELLA PATH (gender-discogs-effnet + vocal mel-CNN reverb)
 # ==========================================================
 
 if CONTENT_TYPE == "acapella":
+
+    from vocal_reverb import load_vocal_reverb
 
     tag_field_label = (
         "COMMENT"
         if GENDER_TAG_FIELD == "comment"
         else "GENDER"
     )
+    reverb_mode_label = (
+        f"{tag_field_label}=gender/reverb"
+        if REVERB_TAG_MODE == "combined"
+        else f"{tag_field_label}=gender + REVERB"
+    )
 
     print()
     print("==============================")
     print(f"{APP_NAME} v{APP_VERSION}")
-    print("Acapella / voice-gender")
+    print("Acapella / voice-gender + reverb")
     if BATCH_MODE:
         print("Batched pipeline")
     else:
         print("Per-file mode")
-    print("gender-discogs-effnet (TF)")
-    print(f"Recursive + {tag_field_label} metadata")
+    print("gender-discogs-effnet (TF) + vocal_reverb.pt (mel-CNN)")
+    print(f"Recursive + {reverb_mode_label} metadata")
     print("==============================")
     print()
 
@@ -1192,6 +1270,11 @@ if CONTENT_TYPE == "acapella":
     print("Loading voice-gender models...")
     embed_fn, gender_fn = load_gender_models(status=_status)
     print("Models loaded")
+    print()
+
+    print("Loading vocal reverb classifier...")
+    reverb_router = load_vocal_reverb(GENDER_MODEL_DIR, status=_status)
+    print("Reverb classifier loaded")
     print()
 
     files = []
@@ -1221,16 +1304,39 @@ if CONTENT_TYPE == "acapella":
             "confidence": 0.0,
             "female": 0.0,
             "male": 0.0,
+            "reverb": "",
+            "reverb_confidence": 0.0,
+            "wet": 0.0,
+            "dry": 0.0,
             "n_patches": 0,
             "error": error,
         }
+
+    def _merge_reverb(row, filename):
+
+        try:
+
+            rev = reverb_router.predict(filename)
+
+        except Exception as exc:
+
+            row["error"] = (
+                (row.get("error") or "") + f" | reverb: {exc}"
+            ).strip(" |")
+            return row
+
+        row["reverb"] = rev["reverb"]
+        row["reverb_confidence"] = round(rev["reverb_confidence"], 4)
+        row["wet"] = round(rev["wet"], 4)
+        row["dry"] = round(rev["dry"], 4)
+        return row
 
     if BATCH_MODE:
 
         # Parallel mel/patch extract; pack patches across files into
         # EffNet's fixed 64-patch TF batches.
 
-        print("Processing (batch)...")
+        print("Processing gender (batch)...")
         print()
 
         score_storage = {}
@@ -1347,15 +1453,33 @@ if CONTENT_TYPE == "acapella":
                 "confidence": round(pred["confidence"], 4),
                 "female": round(pred["female"], 4),
                 "male": round(pred["male"], 4),
+                "reverb": "",
+                "reverb_confidence": 0.0,
+                "wet": 0.0,
+                "dry": 0.0,
                 "n_patches": pred["n_patches"],
                 "error": "",
             }
 
         print()
+        print("Processing reverb (vocal mel-CNN)...")
+        print()
+
+        for index, filename in enumerate(
+            tqdm(files, desc="Reverb")
+        ):
+
+            if results[index] is None or not results[index].get("gender"):
+
+                continue
+
+            results[index] = _merge_reverb(results[index], filename)
+
+        print()
 
     else:
 
-        # Per-file: live GENDER / CONF like instrumental per-file mode
+        # Per-file: live GENDER / REVERB / CONF
 
         print("Processing (one file at a time)...")
         print()
@@ -1383,22 +1507,31 @@ if CONTENT_TYPE == "acapella":
                 )
                 continue
 
-            results[index] = {
+            row = {
                 "file": filename,
                 "gender": pred["gender"],
                 "confidence": round(pred["confidence"], 4),
                 "female": round(pred["female"], 4),
                 "male": round(pred["male"], 4),
+                "reverb": "",
+                "reverb_confidence": 0.0,
+                "wet": 0.0,
+                "dry": 0.0,
                 "n_patches": pred["n_patches"],
                 "error": "",
             }
+            row = _merge_reverb(row, filename)
+            results[index] = row
 
             print()
             print(Path(filename).name)
-            print("GENDER:", pred["gender"])
+            print("GENDER:", row["gender"])
+            print("REVERB:", row["reverb"] or "?")
             print(
                 "CONF:",
-                round(pred["confidence"], 4),
+                row["confidence"],
+                "/",
+                row["reverb_confidence"],
             )
 
         print()
@@ -1409,19 +1542,23 @@ if CONTENT_TYPE == "acapella":
     if WRITE_METADATA:
 
         print(
-            f"Writing {tag_field_label} metadata to",
+            f"Writing {reverb_mode_label} metadata to",
             len(results),
             "files...",
         )
 
         for row in tqdm(results, desc="Tagging"):
 
-            if not row["gender"]:
+            if not row or not row["gender"]:
 
                 skipped += 1
                 continue
 
-            ok = write_gender_metadata(row["file"], row["gender"])
+            ok = write_gender_metadata(
+                row["file"],
+                row["gender"],
+                row.get("reverb") or None,
+            )
 
             if ok:
                 written += 1
@@ -1462,7 +1599,7 @@ if CONTENT_TYPE == "acapella":
 
     if WRITE_METADATA:
 
-        print(f"{tag_field_label} tags written:", written)
+        print(f"{reverb_mode_label} tags written:", written)
 
     else:
 

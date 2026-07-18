@@ -57,6 +57,12 @@ TIPS = {
         "Split writes separate GENRE and STYLE tags."
     ),
     "tag_field": "Comment writes gender to the COMMENT tag. Gender writes to a GENDER tag.",
+    "reverb_mode": (
+        "Dry/wet from the bundled vocal mel-CNN (models\\vocal_reverb.pt). "
+        "Combined writes gender/reverb into the chosen field "
+        "(e.g. COMMENT=female/wet). Split writes gender alone and "
+        "REVERB=wet|dry as a separate custom field."
+    ),
     "write_meta": "Write tags to FLAC/MP3/M4A/WAV. Disable to only generate the CSV.",
     "csv_path": "Optional path for the output CSV. Leave empty to use the tagger default.",
     "open_path": "Open this folder in Explorer.",
@@ -90,12 +96,12 @@ def show_genre_gender_help_dialog(parent: tk.Misc, mode: str) -> None:
     heading = (
         "Tag instrumentals with genre & style"
         if is_genre
-        else "Tag acapellas with voice gender"
+        else "Tag acapellas with voice gender + dry/wet reverb"
     )
     intro = (
         "Classify instrumental tracks and write Discogs-style GENRE / STYLE tags."
         if is_genre
-        else "Estimate singing voice gender and write it to COMMENT or GENDER tags."
+        else "Estimate singing voice gender and dry/wet reverb, then write tags."
     )
     sections = (
         (
@@ -129,24 +135,25 @@ def show_genre_gender_help_dialog(parent: tk.Misc, mode: str) -> None:
         (
             "Workflow",
             "1. Choose an input folder of acapella FLAC/MP3/WAV files.\n"
-            "2. Pick run mode and which tag field to write.\n"
+            "2. Pick run mode, tag field, and reverb write style.\n"
             "3. Click ▶ Tag gender and watch progress in the LOG panel.\n"
-            "4. Check FLAC tags and/or the CSV export when the run finishes.",
+            "4. Check tags and/or the CSV export when the run finishes.",
         ),
         (
             "Model",
-            "Uses Essentia gender-discogs-effnet "
-            "(discogs-effnet-bs64 embeddings + gender classification head) "
-            "via TensorFlow .pb models. The .pb files ship in "
-            "genre_gender_tagger\\models\\; no download is needed when those "
-            "files are present.",
+            "Gender: Essentia gender-discogs-effnet — at least detects "
+            "high- and low-pitched vocals.\n"
+            "Reverb: lightweight mel-CNN — the world's first FOSS reverb "
+            "classifier trained on singing vocals — 4.8k dry and 4.8k wet "
+            "(sample packs, remix packs, multitracks).",
         ),
         (
             "Options",
-            "Batch is faster; Per-file prints each GENDER/CONF live. "
+            "Batch is faster; Per-file prints each GENDER/REVERB/CONF live. "
             "COMMENT writes e.g. COMMENT=female; GENDER writes a dedicated "
-            "GENDER tag. Tags are written to FLAC, MP3, M4A, and WAV "
-            "(ID3 / Vorbis / MP4 atoms as appropriate). A CSV export is always written.",
+            "GENDER tag. Combined reverb mode writes e.g. COMMENT=female/wet; "
+            "Split writes COMMENT=female and REVERB=wet. Tags are written to "
+            "FLAC, MP3, M4A, and WAV. A CSV export is always written.",
         ),
         (
             "Setup",
@@ -245,6 +252,7 @@ class GenreGenderPanel(ttk.Frame):
         self.gender_input_dir = tk.StringVar()
         self.gender_batch_mode = tk.BooleanVar(value=True)
         self.gender_tag_field = tk.StringVar(value="comment")
+        self.gender_reverb_mode = tk.StringVar(value="combined")
         self.gender_write_meta = tk.BooleanVar(value=True)
         self.gender_csv_path = tk.StringVar()
 
@@ -379,7 +387,7 @@ class GenreGenderPanel(ttk.Frame):
         header.pack(fill="x", padx=SECTION_PADX, pady=(HEADER_TOP_PAD, 12))
         self._description_with_info(
             header,
-            "Tag acapella FLAC/MP3 files with singing voice gender (female / male).",
+            "Tag acapellas with voice gender (female / male) and reverb (wet / dry).",
             self._show_gender_help,
         )
 
@@ -428,6 +436,25 @@ class GenreGenderPanel(ttk.Frame):
         )
         gender_rb.pack(side="left")
         tip(field_lbl, comment_rb, gender_rb, text=TIPS["tag_field"])
+
+        reverb_row = ttk.Frame(opts)
+        reverb_row.pack(anchor="w", pady=(0, 6))
+        reverb_lbl = ttk.Label(reverb_row, text="Reverb")
+        reverb_lbl.pack(side="left", padx=(0, 12))
+        reverb_combined_rb = ttk.Radiobutton(
+            reverb_row, text="Combined  (e.g. female/wet)",
+            variable=self.gender_reverb_mode, value="combined", cursor="hand2",
+        )
+        reverb_combined_rb.pack(side="left", padx=(0, 10))
+        reverb_split_rb = ttk.Radiobutton(
+            reverb_row, text="Split  (gender + REVERB=wet)",
+            variable=self.gender_reverb_mode, value="split", cursor="hand2",
+        )
+        reverb_split_rb.pack(side="left")
+        tip(
+            reverb_lbl, reverb_combined_rb, reverb_split_rb,
+            text=TIPS["reverb_mode"],
+        )
 
         meta_chk = ttk.Checkbutton(
             opts, text="Write metadata to files",
@@ -568,7 +595,7 @@ class GenreGenderPanel(ttk.Frame):
                 "gender",
                 input_dir,
                 bool(self.gender_batch_mode.get()),
-                "combined",
+                self.gender_reverb_mode.get(),
                 self.gender_tag_field.get(),
                 bool(self.gender_write_meta.get()),
                 self.gender_csv_path.get().strip(),
@@ -632,9 +659,17 @@ class GenreGenderPanel(ttk.Frame):
         env["GG_MODE"]         = mode
         env["GG_INPUT"]        = input_dir
         env["GG_BATCH"]        = "1" if batch_mode else "0"
-        env["GG_TAG_STYLE"]    = tag_style
         env["GG_GENDER_FIELD"] = gender_field
         env["GG_WRITE_META"]   = "1" if write_meta else "0"
+        if mode == "gender":
+            # For gender runs, tag_style carries combined|split reverb write mode.
+            env["GG_REVERB_MODE"] = (
+                tag_style if tag_style in ("combined", "split") else "combined"
+            )
+            env["GG_TAG_STYLE"] = "combined"
+        else:
+            env["GG_TAG_STYLE"] = tag_style
+            env["GG_REVERB_MODE"] = "combined"
         # Hidden console is not a TTY — without this, tqdm/log lines buffer
         # and the UI looks frozen mid-progress (e.g. stuck at Audio 61/100).
         env["PYTHONUNBUFFERED"] = "1"
@@ -809,6 +844,7 @@ class GenreGenderPanel(ttk.Frame):
             "gg_gender_input_dir":  self.gender_input_dir.get(),
             "gg_gender_batch_mode": bool(self.gender_batch_mode.get()),
             "gg_gender_tag_field":  self.gender_tag_field.get(),
+            "gg_gender_reverb_mode": self.gender_reverb_mode.get(),
             "gg_gender_write_meta": bool(self.gender_write_meta.get()),
             "gg_gender_csv_path":   self.gender_csv_path.get(),
         }
@@ -833,13 +869,15 @@ class GenreGenderPanel(ttk.Frame):
         tag_field = data.get("gg_gender_tag_field", "comment")
         if tag_field in ("comment", "gender"):
             self.gender_tag_field.set(tag_field)
+        reverb_mode = data.get("gg_gender_reverb_mode", "combined")
+        if reverb_mode in ("combined", "split"):
+            self.gender_reverb_mode.set(reverb_mode)
         self.gender_write_meta.set(bool(data.get("gg_gender_write_meta", True)))
         self.gender_csv_path.set(str(data.get("gg_gender_csv_path", "")))
 
     def _save_settings(self) -> None:
         data = load_settings()
         data.pop("gg_tagger_dir", None)
-        data.pop("gg_gender_reverb_mode", None)
         data.update(self.settings_snapshot())
         save_settings(data)
 
@@ -853,6 +891,7 @@ class GenreGenderPanel(ttk.Frame):
             self.gender_input_dir,
             self.gender_batch_mode,
             self.gender_tag_field,
+            self.gender_reverb_mode,
             self.gender_write_meta,
             self.gender_csv_path,
         ):
