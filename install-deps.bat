@@ -280,8 +280,8 @@ if /I "%TORCH_LABEL%"=="CPU" (
 
 echo.
 if exist "%~dp0genre_gender_tagger\install-deps.bat" (
-    echo Genre ^& Gender uses a separate venv under genre_gender_tagger\.
-    choice /C YN /N /M "Install Genre ^& Gender deps now? [Y/N]: "
+    echo Genre ^& Gender uses a separate venv under genre_gender_tagger.
+    choice /C YN /N /M "Install Genre & Gender deps now? [Y/N]: "
     if not errorlevel 2 (
         echo.
         set "STEM_GG_BUNDLED=1"
