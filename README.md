@@ -4,7 +4,7 @@
 
 # STEM organizer
 
-Desktop app for batch-organizing multitracks to stem exports (2-stem/4-stem) based on RMS and SI-SDR classification. Includes a built-in **STEM player**, an integrated **Match & Align** workflow, **Genre & Gender** tagging (MAEST / EffNet), and a full **Track Renamer** for rule-based sample organization.
+Desktop app for batch-organizing multitracks to stem exports (2-stem/4-stem) based on RMS and SI-SDR classification. Includes a built-in **STEM player**, an integrated **Match & Align** workflow, **Genre & Gender** tagging (MAEST / EffNet gender + nsynth-reverb), and a full **Track Renamer** for rule-based sample organization.
 
 **By:** Gilliaan & Bas Curtiz  
 **Repository:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  
@@ -42,15 +42,15 @@ Match & Align settings are stored in the same `settings.json` as the organizer. 
 Use the **Genre & Gender** tab to tag audio files directly from STEM organizer without opening a terminal.
 
 - **Genre tab** — runs `discogs-maest-30s-pw-129e-519l` on instrumental FLAC/MP3 files and writes `GENRE` (and optionally `STYLE`) Vorbis tags.
-- **Gender tab** — runs `gender-discogs-effnet` on acapella FLAC/MP3 files and writes voice gender to `COMMENT` or `GENDER`.
+- **Gender tab** — runs `gender-discogs-effnet` plus `nsynth_reverb-discogs-effnet` on acapella FLAC/MP3 files: voice gender (female/male) and reverb (wet/dry). Write gender to `COMMENT` or `GENDER`, either combined (`female/wet`) or split (`COMMENT=female` + `REVERB=wet`).
 
 Both tabs support batch (GPU-accelerated) and per-file (live output) modes.  Output is streamed line-by-line into the STEM organizer log panel.
 
 The tagger is **bundled** under `genre_gender_tagger/` (same pattern as an external project, but shipped with STEM). It keeps its own `venv/` so TensorFlow / transformers stay isolated from Demucs.
 
-**One-time setup:** run `genre_gender_tagger\install-deps.bat`, or answer **Yes** when STEM’s `install-deps.bat` offers it. Gender `.pb` models ship in `genre_gender_tagger\models\`; MAEST downloads into the Hugging Face cache on first genre run.
+**One-time setup:** run `genre_gender_tagger\install-deps.bat`, or answer **Yes** when STEM’s `install-deps.bat` offers it. Gender/reverb `.pb` models ship in `genre_gender_tagger\models\`; MAEST downloads into the Hugging Face cache on first genre run.
 
-Settings (input folder, run mode, tag style/field, write metadata) are persisted in the same `settings.json` under `gg_*` keys.
+Settings (input folder, run mode, tag style/field, reverb mode, write metadata) are persisted in the same `settings.json` under `gg_*` keys.
 
 ### Track Renamer (integrated)
 
@@ -74,7 +74,7 @@ Track Renamer presets remain in `~/.track_renamer/presets`. Audio preview uses t
 | **SI-SDR** | Per-stem quality scoring with recycle-bin actions |
 | **STEM player** | Multi-track preview with solo/mute, seek, zoom, and Match & Align library review |
 | **Match & Align** | Tag-based pairing, folder organize, original distribution, stem alignment |
-| **Genre & Gender** | Discogs genre/style tagging (MAEST) and voice-gender tagging (EffNet) |
+| **Genre & Gender** | Discogs genre/style (MAEST); voice gender + wet/dry reverb (EffNet heads) |
 | **Track Renamer** | Rule stack, lazy preview, audio waveform, conflict-safe rename, prefix-folder organization |
 | **Batch tools** | Skip existing, sequential naming + `index.json`, mixture export, min-duration filter |
 
