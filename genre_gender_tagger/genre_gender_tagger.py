@@ -20,6 +20,13 @@ os.environ.setdefault("HF_HUB_DISABLE_EXPERIMENTAL_WARNING", "1")
 APP_NAME = "Genre / Gender Tagger"
 APP_VERSION = "1.0"
 
+# Avoid Windows cp1252 crashes on non-ASCII filenames in print/tqdm.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 
 def _status(msg):
     """Immediate console feedback during slow startup imports."""

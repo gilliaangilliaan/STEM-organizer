@@ -684,6 +684,8 @@ class GenreGenderPanel(ttk.Frame):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 **subprocess_kwargs(),  # hide console window on Windows
             )
