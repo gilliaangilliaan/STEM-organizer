@@ -51,21 +51,29 @@ if not exist "%VENV%\Scripts\python.exe" (
 
 set "PY=%VENV%\Scripts\python.exe"
 
-rem When launched from STEM install-deps.bat, reuse its PyTorch choice ^(STEM_GG_TORCH=1/2/3^).
-if defined STEM_GG_TORCH (
-    if "%STEM_GG_TORCH%"=="1" (
-        echo Reusing STEM organizer PyTorch choice: CUDA 12.4 ^(RTX 20/30/40^)
-        goto cuda_torch
-    )
-    if "%STEM_GG_TORCH%"=="2" (
-        echo Reusing STEM organizer PyTorch choice: CPU only
-        goto cpu_torch
-    )
-    if "%STEM_GG_TORCH%"=="3" (
-        echo Reusing STEM organizer PyTorch choice: CUDA 12.8 ^(RTX 50-series^)
-        goto cuda_new_torch
-    )
-)
+rem When launched from STEM install-deps.bat, reuse its PyTorch choice.
+rem Prefer argv (call install-deps.bat 2), fall back to STEM_GG_TORCH env.
+set "GG_TORCH_CHOICE=%~1"
+if "%GG_TORCH_CHOICE%"=="" set "GG_TORCH_CHOICE=%STEM_GG_TORCH%"
+if "%GG_TORCH_CHOICE%"=="1" goto reuse_cuda
+if "%GG_TORCH_CHOICE%"=="2" goto reuse_cpu
+if "%GG_TORCH_CHOICE%"=="3" goto reuse_cuda_new
+goto ask_gpu
+
+:reuse_cuda
+echo.
+echo Reusing STEM organizer PyTorch choice: CUDA 12.4 ^(RTX 20/30/40^)
+goto cuda_torch
+
+:reuse_cpu
+echo.
+echo Reusing STEM organizer PyTorch choice: CPU only
+goto cpu_torch
+
+:reuse_cuda_new
+echo.
+echo Reusing STEM organizer PyTorch choice: CUDA 12.8 ^(RTX 50-series^)
+goto cuda_new_torch
 
 :ask_gpu
 echo.

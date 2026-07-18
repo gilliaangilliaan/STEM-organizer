@@ -10,8 +10,9 @@ Local AI tagging for a music library:
 
 - **Instrumental** — Discogs genre/style via Hugging Face
   `discogs-maest-30s-pw-129e-519l` (MAEST)
-- **Acapella** — singing voice gender (female/male) via Essentia
-  `gender-discogs-effnet` (TensorFlow `.pb`; Essentia has no Windows wheels)
+- **Acapella** — singing voice gender (female/male) + reverb (wet/dry) via
+  Essentia `gender-discogs-effnet` and `nsynth_reverb-discogs-effnet`
+  (TensorFlow `.pb`; Essentia has no Windows wheels)
 
 Scans recursively, writes tags to FLAC/MP3/M4A/WAV, and exports a CSV.
 Nothing is uploaded.
@@ -27,7 +28,7 @@ Nothing is uploaded.
 - Recursive folder scanning
 - Automatic 30-second audio sampling, multiple clips per song (instrumental)
 - Top-5 genre predictions (instrumental)
-- GENRE / STYLE separation (instrumental) or COMMENT / GENDER tag (acapella)
+- GENRE / STYLE separation (instrumental) or COMMENT / GENDER + optional REVERB (acapella)
 - Batch and per-file run modes for both content types
 - Metadata tagging (FLAC / MP3 / M4A / WAV)
 - CSV export
@@ -66,13 +67,14 @@ Essentia `.pb` into `models\`).
 
 ### Offline / VM (no internet)
 
-Gender models must already exist under `models\` (about 18 MB):
+Gender/reverb models must already exist under `models\` (about 21 MB):
 
 - `models\discogs-effnet-bs64-1.pb`
 - `models\gender-discogs-effnet-1.pb`
+- `models\nsynth_reverb-discogs-effnet-1.pb`
 
 Copy that folder from a machine that already ran the tagger once,
-or download the two `.pb` files from essentia.upf.edu and place them
+or download the three `.pb` files from essentia.upf.edu and place them
 in `models\` before running on the VM. Instrumental mode also needs
 Hugging Face cache for MAEST (download on a networked machine first).
 
@@ -139,7 +141,8 @@ Open `genre_gender_tagger.py`.
 | `RUNTIME_PROMPTS`  | `True`  | Ask at startup which mode to run in and how to write tags. Set `False` to use the defaults below without prompting. |
 | `WRITE_METADATA`   | `True`  | Write tags at all. `False` = only export the CSV.         |
 | `TAG_WRITE_MODE`   | `combined` | Instrumental: `combined` = `GENRE = "Rock/Surf"`. `split` = `GENRE` + `STYLE`. |
-| `GENDER_TAG_FIELD` | `comment` | Acapella: `comment` or `gender` Vorbis field. |
+| `GENDER_TAG_FIELD` | `comment` | Acapella: `comment` or `gender` field for the gender value. |
+| `REVERB_TAG_MODE`  | `combined` | Acapella: `combined` = `female/wet` in the gender field; `split` = gender field + `REVERB`. |
 | `BATCH_MODE`       | `True`  | `True` = fast batched pipeline. `False` = per-file output. |
 | `BATCH_SIZE`       | `64`    | Batch size (batch mode, GPU / EffNet patches).            |
 | `AUDIO_WORKERS`    | `8`     | CPU decode workers (batch mode).                          |
@@ -170,7 +173,7 @@ You will be prompted for content type, then the input folder:
 
 **Content type**
 - `1 = Instrumental` — genre/style (`discogs-maest-30s-pw-129e-519l`)
-- `2 = Acapella` — voice gender (`gender-discogs-effnet`)
+- `2 = Acapella` — voice gender + reverb (`gender-discogs-effnet` + `nsynth-reverb`)
 
 For instrumental (when `RUNTIME_PROMPTS = True`) you then get:
 
@@ -186,11 +189,15 @@ For acapella (when `RUNTIME_PROMPTS = True`) you then get:
 
 **Run mode**:
 - `1 = Batch` — parallel decode + packed 64-patch TF batches (faster).
-- `2 = Per-file` — prints `GENDER`/`CONF` per file.
+- `2 = Per-file` — prints `GENDER`/`REVERB`/`CONF` per file.
 
 **Tag writing** (only if `WRITE_METADATA = True`):
 - `1 = COMMENT field` — e.g. `COMMENT = female`.
 - `2 = GENDER field` — e.g. `GENDER = female`.
+
+**Reverb tagging**:
+- `1 = Combined` — e.g. `COMMENT = female/wet`.
+- `2 = Split` — e.g. `COMMENT = female`, `REVERB = wet`.
 
 The tagger then runs and, when finished, writes the CSV.
 
@@ -216,7 +223,8 @@ or for acapella:
 ```
 03 - Track Name.flac
 GENDER: female
-CONF: 0.8712
+REVERB: wet
+CONF: 0.8712 / 0.6401
 ```
 
 ---
@@ -224,7 +232,8 @@ CONF: 0.8712
 ## Output
 
 A CSV is written with one row per file. Instrumental rows include genre,
-style, confidence, and top-5. Acapella rows include gender probabilities.
+style, confidence, and top-5. Acapella rows include gender and reverb
+probabilities.
 
 When `WRITE_METADATA = True`, matching tags are updated on FLAC, MP3,
 M4A, and WAV.

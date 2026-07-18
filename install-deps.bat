@@ -279,21 +279,28 @@ if /I "%TORCH_LABEL%"=="CPU" (
 )
 
 echo.
-if exist "%~dp0genre_gender_tagger\install-deps.bat" (
-    echo Genre ^& Gender uses a separate venv under genre_gender_tagger.
-    choice /C YN /N /M "Install Genre & Gender deps now? [Y/N]: "
-    if not errorlevel 2 (
-        echo.
-        set "STEM_GG_BUNDLED=1"
-        rem STEM_GG_TORCH already set from the PyTorch choice above ^(1/2/3^).
-        call "%~dp0genre_gender_tagger\install-deps.bat"
-        set "STEM_GG_BUNDLED="
-    ) else (
-        echo Skipped. Run genre_gender_tagger\install-deps.bat later if needed.
-        echo.
-    )
-)
+if not exist "%~dp0genre_gender_tagger\install-deps.bat" goto after_gg
 
+echo Genre ^& Gender uses a separate venv under genre_gender_tagger.
+choice /C YN /N /M "Install Genre & Gender deps now? [Y/N]: "
+if errorlevel 2 goto skip_gg
+
+echo.
+rem Re-assert torch choice for the nested installer (env + argv).
+rem Calling from a parenthesized block can drop env vars on some Windows builds.
+set "STEM_GG_TORCH=1"
+if /I "%TORCH_LABEL%"=="CPU" set "STEM_GG_TORCH=2"
+if /I "%TORCH_LABEL%"=="CUDA 12.8 (RTX 50-series)" set "STEM_GG_TORCH=3"
+set "STEM_GG_BUNDLED=1"
+call "%~dp0genre_gender_tagger\install-deps.bat" %STEM_GG_TORCH%
+set "STEM_GG_BUNDLED="
+goto after_gg
+
+:skip_gg
+echo Skipped. Run genre_gender_tagger\install-deps.bat later if needed.
+echo.
+
+:after_gg
 echo.
 pause
 exit /b 0
