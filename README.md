@@ -42,7 +42,7 @@ Match & Align settings are stored in the same `settings.json` as the organizer. 
 Use the **Genre & Gender** tab to tag audio files directly from STEM organizer without opening a terminal.
 
 - **Genre tab** — runs `discogs-maest-30s-pw-129e-519l` on instrumental FLAC/MP3 files and writes `GENRE` (and optionally `STYLE`) Vorbis tags.
-- **Gender tab** — runs `gender-discogs-effnet` on acapella FLAC/MP3 files and writes voice gender to `COMMENT` or `GENDER`. Also runs dry/wet reverb via a shippable mel-CNN (`models\vocal_reverb.pt`). Write Combined (`female/wet`) or Split (`REVERB=wet`). Train the reverb model from your packs with `genre_gender_tagger\train-reverb.bat` (`reverb_data\dry` + `reverb_data\wet`).
+- **Gender tab** — runs `gender-discogs-effnet` on acapella FLAC/MP3 files and writes voice gender to `COMMENT` or `GENDER`. Also runs dry/wet reverb via a shippable mel-CNN (`models\vocal_reverb.pt`). Write Combined (`female/wet`) or Split (`REVERB=wet`).
 
 **Vocal reverb classifier** — the world’s first FOSS dry/wet reverb classifier **trained on singing vocals** (not speech or instruments), using **4.8k dry** and **4.8k wet** vocals from sample packs, remix packs, and multitracks. Best validation accuracy: **0.924**. Ships as `genre_gender_tagger\models\vocal_reverb.pt`.
 
@@ -50,7 +50,7 @@ Both tabs support batch (GPU-accelerated) and per-file (live output) modes.  Out
 
 The tagger is **bundled** under `genre_gender_tagger/` (same pattern as an external project, but shipped with STEM). It keeps its own `venv/` so TensorFlow / transformers stay isolated from Demucs.
 
-**One-time setup:** run `genre_gender_tagger\install-deps.bat`, or answer **Yes** when STEM’s `install-deps.bat` offers it. Gender `.pb` models and `vocal_reverb.pt` (after you train it) ship in `genre_gender_tagger\models\`; MAEST downloads into the Hugging Face cache on first genre use.
+**One-time setup:** run `genre_gender_tagger\install-deps.bat`, or answer **Yes** when STEM’s `install-deps.bat` offers it. Gender `.pb` models and `vocal_reverb.pt` ship in `genre_gender_tagger\models\`; MAEST downloads into the Hugging Face cache on first genre use.
 
 Settings (input folder, run mode, tag style/field, reverb mode, write metadata) are persisted in the same `settings.json` under `gg_*` keys.
 
@@ -89,22 +89,6 @@ Hover the **?** tooltips in the UI for detailed explanations of each setting.
 - **Windows** (primary target; the UI uses a custom title bar on Windows)
 - **Python 3.10.x or 3.11.x** (required for `install-deps.bat` and for building from source)
 - Enough disk space for `site-packages/` (PyTorch, Demucs, CustomTkinter, psutil) and optional `ffmpeg/`
-
----
-
-## Quick start (pre-built `.exe`)
-
-1. Download or build `STEM-organizer.exe` into a folder (e.g. `dist/`).
-2. Run **`install-deps.bat`** once in that same folder.
-   - Choose PyTorch build:
-     - **1** — NVIDIA RTX 20/30/40 (CUDA 12.4)
-     - **2** — CPU only
-     - **3** — NVIDIA RTX 50-series / Blackwell (CUDA 12.8, e.g. 5090)
-3. Start **`STEM-organizer.exe`**.
-
-`install-deps.bat` creates `site-packages/` beside the exe, downloads **ffmpeg** into `ffmpeg/`, and writes `python-version.txt` so the installer Python matches the embedded runtime.
-
-> If you have several Python versions installed, run e.g. `py -3.11 install-deps.bat` so it matches the version recorded in `python-version.txt`.
 
 ---
 
@@ -181,7 +165,7 @@ Settings are saved to `settings.json` beside the app (ignored by git).
 
 ## Updates
 
-On startup the app can check [GitHub Releases](https://github.com/gilliaangilliaan/STEM-organizer/releases) for a newer version. The status bar credit line and **About** dialog link to the repository.
+On startup the app checks [GitHub Releases](https://github.com/gilliaangilliaan/STEM-organizer/releases) for a newer version. The status bar credit line indicates the current version installed.
 
 ---
 
