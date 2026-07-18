@@ -51,6 +51,22 @@ if not exist "%VENV%\Scripts\python.exe" (
 
 set "PY=%VENV%\Scripts\python.exe"
 
+rem When launched from STEM install-deps.bat, reuse its PyTorch choice ^(STEM_GG_TORCH=1/2/3^).
+if defined STEM_GG_TORCH (
+    if "%STEM_GG_TORCH%"=="1" (
+        echo Reusing STEM organizer PyTorch choice: CUDA 12.4 ^(RTX 20/30/40^)
+        goto cuda_torch
+    )
+    if "%STEM_GG_TORCH%"=="2" (
+        echo Reusing STEM organizer PyTorch choice: CPU only
+        goto cpu_torch
+    )
+    if "%STEM_GG_TORCH%"=="3" (
+        echo Reusing STEM organizer PyTorch choice: CUDA 12.8 ^(RTX 50-series^)
+        goto cuda_new_torch
+    )
+)
+
 :ask_gpu
 echo.
 echo Which PyTorch build do you need?

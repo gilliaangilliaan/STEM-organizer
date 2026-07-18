@@ -92,16 +92,19 @@ goto ask_gpu
 :cuda_torch
 set "TORCH_INDEX=https://download.pytorch.org/whl/cu124"
 set "TORCH_LABEL=CUDA 12.4 (RTX 20/30/40)"
+set "STEM_GG_TORCH=1"
 goto install_torch
 
 :cuda_new_torch
 set "TORCH_INDEX=https://download.pytorch.org/whl/cu128"
 set "TORCH_LABEL=CUDA 12.8 (RTX 50-series)"
+set "STEM_GG_TORCH=3"
 goto install_torch
 
 :cpu_torch
 set "TORCH_INDEX=https://download.pytorch.org/whl/cpu"
 set "TORCH_LABEL=CPU"
+set "STEM_GG_TORCH=2"
 goto install_torch
 
 :install_torch
@@ -282,6 +285,7 @@ if exist "%~dp0genre_gender_tagger\install-deps.bat" (
     if not errorlevel 2 (
         echo.
         set "STEM_GG_BUNDLED=1"
+        rem STEM_GG_TORCH already set from the PyTorch choice above ^(1/2/3^).
         call "%~dp0genre_gender_tagger\install-deps.bat"
         set "STEM_GG_BUNDLED="
     ) else (
