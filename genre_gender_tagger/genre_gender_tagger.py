@@ -184,6 +184,10 @@ GENDER_N_MELS = 96
 GENDER_PATCH_SIZE = 128
 GENDER_PATCH_HOP = 62
 GENDER_BATCH_SIZE = 64  # discogs-effnet-bs64 fixed batch
+
+# Reverb (vocal mel-CNN): files decoded in parallel, crops stacked on GPU.
+REVERB_FILE_CHUNK = 64
+REVERB_GPU_BATCH = 32
 GENDER_LABELS = ("female", "male")
 
 GENDER_MODEL_DIR = Path(__file__).resolve().parent / "models"
@@ -1462,18 +1466,45 @@ if CONTENT_TYPE == "acapella":
             }
 
         print()
-        print("Processing reverb (vocal mel-CNN)...")
+        print("Processing reverb (vocal mel-CNN, batched)...")
+        print(
+            f"  workers={AUDIO_WORKERS}  "
+            f"file_chunk={REVERB_FILE_CHUNK}  "
+            f"gpu_batch={REVERB_GPU_BATCH}  "
+            f"device={getattr(reverb_router, 'device', '?')}"
+        )
         print()
 
-        for index, filename in enumerate(
-            tqdm(files, desc="Reverb")
-        ):
+        reverb_jobs = [
+            (index, filename)
+            for index, filename in enumerate(files)
+            if results[index] is not None and results[index].get("gender")
+        ]
 
-            if results[index] is None or not results[index].get("gender"):
-
-                continue
-
-            results[index] = _merge_reverb(results[index], filename)
+        with tqdm(total=len(reverb_jobs), desc="Reverb") as pbar:
+            for start in range(0, len(reverb_jobs), REVERB_FILE_CHUNK):
+                chunk = reverb_jobs[start : start + REVERB_FILE_CHUNK]
+                idxs = [item[0] for item in chunk]
+                paths = [item[1] for item in chunk]
+                outs = reverb_router.predict_many(
+                    paths,
+                    gpu_batch_size=REVERB_GPU_BATCH,
+                    num_workers=AUDIO_WORKERS,
+                )
+                for index, rev in zip(idxs, outs):
+                    row = results[index]
+                    if isinstance(rev, BaseException):
+                        row["error"] = (
+                            (row.get("error") or "") + f" | reverb: {rev}"
+                        ).strip(" |")
+                    else:
+                        row["reverb"] = rev["reverb"]
+                        row["reverb_confidence"] = round(
+                            rev["reverb_confidence"], 4
+                        )
+                        row["wet"] = round(rev["wet"], 4)
+                        row["dry"] = round(rev["dry"], 4)
+                pbar.update(len(chunk))
 
         print()
 
