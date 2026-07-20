@@ -11,7 +11,7 @@ Windows desktop app for batch multitrack → stem organization (2-stem / 4-stem 
 **Video:** [How to install & use](https://youtu.be/Zqj6thKYrUs)
 
 <p align="center">
-  <img src="screenshot.png" alt="STEM organizer screenshot" width="800">
+  <img src="screenshots.gif" alt="STEM organizer screenshots" width="800">
 </p>
 
 ## Tabs
