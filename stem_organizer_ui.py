@@ -7338,43 +7338,10 @@ class App(tk.Tk):
         )
 
     def _show_info_quiet(self, title: str, message: str) -> None:
-        """Modal info without Windows MessageBox system sound."""
-        import customtkinter as ctk
+        """Modal info without Windows MessageBox system sound / light chrome."""
+        from ui_theme import show_info_dark
 
-        win = ctk.CTkToplevel(self)
-        win.title(title)
-        win.transient(self)
-        win.resizable(False, False)
-        win.grab_set()
-        frame = ctk.CTkFrame(win, fg_color='transparent')
-        frame.pack(fill='both', expand=True, padx=20, pady=16)
-        ctk.CTkLabel(
-            frame,
-            text=message,
-            justify='left',
-            wraplength=420,
-            font=ctk.CTkFont(family='Segoe UI', size=13),
-        ).pack(anchor='w')
-        btn_row = ctk.CTkFrame(frame, fg_color='transparent')
-        btn_row.pack(fill='x', pady=(16, 0))
-
-        def _close() -> None:
-            try:
-                win.grab_release()
-            except tk.TclError:
-                pass
-            win.destroy()
-
-        ctk.CTkButton(btn_row, text='OK', width=88, command=_close).pack(side='right')
-        win.protocol('WM_DELETE_WINDOW', _close)
-        win.update_idletasks()
-        try:
-            x = self.winfo_rootx() + (self.winfo_width() - win.winfo_reqwidth()) // 2
-            y = self.winfo_rooty() + (self.winfo_height() - win.winfo_reqheight()) // 2
-            win.geometry(f'+{max(0, x)}+{max(0, y)}')
-        except tk.TclError:
-            pass
-        win.focus_force()
+        show_info_dark(self, title, message)
 
     def _job_finished(self):
         kind = self._worker_kind

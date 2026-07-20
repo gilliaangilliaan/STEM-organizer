@@ -263,6 +263,8 @@ def enrich_tracks(
         ]
         # Merge stderr→stdout so status/TF logs cannot fill the stderr pipe
         # and deadlock the worker (classic hang ~dozens of files in).
+        from ffmpeg_bootstrap import subprocess_kwargs
+
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -271,6 +273,7 @@ def enrich_tracks(
             encoding="utf-8",
             errors="replace",
             cwd=str(TAGGER_DIR),
+            **subprocess_kwargs(),  # hide console window on Windows
         )
         assert proc.stdout is not None
 

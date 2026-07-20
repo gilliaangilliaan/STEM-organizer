@@ -1644,8 +1644,9 @@ class PreviewPanel(ctk.CTkFrame):
             play_done_sound()
         except Exception:
             pass
-        if not self._analyze_log_active:
-            return
+
+    def end_analyze_log(self) -> None:
+        """Leave ANALYZE LOG view and restore the file preview list."""
         self._analyze_log_active = False
         self._preview_title.configure(text="PREVIEW")
         try:

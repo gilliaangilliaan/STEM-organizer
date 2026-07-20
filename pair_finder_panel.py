@@ -25,6 +25,7 @@ from stem_align import (
     default_without_original_dir,
     distribute_originals,
     export_song_list,
+    resolve_export_list_path,
     sort_folders_by_original,
 )
 from stem_player import open_stem_player
@@ -925,13 +926,17 @@ class PairFinderPanel(ctk.CTkFrame):
         if self._busy or self._host._organize_worker_active():
             return
         root = Path(self.align_stems_root.get().strip())
-        export_path = Path(self.align_export_file.get().strip())
+        export_path = resolve_export_list_path(
+            Path(self.align_export_file.get().strip())
+        )
         if not root.is_dir():
             messagebox.showerror(PANEL_TITLE, 'Stems root folder is missing or invalid.')
             return
-        if not export_path.parent.exists():
+        if not export_path.parent.is_dir():
             messagebox.showerror(PANEL_TITLE, 'Export list folder does not exist.')
             return
+        # Persist resolved file path if user pasted a folder (e.g. same as stems root).
+        self.align_export_file.set(display_path(str(export_path)))
         self._clear_log()
         self._set_busy(True, 'Exporting song list…')
         self._worker = threading.Thread(

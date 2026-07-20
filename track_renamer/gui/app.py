@@ -36,7 +36,7 @@ from track_renamer.gui.rules_panel import RulesPanel
 from track_renamer.gui.theme import DARK
 from track_renamer.gui.tips import TIPS
 from track_renamer.gui.tooltip import bind_tooltip
-from ui_theme import ACTION_BTN_GAP, ctk_action_button
+from ui_theme import ACTION_BTN_GAP, ask_yes_no_dark, ctk_action_button, show_info_dark
 
 PRESETS_DIR = Path.home() / ".track_renamer" / "presets"
 class TrackRenamerApp(ctk.CTk):
@@ -490,20 +490,20 @@ class TrackRenamerApp(ctk.CTk):
                 renames = self._compute_selected_renames()
                 self._set_busy(False)
                 if not renames:
-                    messagebox.showinfo(
+                    show_info_dark(
+                        parent,
                         "Nothing to rename",
                         "No selected files will change after instrument analysis.\n\n"
                         "Check ANALYZE LOG: SKIP = unmapped label (or error).",
-                        parent=parent,
                     )
                     self.preview_panel.end_analyze_log()
                     self._refresh_preview()
                     return
-                if not messagebox.askyesno(
+                if not ask_yes_no_dark(
+                    parent,
                     "Confirm rename",
                     f"Rename {len(renames):,} file(s) on disk?\n\n"
                     "This cannot be undone automatically.",
-                    parent=parent,
                 ):
                     self.preview_panel.end_analyze_log()
                     self._refresh_preview()

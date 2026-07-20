@@ -147,11 +147,20 @@ def list_with_original_subfolders(
     return sorted(p for p in with_dir.iterdir() if p.is_dir())
 
 
+def resolve_export_list_path(output_file: Path) -> Path:
+    """Export target must be a .txt path. If user picks/pastes a folder, write inside it."""
+    path = Path(output_file)
+    if path.is_dir():
+        return path / 'songs_to_download.txt'
+    return path
+
+
 def export_song_list(root: Path, output_file: Path) -> int:
     folders = list_song_subfolders(root)
     lines = [p.name for p in folders]
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_text('\n'.join(lines) + ('\n' if lines else ''), encoding='utf-8')
+    out = resolve_export_list_path(output_file)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text('\n'.join(lines) + ('\n' if lines else ''), encoding='utf-8')
     return len(lines)
 
 

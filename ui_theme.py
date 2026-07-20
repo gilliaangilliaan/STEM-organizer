@@ -360,6 +360,111 @@ def apply_toplevel_rounded_corners(win: tk.Misc, *, maximized: bool = False):
         pass
 
 
+def _center_toplevel(win: tk.Misc, parent: tk.Misc) -> None:
+    win.update_idletasks()
+    try:
+        pw = parent.winfo_toplevel()
+        x = pw.winfo_rootx() + (pw.winfo_width() - win.winfo_reqwidth()) // 2
+        y = pw.winfo_rooty() + (pw.winfo_height() - win.winfo_reqheight()) // 2
+        win.geometry(f'+{max(0, x)}+{max(0, y)}')
+    except tk.TclError:
+        pass
+
+
+def show_info_dark(parent: tk.Misc, title: str, message: str) -> None:
+    """Dark themed OK dialog (no Windows MessageBox sound / light chrome)."""
+    import customtkinter as ctk
+
+    root = parent.winfo_toplevel()
+    win = ctk.CTkToplevel(root)
+    win.title(title)
+    win.transient(root)
+    win.resizable(False, False)
+    apply_toplevel_icon(win)
+    win.grab_set()
+
+    frame = ctk.CTkFrame(win, fg_color='transparent')
+    frame.pack(fill='both', expand=True, padx=20, pady=16)
+    ctk.CTkLabel(
+        frame,
+        text=message,
+        justify='left',
+        wraplength=420,
+        font=ctk.CTkFont(family='Segoe UI', size=13),
+    ).pack(anchor='w')
+    btn_row = ctk.CTkFrame(frame, fg_color='transparent')
+    btn_row.pack(fill='x', pady=(16, 0))
+
+    def _close() -> None:
+        try:
+            win.grab_release()
+        except tk.TclError:
+            pass
+        win.destroy()
+
+    ctk.CTkButton(btn_row, text='OK', width=88, command=_close).pack(side='right')
+    win.protocol('WM_DELETE_WINDOW', _close)
+    win.after(10, lambda: apply_toplevel_icon(win))
+    _center_toplevel(win, parent)
+    win.focus_force()
+    win.wait_window()
+
+
+def ask_yes_no_dark(
+    parent: tk.Misc,
+    title: str,
+    message: str,
+    *,
+    yes_text: str = 'Yes',
+    no_text: str = 'No',
+) -> bool:
+    """Dark themed Yes/No dialog. Returns True if Yes."""
+    import customtkinter as ctk
+
+    root = parent.winfo_toplevel()
+    result = {'ok': False}
+    win = ctk.CTkToplevel(root)
+    win.title(title)
+    win.transient(root)
+    win.resizable(False, False)
+    apply_toplevel_icon(win)
+    win.grab_set()
+
+    frame = ctk.CTkFrame(win, fg_color='transparent')
+    frame.pack(fill='both', expand=True, padx=20, pady=16)
+    ctk.CTkLabel(
+        frame,
+        text=message,
+        justify='left',
+        wraplength=420,
+        font=ctk.CTkFont(family='Segoe UI', size=13),
+    ).pack(anchor='w')
+    btn_row = ctk.CTkFrame(frame, fg_color='transparent')
+    btn_row.pack(fill='x', pady=(16, 0))
+
+    def _finish(ok: bool) -> None:
+        result['ok'] = ok
+        try:
+            win.grab_release()
+        except tk.TclError:
+            pass
+        win.destroy()
+
+    ctk.CTkButton(
+        btn_row, text=no_text, width=88, fg_color=DARK['panel_2'],
+        hover_color=DARK['border'], command=lambda: _finish(False),
+    ).pack(side='right', padx=(8, 0))
+    ctk.CTkButton(
+        btn_row, text=yes_text, width=88, command=lambda: _finish(True),
+    ).pack(side='right')
+    win.protocol('WM_DELETE_WINDOW', lambda: _finish(False))
+    win.after(10, lambda: apply_toplevel_icon(win))
+    _center_toplevel(win, parent)
+    win.focus_force()
+    win.wait_window()
+    return bool(result['ok'])
+
+
 def show_ctk_help_dialog(
     parent: tk.Misc,
     *,

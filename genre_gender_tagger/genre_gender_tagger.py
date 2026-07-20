@@ -78,6 +78,11 @@ def print_feature_summary(
     print("DONE", flush=True)
 
 
+def _status(msg):
+    """Immediate console feedback during slow startup imports."""
+    print(msg, flush=True)
+
+
 _status(f"{APP_NAME} v{APP_VERSION}")
 _status("Starting up...")
 
