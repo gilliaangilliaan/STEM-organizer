@@ -2269,11 +2269,6 @@ class SdrWorker(threading.Thread):
 
         self._phase_timer.add('separation', sep_dt)
         self._phase_timer.add('sdr_compute', sdr_dt)
-        self.log(
-            f'  [timing] load {format_duration_log(load_dt)} | '
-            f'separation {format_duration_log(sep_dt)} | '
-            f'SDR {format_duration_log(sdr_dt)}'
-        )
 
         failed = [(cat, stem_paths[cat], scores[cat]) for cat in categories
                   if scores[cat] < thresholds[cat]]
