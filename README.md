@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="STEM organizer logo" width="200">
+  <img src="logo.png" alt="STEM organizer logo" width="320">
 </p>
 
 # STEM organizer
