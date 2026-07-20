@@ -13,9 +13,10 @@ import tkinter as tk
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 
 from ffmpeg_bootstrap import subprocess_kwargs
+from ui_theme import show_info_dark
 
 if sys.platform == 'win32':
     import ctypes
@@ -1409,7 +1410,7 @@ class StemPlayerWindow(tk.Toplevel):
         try:
             self._engine.start_stream()
         except Exception as exc:
-            messagebox.showerror('STEM player', f'Audio output failed:\n{exc}', parent=self)
+            show_info_dark(self, 'Stem player', f'Audio output failed:\n{exc}')
             self._engine = None
             return False
         return True
@@ -1529,7 +1530,7 @@ class StemPlayerWindow(tk.Toplevel):
             else:
                 subprocess.run(['xdg-open', str(self._folder)], check=False)
         except Exception as exc:
-            messagebox.showerror('STEM player', f'Could not open folder:\n{exc}', parent=self)
+            show_info_dark(self, 'Stem player', f'Could not open folder:\n{exc}')
 
     def _refresh_shortcuts_footer(self) -> None:
         for child in self._shortcuts_bar.winfo_children():
@@ -1876,10 +1877,10 @@ class StemPlayerWindow(tk.Toplevel):
     def _open_library(self, library_root: Path, *, start_index: int = 0) -> None:
         self._prepare_library(library_root)
         if not self._song_folders:
-            messagebox.showwarning(
+            show_info_dark(
+                self,
                 'Stem player',
                 f'No song folders found in:\n{library_root}',
-                parent=self,
             )
             return
         index = max(0, min(start_index, len(self._song_folders) - 1))
@@ -1974,7 +1975,7 @@ class StemPlayerWindow(tk.Toplevel):
             if err is not None:
                 reload_folder = folder.is_dir()
                 if result['kind'] == 'exists':
-                    messagebox.showerror('Stem player', str(err), parent=self)
+                    show_info_dark(self, 'Stem player', str(err))
                 elif result['kind'] == 'os':
                     msg = f'Could not rename folder:\n{err}'
                     if getattr(err, 'winerror', None) == 5:
@@ -1982,9 +1983,9 @@ class StemPlayerWindow(tk.Toplevel):
                             '\n\nClose any File Explorer window showing this folder, '
                             'then try again.'
                         )
-                    messagebox.showerror('Stem player', msg, parent=self)
+                    show_info_dark(self, 'Stem player', msg)
                 else:
-                    messagebox.showerror('STEM player', str(err), parent=self)
+                    show_info_dark(self, 'Stem player', str(err))
                 return
 
             new_path = result['new_path']
@@ -2016,11 +2017,11 @@ class StemPlayerWindow(tk.Toplevel):
 
     def _load_folder(self) -> None:
         if sd is None:
-            messagebox.showerror(
+            show_info_dark(
+                self,
                 'Stem player',
                 'Audio playback requires the sounddevice package.\n\n'
                 'Re-run install-deps.bat to install it, then restart the app.',
-                parent=self,
             )
             return
 
@@ -2068,11 +2069,11 @@ class StemPlayerWindow(tk.Toplevel):
         if not stems:
             self._folder_job_active = False
             self._end_busy(gen)
-            messagebox.showwarning(
+            show_info_dark(
+                self,
                 'Stem player',
                 'No stem files found in this folder.\n\n'
                 'Expected instrumental, acapella, and/or (original song) audio files.',
-                parent=self,
             )
             return
 
@@ -2114,10 +2115,10 @@ class StemPlayerWindow(tk.Toplevel):
         if gen != self._busy_generation:
             return
         if err is not None or tracks is None:
-            messagebox.showerror(
-                'STEM player',
+            show_info_dark(
+                self,
+                'Stem player',
                 str(err) if err is not None else 'Load failed.',
-                parent=self,
             )
             self._folder_job_active = False
             self._end_busy(gen)
