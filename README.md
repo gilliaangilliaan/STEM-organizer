@@ -6,9 +6,11 @@
 
 Windows desktop app for batch multitrack → stem organization (2-stem / 4-stem via Demucs + RMS / SI-SDR), plus **STEM player**, **Match & Align**, **Genre & Gender** tagging, and **Track Renamer**.
 
-**By:** Gilliaan & Bas Curtiz  
-**Repo:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  
-**Video:** [How to install & use](https://youtu.be/Zqj6thKYrUs)
+<p align="center">
+  <strong>By:</strong> Gilliaan &amp; Bas Curtiz<br>
+  <strong>Repo:</strong> <a href="https://github.com/gilliaangilliaan/STEM-organizer">github.com/gilliaangilliaan/STEM-organizer</a><br>
+  <strong>Video:</strong> <a href="https://youtu.be/Zqj6thKYrUs">How to install &amp; use</a>
+</p>
 
 <p align="center">
   <img src="screenshots.gif" alt="STEM organizer screenshots" width="800">
