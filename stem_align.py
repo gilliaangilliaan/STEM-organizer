@@ -45,7 +45,6 @@ PROGRESS_EVERY = 25
 DEFAULT_FOLDER_MATCH_RULES = IgnoreRules(
     ignore_parentheses=True,
     ignore_square_brackets=True,
-    ignore_all_brackets=True,
     ignore_extra_spaces=True,
 )
 DEFAULT_MATCH_THRESHOLD = 0.60

@@ -11,7 +11,7 @@ import traceback
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
 
 from pair_matcher import (
     IgnoreRules,
@@ -29,52 +29,27 @@ from stem_align import (
 )
 from stem_player import open_stem_player
 from ui_theme import (
-    ACTIONS_BOTTOM_PAD,
-    ACTION_BTN_FONT,
-    ACTION_BTN_PADX,
-    ACTION_BTN_PADY,
+    ACTION_BTN_GAP,
     COLORS,
-    CONTENT_PAD,
     CTRL_ROW_PADY,
-    DarkScrollbar,
-    HEADER_DESC_FONT,
+    DARK,
+    HEADER_DESC_COLOR,
     HEADER_TOP_PAD,
-    LOG_FONT,
-    LOG_INNER_PAD,
-    LOG_WARN_COLOR,
-    LEFT_PANEL_WIDTH,
-    PATH_BTN_FONT,
-    PATH_BTN_PADX,
-    PATH_BTN_PADY,
+    PATH_BTN_HEIGHT,
     SECTION_GAP,
     SECTION_INNER_PAD,
     SECTION_PADX,
-    SECTION_SIDE_PAD_LEFT,
-    STATUS_BOTTOM_PAD,
-    STATUS_FONT,
-    STATUS_FRAME_HEIGHT,
-    STATUS_IDLE_Y,
-    STATUS_PAD_BOTTOM,
-    STATUS_PAD_TOP,
-    STATUS_PAD_X,
-    STATUS_PCT_FONT,
-    STATUS_PROGRESS_HEIGHT,
-    STATUS_PROGRESS_ROW_HEIGHT,
-    STATUS_PROGRESS_Y_PAD,
-    STATUS_ROW_GAP,
-    STATUS_TOP_PAD,
-    RESOURCE_BAR_HEIGHT,
-    RESOURCE_BAR_WIDTH,
-    RESOURCE_ROW_HEIGHT,
     Tooltip,
-    WIN_DEFAULT_H,
-    WIN_DEFAULT_W,
-    apply_theme,
-    bind_mousewheel,
+    ctk_action_button,
+    ctk_path_row,
+    ctk_pin_button_height,
+    ctk_section,
+    ctk_section_font,
+    ctk_size_subtab_buttons,
+    ctk_ui_font,
     display_path,
-    format_eta,
-    format_status_clock,
-    place_window_centered,
+    ensure_ctk_dark,
+    show_ctk_help_dialog,
     tip,
 )
 
@@ -91,10 +66,12 @@ TIPS = {
     'pairs_output': 'Matched pairs are moved here (flat folder).',
     'organize': 'Folder of matched FLAC/MP3 files to group into Artist - Title subfolders.',
     'strictness': 'Higher = stricter tag matching. Compares artist and title separately; both must meet the threshold.',
-    'filename_fallback': 'When artist or title tags are missing, parse them from the filename (e.g. Artist - Title (Acapella).mp3).',
+    'filename_fallback': (
+        'Parse artist/title from the filename only (e.g. Artist - Title (Acapella).mp3), '
+        'even when metadata tags exist. Off = use tags only.'
+    ),
     'ignore_parentheses': 'Strip text inside (parentheses) before comparing tags.',
     'ignore_square': 'Strip text inside [square brackets] before comparing tags.',
-    'ignore_all_brackets': 'Strip both (parentheses) and [square brackets] before comparing.',
     'ignore_spaces': 'Collapse repeated spaces and trim edges before comparing.',
     'ignore_custom': 'Remove these words or phrases from tags (case-insensitive) before comparing.',
     'add_keyword': 'Add a custom keyword to ignore.',
@@ -105,10 +82,13 @@ TIPS = {
     'align_backup': 'Copy instrumental and acapella to _backup_before_align before overwriting.',
     'align_skip_existing': 'Skip song folders that already contain _backup_before_align (from a previous align run).',
     'align_analysis': 'Seconds of audio used to cross-correlate stems against the original song.',
-    'align_sort_after': 'After distributing, move song folders into with_original and without_original subfolders.',
     'align_with_original': 'Folders that received an original song (auto-filled as stems root / with_original).',
     'align_play_stems': 'Open stem player on the with_original library (instrumental, acapella, original).',
     'align_without_original': 'Folders still missing an original (auto-filled as stems root / without_original).',
+    'export_list_btn': 'Write song-folder names from Stems root into the export list file.',
+    'distribute_btn': 'Copy originals from the inbox into matching song folders under Stems root.',
+    'sort_folders_btn': 'Move song folders into with_original / without_original based on whether an original exists.',
+    'align_stems_btn': 'Align acapella and instrumental stems to the original song timeline.',
 }
 
 
@@ -131,134 +111,16 @@ def save_settings(data: dict) -> None:
         pass
 
 
-def show_match_align_help_dialog(parent: tk.Misc, mode: str) -> None:
-    is_match = mode == 'match'
-    title = 'Match help' if is_match else 'Align help'
-    heading = 'Match acapellas & instrumentals' if is_match else 'Align stems to the original'
-    intro = (
-        'Find matching versions by artist and title, then turn them into an organized library.'
-        if is_match else
-        'Use the original song as the master timeline for its instrumental and acapella.'
-    )
-    sections = (
-        (
-            'Workflow',
-            '1. Choose the Acapella and Instrumental source folders.\n'
-            '2. Choose where matched files should be moved.\n'
-            '3. Set the reference side and matching strictness.\n'
-            '4. Click Find pairs, review the log, then organize the matched folder.',
-        ),
-        (
-            'How matching works',
-            'Artist and title tags are compared separately. The reference folder drives the scan: '
-            'each reference file searches for its best partner in the other folder. Filename fallback '
-            'can recover artist and title when tags are missing.',
-        ),
-        (
-            'Tune the result',
-            'Lower strictness accepts small differences such as extra artists, spacing, or “&” versus '
-            '“and”. Ignore rules remove brackets, extra spaces, and custom words before comparison; '
-            'they do not rename the source files.',
-        ),
-        (
-            'File safety',
-            'Find pairs moves only confirmed matches into the output folder. Organize folder then groups '
-            'those matched files into Artist - Title subfolders. Unmatched files remain in their source folder.',
-        ),
-    ) if is_match else (
-        (
-            'Required layout',
-            'Stems root contains one folder per song, with an instrumental and acapella inside. '
-            'Downloaded original songs first go into the Originals inbox.',
-        ),
-        (
-            'Four-step workflow',
-            '1. Export the song-folder names as a download list.\n'
-            '2. Put downloaded originals in the inbox and distribute them.\n'
-            '3. Sort song folders into with_original and without_original.\n'
-            '4. Align folders that have an original.',
-        ),
-        (
-            'How alignment works',
-            'The original song is the master timeline. Audio is analyzed to estimate the offset; silence '
-            'is added or the beginning is trimmed so the instrumental and acapella start at the correct time. '
-            'A longer analysis window can help difficult material but takes more time.',
-        ),
-        (
-            'File safety',
-            'Keep Backup stems before align enabled to preserve the untouched files in '
-            '_backup_before_align. Skip if output already exists makes interrupted batches safe to resume.',
-        ),
-    )
-
-    dialog = tk.Toplevel(parent)
-    dialog.title(title)
-    dialog.configure(bg=COLORS['panel'])
-    dialog.resizable(False, False)
-    dialog.transient(parent.winfo_toplevel())
-
-    outer = tk.Frame(dialog, bg=COLORS['panel'])
-    outer.pack(fill='both', expand=True, padx=22, pady=18)
-    tk.Label(
-        outer, text=heading, font=('Segoe UI Semibold', 18),
-        fg=COLORS['fg'], bg=COLORS['panel'],
-    ).pack(anchor='w')
-    tk.Label(
-        outer, text=intro, font=('Segoe UI', 10),
-        fg=COLORS['fg_dim'], bg=COLORS['panel'],
-    ).pack(anchor='w', pady=(2, 14))
-
-    for section_title, body in sections:
-        card = tk.Frame(
-            outer, bg=COLORS['panel2'],
-            highlightbackground=COLORS['border'], highlightthickness=1,
-        )
-        card.pack(fill='x', pady=(0, 10))
-        tk.Label(
-            card, text=section_title.upper(), font=('Segoe UI Semibold', 9),
-            fg=COLORS['accent_hov'], bg=COLORS['panel2'],
-        ).pack(anchor='w', padx=14, pady=(10, 4))
-        tk.Label(
-            card, text=body, font=('Segoe UI', 10),
-            fg=COLORS['fg_dim'], bg=COLORS['panel2'],
-            justify='left', anchor='w', wraplength=600,
-        ).pack(fill='x', padx=14, pady=(0, 11))
-
-    footer = tk.Frame(outer, bg=COLORS['panel'])
-    footer.pack(fill='x', pady=(2, 0))
-    tk.Label(
-        footer,
-        text='Hover over individual controls for more detail.',
-        font=('Segoe UI', 9), fg=COLORS['fg_dim'], bg=COLORS['panel'],
-    ).pack(side='left')
-    close = tk.Button(
-        footer, text='Close', command=dialog.destroy,
-        font=('Segoe UI Semibold', 10),
-        bg=COLORS['accent'], fg='#ffffff',
-        activebackground=COLORS['accent_hov'], activeforeground='#ffffff',
-        relief='flat', borderwidth=0, highlightthickness=0,
-        padx=18, pady=5, cursor='hand2',
-    )
-    close.pack(side='right')
-
-    dialog.bind('<Escape>', lambda _event: dialog.destroy())
-    dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
-    dialog.update_idletasks()
-    width = 680
-    height = max(540, outer.winfo_reqheight() + 36)
-    top = parent.winfo_toplevel()
-    x = top.winfo_rootx() + max(0, (top.winfo_width() - width) // 2)
-    y = top.winfo_rooty() + max(0, (top.winfo_height() - height) // 2)
-    dialog.geometry(f'{width}x{height}+{x}+{y}')
-    dialog.grab_set()
-    close.focus_set()
+ctk = ensure_ctk_dark()
 
 
-class PairFinderPanel(ttk.Frame):
+class PairFinderPanel(ctk.CTkFrame):
     def __init__(self, host: tk.Misc, parent: tk.Misc, info_icon_factory=None) -> None:
-        super().__init__(parent)
+        ensure_ctk_dark()
+        super().__init__(parent, fg_color=DARK['bg'])
         self._host = host
         self._info_icon_factory = info_icon_factory
+        self._ctk = ctk
 
         self.acapella_dir = tk.StringVar()
         self.instrumental_dir = tk.StringVar()
@@ -274,12 +136,10 @@ class PairFinderPanel(ttk.Frame):
         self.align_backup = tk.BooleanVar(value=True)
         self.align_skip_existing = tk.BooleanVar(value=True)
         self.align_analysis_sec = tk.IntVar(value=30)
-        self.align_sort_after = tk.BooleanVar(value=True)
         self.align_with_original_dir = tk.StringVar()
         self.align_without_original_dir = tk.StringVar()
         self.ignore_parentheses = tk.BooleanVar(value=True)
         self.ignore_square_brackets = tk.BooleanVar(value=True)
-        self.ignore_all_brackets = tk.BooleanVar(value=True)
         self.ignore_extra_spaces = tk.BooleanVar(value=True)
         self._custom_keyword_vars: list[tk.StringVar] = []
         self._busy = False
@@ -291,192 +151,375 @@ class PairFinderPanel(ttk.Frame):
         self._load_settings()
 
     def _build_ui(self) -> None:
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
+        ctk = self._ctk
+        t = DARK
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-        notebook = ttk.Notebook(self, style='Sub.TNotebook', takefocus=0)
-        notebook.grid(row=0, column=0, sticky='nsew')
-        self._notebook = notebook
-        pair_tab = ttk.Frame(notebook)
-        align_tab = ttk.Frame(notebook)
-        notebook.add(pair_tab, text='  Match  ')
-        notebook.add(align_tab, text='  Align  ')
-        notebook.bind('<<NotebookTabChanged>>', self._on_pair_subtab_changed)
+        tabview = ctk.CTkTabview(
+            self,
+            fg_color=t['bg'],
+            segmented_button_fg_color=t['panel'],
+            segmented_button_selected_color=t['accent'],
+            segmented_button_selected_hover_color=t['accent_hover'],
+            segmented_button_unselected_color=t['panel_2'],
+            segmented_button_unselected_hover_color=t['border'],
+            text_color=t['text'],
+            anchor='w',
+            command=self._on_pair_subtab_changed,
+        )
+        tabview.grid(row=0, column=0, sticky='nsew')
+        self._tabview = tabview
+
+        pair_tab = tabview.add('Match')
+        align_tab = tabview.add('Align')
+        ctk_size_subtab_buttons(tabview)
         self._build_pair_tab(pair_tab)
         self._build_align_tab(align_tab)
 
     def _make_info_icon(self, parent: tk.Misc, command) -> None:
+        # CTkLabel is taller than the glyph; pin icon to top next to the text.
+        pack_kw = dict(side='left', padx=(4, 0), anchor='n', pady=(5, 0))
         if self._info_icon_factory is not None:
-            self._info_icon_factory(parent, command).pack(side='left', padx=(4, 0))
+            self._info_icon_factory(parent, command).pack(**pack_kw)
             return
         fallback = tk.Label(
             parent, text='?', font=('Segoe UI Semibold', 9),
-            fg=COLORS['fg_dim'], bg=COLORS['bg'], cursor='hand2',
+            fg=COLORS['fg_dim'], bg=DARK['bg'], cursor='hand2',
         )
-        fallback.pack(side='left', padx=(5, 0))
+        fallback.pack(**pack_kw)
         fallback.bind('<Button-1>', lambda _event: command())
         Tooltip(fallback, 'Show more info/help.')
 
     def _show_match_help(self) -> None:
-        show_match_align_help_dialog(self._host, 'match')
+        show_ctk_help_dialog(
+            self._host,
+            title='Match help',
+            heading='Match acapellas & instrumentals',
+            intro=(
+                'Find matching versions by artist and title, then turn them into an organized library.'
+            ),
+            sections=(
+                (
+                    'Workflow',
+                    '1. Choose the Acapella and Instrumental source folders.\n'
+                    '2. Choose where matched files should be moved.\n'
+                    '3. Set the reference side and matching strictness.\n'
+                    '4. Click Find pairs, review the log, then organize the matched folder.',
+                ),
+                (
+                    'How matching works',
+                    'Artist and title tags are compared separately. The reference folder drives the scan: '
+                    'each reference file searches for its best partner in the other folder. '
+                    '"Use filename instead" parses artist/title from the filename only, ignoring tags.',
+                ),
+                (
+                    'Tune the result',
+                    'Lower strictness accepts small differences such as extra artists, spacing, or “&” versus '
+                    '“and”. Ignore rules remove brackets, extra spaces, and custom words before comparison; '
+                    'they do not rename the source files.',
+                ),
+                (
+                    'File safety',
+                    'Find pairs moves only confirmed matches into the output folder. Organize folder then groups '
+                    'those matched files into Artist - Title subfolders. Unmatched files remain in their source folder.',
+                ),
+            ),
+        )
 
     def _show_align_help(self) -> None:
-        show_match_align_help_dialog(self._host, 'align')
+        show_ctk_help_dialog(
+            self._host,
+            title='Align help',
+            heading='Align stems to the original',
+            intro=(
+                'Use the original song as the master timeline for its instrumental and acapella.'
+            ),
+            sections=(
+                (
+                    'Required layout',
+                    'Stems root contains one folder per song, with an instrumental and acapella inside. '
+                    'Downloaded original songs first go into the Originals inbox.',
+                ),
+                (
+                    'Four-step workflow',
+                    '1. Export the song-folder names as a download list.\n'
+                    '2. Put downloaded originals in the inbox and distribute them.\n'
+                    '3. Sort song folders into with_original and without_original.\n'
+                    '4. Align folders that have an original.',
+                ),
+                (
+                    'How alignment works',
+                    'The original song is the master timeline. Audio is analyzed to estimate the offset; silence '
+                    'is added or the beginning is trimmed so the instrumental and acapella start at the correct time. '
+                    'A longer analysis window can help difficult material but takes more time.',
+                ),
+                (
+                    'File safety',
+                    'Keep Backup stems before align enabled to preserve the untouched files in '
+                    '_backup_before_align. Skip if output already exists makes interrupted batches safe to resume.',
+                ),
+            ),
+        )
 
     def _description_with_info(
         self,
         parent: tk.Misc,
-        first_line: str,
-        final_line: str,
+        text: str,
         command,
+        *,
+        final_line: str | None = None,
     ) -> None:
-        tk.Label(
+        """Description + ? icon snug after the last word.
+
+        Single-line (final_line=None): shrink-wrapped text, icon immediately after.
+        Two-line: first line alone; final_line + icon on the second row so ? sits
+        after the last word even when the blurb is long (Align).
+        """
+        ctk = self._ctk
+        desc_font = ctk_ui_font()
+        if final_line is None:
+            desc_row = ctk.CTkFrame(parent, fg_color='transparent')
+            desc_row.pack(fill='x', anchor='w')
+            ctk.CTkLabel(
+                desc_row,
+                text=text,
+                font=desc_font,
+                text_color=HEADER_DESC_COLOR,
+                anchor='w',
+            ).pack(side='left')
+            self._make_info_icon(desc_row, command)
+            return
+
+        ctk.CTkLabel(
             parent,
-            text=first_line,
-            font=HEADER_DESC_FONT, fg=COLORS['fg'], bg=COLORS['bg'],
-            wraplength=520, justify='left',
+            text=text,
+            font=desc_font,
+            text_color=HEADER_DESC_COLOR,
+            anchor='w',
         ).pack(anchor='w')
-        final_row = tk.Frame(parent, bg=COLORS['bg'])
+        final_row = ctk.CTkFrame(parent, fg_color='transparent')
         final_row.pack(fill='x', anchor='w')
-        tk.Label(
+        ctk.CTkLabel(
             final_row,
             text=final_line,
-            font=HEADER_DESC_FONT, fg=COLORS['fg'], bg=COLORS['bg'],
-            justify='left',
+            font=desc_font,
+            text_color=HEADER_DESC_COLOR,
+            anchor='w',
         ).pack(side='left')
         self._make_info_icon(final_row, command)
 
-    def _build_pair_tab(self, left: ttk.Frame) -> None:
-        header = ttk.Frame(left)
+    def _build_pair_tab(self, left: tk.Misc) -> None:
+        ctk = self._ctk
+        t = DARK
+
+        header = ctk.CTkFrame(left, fg_color='transparent')
         header.pack(fill='x', padx=SECTION_PADX, pady=(HEADER_TOP_PAD, 12))
         self._description_with_info(
             header,
-            'Match acapella and instrumental FLAC/MP3 files by artist/title tags, then organize pairs',
-            'into song folders.',
+            'Match acapella/instrumental files by artist/title tags, then organize pairs into song folders.',
             self._show_match_help,
         )
 
-        paths = ttk.LabelFrame(left, text='  FOLDERS  ', padding=SECTION_INNER_PAD)
-        paths.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
-        paths.columnconfigure(1, weight=1)
+        paths = ctk_section(left, 'Folders')
+        paths.grid_columnconfigure(1, weight=1)
         self._path_row(paths, 0, 'Acapella', self.acapella_dir, self._pick_acapella, self._open_acapella, TIPS['acapella'])
         self._path_row(paths, 1, 'Instrumental', self.instrumental_dir, self._pick_instrumental, self._open_instrumental, TIPS['instrumental'])
         self._path_row(paths, 2, 'Pairs output', self.pairs_output_dir, self._pick_pairs_output, self._open_pairs_output, TIPS['pairs_output'])
         self._path_row(paths, 3, 'Organize in', self.organize_dir, self._pick_organize, self._open_organize, TIPS['organize'])
 
-        ref_frame = ttk.Frame(paths)
+        ref_frame = ctk.CTkFrame(paths, fg_color='transparent')
         ref_frame.grid(row=4, column=0, columnspan=4, sticky='w', pady=(8, 0))
-        ttk.Label(ref_frame, text='Reference folder').pack(side='left', padx=(0, 12))
-        acap_ref = ttk.Radiobutton(ref_frame, text='Acapella', variable=self.reference_side, value='acapella')
-        acap_ref.pack(side='left', padx=(0, 10))
-        inst_ref = ttk.Radiobutton(ref_frame, text='Instrumental', variable=self.reference_side, value='instrumental')
-        inst_ref.pack(side='left')
-        tip(acap_ref, inst_ref, text=TIPS['reference'])
+        _ui = ctk_ui_font()
+        ctk.CTkLabel(
+            ref_frame, text='Reference folder', text_color=t['label'], font=_ui,
+        ).pack(side='left', padx=(0, 24))
+        ref_widgets: list = []
+        for idx, (label, value) in enumerate((
+            ('Acapella', 'acapella'),
+            ('Instrumental', 'instrumental'),
+        )):
+            opt = ctk.CTkFrame(ref_frame, fg_color='transparent')
+            opt.pack(side='left', padx=(0, 28 if idx == 0 else 0))
+            rb = ctk.CTkRadioButton(
+                opt,
+                text='',
+                variable=self.reference_side,
+                value=value,
+                fg_color=t['accent'],
+                border_color=t['border'],
+                hover_color=t['accent_hover'],
+                font=_ui,
+                width=22,
+                radiobutton_width=22,
+                radiobutton_height=22,
+            )
+            rb.pack(side='left')
+            ref_widgets.append(rb)
 
-        subfolder_chk = ttk.Checkbutton(
-            paths, text='Include subfolders',
-            variable=self.include_subfolders,
+            def _pick(_event=None, v=value) -> None:
+                self.reference_side.set(v)
+
+            lbl = ctk.CTkLabel(
+                opt, text=label, text_color=t['text'], font=_ui, cursor='hand2',
+            )
+            lbl.pack(side='left', padx=(6, 0))
+            lbl.bind('<Button-1>', _pick)
+            ref_widgets.append(lbl)
+        tip(*ref_widgets, text=TIPS['reference'])
+
+        subfolder_chk = ctk.CTkCheckBox(
+            paths, text='Include subfolders', variable=self.include_subfolders,
+            fg_color=t['accent'], hover_color=t['accent_hover'], text_color=t['text'],
+            font=_ui,
         )
         subfolder_chk.grid(row=5, column=0, columnspan=4, sticky='w', pady=(8, 0))
         tip(subfolder_chk, text=TIPS['include_subfolders'])
 
-        match_opts = ttk.LabelFrame(left, text='  MATCHING  ', padding=SECTION_INNER_PAD)
-        match_opts.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
-        match_opts.columnconfigure(1, weight=1)
-        strict_lbl = ttk.Label(match_opts, text='Tag strictness')
+        match_opts = ctk_section(left, 'Matching')
+        match_opts.grid_columnconfigure(1, weight=1)
+        strict_lbl = ctk.CTkLabel(
+            match_opts, text='Tag strictness', text_color=t['label'], font=_ui,
+        )
         strict_lbl.grid(row=0, column=0, sticky='w', padx=(0, 10), pady=6)
-        strict_row = ttk.Frame(match_opts)
+        strict_row = ctk.CTkFrame(match_opts, fg_color='transparent')
         strict_row.grid(row=0, column=1, sticky='ew', pady=6)
-        strict_row.columnconfigure(0, weight=1)
-        self.strictness_readout = ttk.Label(strict_row, text=self._strictness_label(), style='Dim.TLabel', width=16)
-        self.strictness_scale = ttk.Scale(
-            strict_row, from_=0, to=100, orient='horizontal', variable=self.strictness,
+        strict_row.grid_columnconfigure(0, weight=1)
+        self.strictness_readout = ctk.CTkLabel(
+            strict_row, text=self._strictness_label(), text_color=t['text'],
+            width=120, font=_ui,
+        )
+        self.strictness_scale = ctk.CTkSlider(
+            strict_row, from_=0, to=100, variable=self.strictness,
+            progress_color=t['accent'], button_color=t['accent'],
+            button_hover_color=t['accent_hover'],
             command=lambda _v: self.strictness_readout.configure(text=self._strictness_label()),
         )
         self.strictness_scale.grid(row=0, column=0, sticky='ew')
         self.strictness_readout.grid(row=0, column=1, padx=(8, 0))
         tip(strict_lbl, self.strictness_scale, self.strictness_readout, text=TIPS['strictness'])
-        ttk.Label(
+        ctk.CTkLabel(
             match_opts,
-            text='Loose accepts minor tag differences (extra artists, & vs and, spacing). Strict requires near-exact tags.',
-            style='Dim.TLabel', wraplength=520,
+            text=(
+                'Loose accepts minor tag differences (extra artists, & vs and, spacing).\n'
+                'Strict requires near-exact tags.'
+            ),
+            text_color=t['text_dim'],
+            font=_ui,
+            wraplength=520,
+            justify='left',
+            anchor='w',
         ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(2, 0))
-        fallback_chk = ttk.Checkbutton(
-            match_opts, text='Use filename when tags are missing',
+        fallback_chk = ctk.CTkCheckBox(
+            match_opts, text='Use filename instead',
             variable=self.use_filename_fallback,
+            fg_color=t['accent'], hover_color=t['accent_hover'], text_color=t['text'],
+            font=_ui,
         )
         fallback_chk.grid(row=2, column=0, columnspan=2, sticky='w', pady=(8, 0))
         tip(fallback_chk, text=TIPS['filename_fallback'])
 
-        ignore_opts = ttk.LabelFrame(left, text='  IGNORE WHEN MATCHING  ', padding=SECTION_INNER_PAD)
-        ignore_opts.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
-        ignore_opts.columnconfigure(1, weight=1)
-        paren_chk = ttk.Checkbutton(
-            ignore_opts, text='Text in (parentheses)',
-            variable=self.ignore_parentheses, command=self._sync_bracket_checks,
+        # Full IGNORE card scrolls (checkboxes + keywords). Height grows with
+        # content up to max; scrollbar only when content overflows.
+        self._ignore_card_max_h = 240
+        ignore_wrap = ctk.CTkFrame(left, fg_color='transparent')
+        ignore_wrap.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
+        ctk.CTkLabel(
+            ignore_wrap,
+            text='IGNORE WHEN MATCHING',
+            font=ctk_section_font(),
+            text_color=t['text_dim'],
+            anchor='w',
+        ).pack(anchor='w', pady=(0, 3))
+        self._ignore_scroll = ctk.CTkScrollableFrame(
+            ignore_wrap,
+            height=self._ignore_card_max_h,
+            fg_color=t['panel'],
+            border_color=t['border'],
+            border_width=1,
+            corner_radius=8,
+            scrollbar_button_color=t['scrollbar'],
+            scrollbar_button_hover_color=t['scrollbar_hover'],
+        )
+        self._ignore_scroll.pack(fill='x')
+        self._ignore_scroll._scrollbar.grid_forget()
+        ignore_inner = ctk.CTkFrame(self._ignore_scroll, fg_color='transparent')
+        ignore_inner.pack(fill='x', padx=SECTION_INNER_PAD, pady=SECTION_INNER_PAD)
+        self._ignore_inner = ignore_inner
+        ignore_inner.grid_columnconfigure(1, weight=1)
+        paren_chk = ctk.CTkCheckBox(
+            ignore_inner, text='Text in (parentheses)',
+            variable=self.ignore_parentheses,
+            fg_color=t['accent'], hover_color=t['accent_hover'], text_color=t['text'],
+            font=_ui,
         )
         paren_chk.grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 4))
         tip(paren_chk, text=TIPS['ignore_parentheses'])
-        square_chk = ttk.Checkbutton(
-            ignore_opts, text='Text in [square brackets]',
-            variable=self.ignore_square_brackets, command=self._sync_bracket_checks,
+        square_chk = ctk.CTkCheckBox(
+            ignore_inner, text='Text in [square brackets]',
+            variable=self.ignore_square_brackets,
+            fg_color=t['accent'], hover_color=t['accent_hover'], text_color=t['text'],
+            font=_ui,
         )
         square_chk.grid(row=1, column=0, columnspan=2, sticky='w', pady=(0, 4))
         tip(square_chk, text=TIPS['ignore_square'])
-        both_chk = ttk.Checkbutton(
-            ignore_opts, text='Both ( ) and [ ]',
-            variable=self.ignore_all_brackets, command=self._on_all_brackets_toggle,
+        spaces_chk = ctk.CTkCheckBox(
+            ignore_inner, text='Extra spaces', variable=self.ignore_extra_spaces,
+            fg_color=t['accent'], hover_color=t['accent_hover'], text_color=t['text'],
+            font=_ui,
         )
-        both_chk.grid(row=2, column=0, columnspan=2, sticky='w', pady=(0, 4))
-        tip(both_chk, text=TIPS['ignore_all_brackets'])
-        spaces_chk = ttk.Checkbutton(
-            ignore_opts, text='Extra spaces', variable=self.ignore_extra_spaces,
-        )
-        spaces_chk.grid(row=3, column=0, columnspan=2, sticky='w', pady=(0, 8))
+        spaces_chk.grid(row=2, column=0, columnspan=2, sticky='w', pady=(0, 8))
         tip(spaces_chk, text=TIPS['ignore_spaces'])
-        ttk.Label(ignore_opts, text='Custom keywords', style='Dim.TLabel').grid(
-            row=4, column=0, columnspan=2, sticky='w', pady=(0, 4),
-        )
-        self._custom_keywords_frame = ttk.Frame(ignore_opts)
-        self._custom_keywords_frame.grid(row=5, column=0, columnspan=2, sticky='ew')
-        self._custom_keywords_frame.columnconfigure(0, weight=1)
-        keyword_actions = tk.Frame(ignore_opts, bg=COLORS['bg'])
-        keyword_actions.grid(row=6, column=0, columnspan=2, sticky='w', pady=(6, 0))
-        self._add_keyword_btn = self._icon_button(
-            keyword_actions, '+', self._add_custom_keyword_row, accent=True, width=3,
+        kw_header = ctk.CTkFrame(ignore_inner, fg_color='transparent')
+        kw_header.grid(row=3, column=0, columnspan=2, sticky='w', pady=(0, 10))
+        ctk.CTkLabel(
+            kw_header, text='Custom keywords', text_color=t['text_dim'],
+            font=_ui,
+        ).pack(side='left', padx=(0, 8))
+        self._add_keyword_btn = ctk.CTkButton(
+            kw_header, text='+', width=36, height=28,
+            fg_color=t['accent'], hover_color=t['accent_hover'], text_color='#ffffff',
+            font=_ui, command=self._add_custom_keyword_row,
         )
         self._add_keyword_btn.pack(side='left')
         tip(self._add_keyword_btn, text=TIPS['add_keyword'])
+        self._custom_keywords_frame = ctk.CTkFrame(ignore_inner, fg_color='transparent')
+        self._custom_keywords_frame.grid(row=4, column=0, columnspan=2, sticky='ew')
+        self._custom_keywords_frame.grid_columnconfigure(0, weight=1)
+        self.after_idle(self._sync_ignore_card_scroll)
 
     def attach_action_bar(self, parent: tk.Misc) -> None:
         """Place Match & Align actions in the host bottom bar (shared with Classify)."""
-        self.find_btn = self._action_button(
-            parent, '▶  Find pairs', self._start_find_pairs, accent=True,
+        self.find_btn = ctk_action_button(
+            parent, '▶  Find pairs', self._start_find_pairs, accent=True, width=100,
         )
-        self.organize_btn = self._action_button(
-            parent, '▶  Organize folder', self._start_organize,
+        self.organize_btn = ctk_action_button(
+            parent, '▶  Organize folder', self._start_organize, width=128,
         )
-        C = COLORS
-        self.play_stems_btn = tk.Button(
-            parent, text='♫  Play', command=self._open_stem_player,
-            font=ACTION_BTN_FONT, bg=C['panel2'], fg=C['fg_dim'],
-            activebackground=C['accent_hov'], activeforeground='white',
-            relief='flat', borderwidth=0, highlightthickness=0,
-            padx=ACTION_BTN_PADX, pady=ACTION_BTN_PADY, cursor='hand2',
+        self.export_list_btn = ctk_action_button(
+            parent, 'Export list', self._start_export_list, width=86,
         )
+        self.distribute_btn = ctk_action_button(
+            parent, 'Distribute originals', self._start_distribute_originals, width=128,
+        )
+        self.sort_folders_btn = ctk_action_button(
+            parent, 'Sort folders', self._start_sort_folders, width=94,
+        )
+        self.align_btn = ctk_action_button(
+            parent, 'Align stems', self._start_align_stems, accent=True, width=96,
+        )
+        self.play_stems_btn = ctk_action_button(
+            parent, '♫  Play', self._open_stem_player,
+            width=72, hover_color=DARK['accent'],
+        )
+        tip(self.export_list_btn, text=TIPS['export_list_btn'])
+        tip(self.distribute_btn, text=TIPS['distribute_btn'])
+        tip(self.sort_folders_btn, text=TIPS['sort_folders_btn'])
+        tip(self.align_btn, text=TIPS['align_stems_btn'])
         tip(self.play_stems_btn, text=TIPS['align_play_stems'])
 
-        def _play_enter(_e=None):
-            self.play_stems_btn.configure(bg=C['accent'], fg='white')
-
-        def _play_leave(_e=None):
-            self.play_stems_btn.configure(bg=C['panel2'], fg=C['fg_dim'])
-
-        self.play_stems_btn.bind('<Enter>', _play_enter, add='+')
-        self.play_stems_btn.bind('<Leave>', _play_leave, add='+')
-
     def _align_tab_active(self) -> bool:
-        return self._notebook.index(self._notebook.select()) == 1
+        return self._tabview.get() == 'Align'
 
     def _on_pair_subtab_changed(self, _event=None) -> None:
         host = self._host
@@ -485,76 +528,83 @@ class PairFinderPanel(ttk.Frame):
             if not self._busy:
                 self.set_buttons_state('normal')
 
+    def _align_action_buttons(self):
+        return (
+            self.export_list_btn, self.distribute_btn,
+            self.sort_folders_btn, self.align_btn,
+        )
+
     def show_action_bar(self) -> None:
-        self.find_btn.pack_forget()
-        self.organize_btn.pack_forget()
-        self.play_stems_btn.pack_forget()
+        for btn in (
+            self.find_btn, self.organize_btn, self.play_stems_btn,
+            *self._align_action_buttons(),
+        ):
+            btn.pack_forget()
         if self._align_tab_active():
+            self.export_list_btn.pack(side='left')
+            self.distribute_btn.pack(side='left', padx=(ACTION_BTN_GAP, 0))
+            self.sort_folders_btn.pack(side='left', padx=(ACTION_BTN_GAP, 0))
+            self.align_btn.pack(side='left', padx=(ACTION_BTN_GAP, 0))
             self.play_stems_btn.pack(side='right')
         else:
             self.find_btn.pack(side='left')
-            self.organize_btn.pack(side='left', padx=(8, 0))
+            self.organize_btn.pack(side='left', padx=(ACTION_BTN_GAP, 0))
+        ctk_pin_button_height(
+            self.find_btn, self.organize_btn, self.play_stems_btn,
+            *self._align_action_buttons(),
+        )
+        host = self._host
+        if hasattr(host, '_pin_action_bar_heights'):
+            host._pin_action_bar_heights()
 
     def hide_action_bar(self) -> None:
-        self.find_btn.pack_forget()
-        self.organize_btn.pack_forget()
-        self.play_stems_btn.pack_forget()
+        for btn in (
+            self.find_btn, self.organize_btn, self.play_stems_btn,
+            *self._align_action_buttons(),
+        ):
+            btn.pack_forget()
 
-    def _build_align_tab(self, parent: ttk.Frame) -> None:
-        header = ttk.Frame(parent)
+    def _build_align_tab(self, parent: tk.Misc) -> None:
+        ctk = self._ctk
+        t = DARK
+        _ui = ctk_ui_font()
+        body = parent
+
+        header = ctk.CTkFrame(body, fg_color='transparent')
         header.pack(fill='x', padx=SECTION_PADX, pady=(HEADER_TOP_PAD, 12))
         self._description_with_info(
             header,
-            'Align instrumental and acapella to the original song. The original is the master',
-            'timeline; silence is added or the start is trimmed so stems line up with it.',
+            'Align acapella/instrumental files to the original song. The original is the master timeline;',
             self._show_align_help,
+            final_line=(
+                'silence is added or the start is trimmed so stems line up with it.'
+            ),
         )
 
-        library = ttk.LabelFrame(parent, text='  STEM LIBRARY  ', padding=SECTION_INNER_PAD)
-        library.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
-        library.columnconfigure(1, weight=1)
+        library = ctk_section(body, 'Stem library')
+        library.grid_columnconfigure(1, weight=1)
         self._path_row(
             library, 0, 'Stems root', self.align_stems_root,
             self._pick_align_stems_root, self._open_align_stems_root, TIPS['align_stems_root'],
         )
 
-        step_export = ttk.LabelFrame(parent, text='  1  EXPORT  ', padding=SECTION_INNER_PAD)
-        step_export.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
-        step_export.columnconfigure(1, weight=1)
+        step_export = ctk_section(body, '1  Export')
+        step_export.grid_columnconfigure(1, weight=1)
         self._file_row(
             step_export, 0, 'Export list', self.align_export_file,
             self._pick_align_export, TIPS['align_export'],
             self._open_align_export,
         )
-        export_actions = tk.Frame(step_export, bg=COLORS['bg'])
-        export_actions.grid(row=1, column=0, columnspan=4, sticky='w', pady=(8, 0))
-        self.export_list_btn = self._action_button(
-            export_actions, 'Export song list', self._start_export_list,
-        )
-        self.export_list_btn.pack(side='left')
 
-        step_distribute = ttk.LabelFrame(parent, text='  2  DISTRIBUTE  ', padding=SECTION_INNER_PAD)
-        step_distribute.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
-        step_distribute.columnconfigure(1, weight=1)
+        step_distribute = ctk_section(body, '2  Distribute')
+        step_distribute.grid_columnconfigure(1, weight=1)
         self._path_row(
             step_distribute, 0, 'Originals inbox', self.align_originals_inbox,
             self._pick_align_inbox, self._open_align_inbox, TIPS['align_inbox'],
         )
-        distribute_opts = ttk.Frame(step_distribute)
-        distribute_opts.grid(row=1, column=0, columnspan=4, sticky='w', pady=(4, 0))
-        sort_chk = ttk.Checkbutton(distribute_opts, text='Sort after distribute', variable=self.align_sort_after)
-        sort_chk.pack(side='left')
-        tip(sort_chk, text=TIPS['align_sort_after'])
-        distribute_actions = tk.Frame(step_distribute, bg=COLORS['bg'])
-        distribute_actions.grid(row=2, column=0, columnspan=4, sticky='w', pady=(8, 0))
-        self.distribute_btn = self._action_button(
-            distribute_actions, 'Distribute originals', self._start_distribute_originals,
-        )
-        self.distribute_btn.pack(side='left')
 
-        step_sort = ttk.LabelFrame(parent, text='  3  SORT  ', padding=SECTION_INNER_PAD)
-        step_sort.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
-        step_sort.columnconfigure(1, weight=1)
+        step_sort = ctk_section(body, '3  Sort')
+        step_sort.grid_columnconfigure(1, weight=1)
         self._path_row(
             step_sort, 0, 'With original', self.align_with_original_dir,
             lambda: self._pick_align_sort_dir(self.align_with_original_dir, 'With original folder'),
@@ -567,50 +617,83 @@ class PairFinderPanel(ttk.Frame):
             lambda: self._open_folder(self.align_without_original_dir),
             TIPS['align_without_original'],
         )
-        sort_actions = tk.Frame(step_sort, bg=COLORS['bg'])
-        sort_actions.grid(row=2, column=0, columnspan=4, sticky='w', pady=(8, 0))
-        self.sort_folders_btn = self._action_button(
-            sort_actions, 'Sort folders', self._start_sort_folders,
-        )
-        self.sort_folders_btn.pack(side='left')
 
-        step_align = ttk.LabelFrame(parent, text='  4  ALIGN  ', padding=SECTION_INNER_PAD)
-        step_align.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
-        align_opts = ttk.Frame(step_align)
-        align_opts.pack(anchor='w')
-        backup_chk = ttk.Checkbutton(align_opts, text='Backup stems before align', variable=self.align_backup)
+        step_align = ctk_section(body, '4  Align')
+        analysis_row = ctk.CTkFrame(step_align, fg_color='transparent')
+        analysis_row.pack(anchor='w')
+        ctk.CTkLabel(
+            analysis_row, text='Analysis', text_color=t['label'],
+            font=_ui,
+        ).pack(side='left', padx=(0, 6))
+        analysis_entry = ctk.CTkEntry(
+            analysis_row, textvariable=self.align_analysis_sec, width=56, height=30,
+            fg_color=t['control_bg'], border_color=t['border'], text_color=t['entry_text'],
+            font=_ui,
+        )
+        analysis_entry.pack(side='left')
+        ctk.CTkLabel(
+            analysis_row, text='seconds', text_color=t['text_dim'],
+            font=_ui,
+        ).pack(side='left', padx=(8, 0))
+        tip(analysis_entry, text=TIPS['align_analysis'])
+        align_opts = ctk.CTkFrame(step_align, fg_color='transparent')
+        align_opts.pack(fill='x', pady=(8, 0))
+        backup_chk = ctk.CTkCheckBox(
+            align_opts, text='Backup stems before align', variable=self.align_backup,
+            fg_color=t['accent'], hover_color=t['accent_hover'], text_color=t['text'],
+            font=_ui,
+        )
         backup_chk.pack(side='left', padx=(0, 16))
         tip(backup_chk, text=TIPS['align_backup'])
-        skip_chk = ttk.Checkbutton(
+        skip_chk = ctk.CTkCheckBox(
             align_opts, text='Skip if output already exists', variable=self.align_skip_existing,
+            fg_color=t['accent'], hover_color=t['accent_hover'], text_color=t['text'],
+            font=_ui,
         )
-        skip_chk.pack(side='left', padx=(0, 16))
+        skip_chk.pack(side='left')
         tip(skip_chk, text=TIPS['align_skip_existing'])
-        ttk.Label(align_opts, text='Analysis').pack(side='left', padx=(0, 6))
-        analysis_sp = ttk.Spinbox(align_opts, from_=10, to=120, textvariable=self.align_analysis_sec, width=5)
-        analysis_sp.pack(side='left')
-        ttk.Label(align_opts, text='seconds', style='Dim.TLabel').pack(side='left', padx=(8, 0))
-        tip(analysis_sp, text=TIPS['align_analysis'])
-        align_actions = tk.Frame(step_align, bg=COLORS['bg'])
-        align_actions.pack(anchor='w', pady=(8, 0))
-        self.align_btn = self._action_button(
-            align_actions, 'Align stems', self._start_align_stems, accent=True,
-        )
-        self.align_btn.pack(side='left')
-
-        tk.Frame(parent, bg=COLORS['bg'], height=ACTIONS_BOTTOM_PAD).pack(side='bottom')
 
     def _file_row(self, parent, row, label, var, picker, tip_text, opener=None):
-        lbl = ttk.Label(parent, text=label)
+        ctk = self._ctk
+        t = DARK
+        lbl = ctk.CTkLabel(
+            parent, text=label, text_color=t['label'],
+            font=ctk_ui_font(),
+        )
         lbl.grid(row=row, column=0, sticky='w', padx=(0, 10), pady=CTRL_ROW_PADY)
-        ent = ttk.Entry(parent, textvariable=var)
+        ent = ctk.CTkEntry(
+            parent,
+            textvariable=var,
+            fg_color=t['control_bg'],
+            border_color=t['border'],
+            text_color=t['entry_text'],
+            height=30,
+        )
         ent.grid(row=row, column=1, sticky='ew', pady=CTRL_ROW_PADY)
         ent.bind('<FocusOut>', lambda _e, v=var: self._normalize_path_var(v))
-        browse_btn = self._path_button(parent, 'Browse', picker)
+        browse_btn = ctk.CTkButton(
+            parent,
+            text='Browse',
+            width=72,
+            height=30,
+            fg_color=t['btn'],
+            hover_color=t['btn_hover'],
+            text_color=t['text'],
+            command=picker,
+        )
         browse_btn.grid(row=row, column=2, padx=(4, 0), pady=CTRL_ROW_PADY)
         widgets = [lbl, ent, browse_btn]
         if opener is not None:
-            open_btn = self._path_button(parent, 'Open', opener)
+            open_btn = ctk.CTkButton(
+                parent,
+                text='Open',
+                width=64,
+                height=30,
+                fg_color=t['btn'],
+                hover_color=t['btn_hover'],
+                text_color=t['text'],
+                command=opener,
+            )
             open_btn.grid(row=row, column=3, padx=(4, 0), pady=CTRL_ROW_PADY)
             widgets.append(open_btn)
             Tooltip(open_btn, TIPS['open_path'])
@@ -629,77 +712,103 @@ class PairFinderPanel(ttk.Frame):
             label = 'Very loose'
         return f'{label} ({threshold:.0%})'
 
-    def _icon_button(
-        self,
-        parent,
-        text,
-        command,
-        *,
-        accent: bool = False,
-        width: int | None = None,
-    ) -> tk.Button:
-        C = COLORS
-        if accent:
-            btn = tk.Button(
-                parent, text=text, command=command,
-                font=('Segoe UI Semibold', 11), bg=C['accent'], fg='white',
-                activebackground=C['accent_hov'], activeforeground='white',
-                relief='flat', borderwidth=0, highlightthickness=0,
-                padx=8, pady=2, cursor='hand2',
-            )
-        else:
-            btn = tk.Button(
-                parent, text=text, command=command,
-                font=('Segoe UI', 10), bg=C['panel2'], fg=C['fg_dim'],
-                activebackground=C['panel'], activeforeground=C['danger'],
-                relief='flat', borderwidth=0, highlightthickness=0,
-                padx=6, pady=2, cursor='hand2',
-            )
-        if width is not None:
-            btn.configure(width=width)
-        return btn
-
-    def _on_all_brackets_toggle(self) -> None:
-        if self.ignore_all_brackets.get():
-            self.ignore_parentheses.set(True)
-            self.ignore_square_brackets.set(True)
-
-    def _sync_bracket_checks(self) -> None:
-        if self.ignore_parentheses.get() and self.ignore_square_brackets.get():
-            self.ignore_all_brackets.set(True)
-        else:
-            self.ignore_all_brackets.set(False)
-
-    def _add_custom_keyword_row(self, value: str = '') -> None:
-        row = ttk.Frame(self._custom_keywords_frame)
+    def _add_custom_keyword_row(self, value: str = '', *, sync: bool = True) -> None:
+        ctk = self._ctk
+        t = DARK
+        row = ctk.CTkFrame(self._custom_keywords_frame, fg_color='transparent')
         row.pack(fill='x', pady=2)
-        row.columnconfigure(0, weight=1)
+        row.grid_columnconfigure(0, weight=1)
         var = tk.StringVar(value=value)
-        entry = ttk.Entry(row, textvariable=var)
+        entry = ctk.CTkEntry(
+            row, textvariable=var,
+            fg_color=t['control_bg'], border_color=t['border'],
+            text_color=t['entry_text'],
+            height=30, font=ctk_ui_font(),
+        )
         entry.grid(row=0, column=0, sticky='ew')
         var.trace_add('write', lambda *_: self._save_settings())
-        remove_btn = self._icon_button(
-            row, '×', lambda r=row, v=var: self._remove_custom_keyword_row(r, v),
+        remove_btn = ctk.CTkButton(
+            row, text='×', width=32, height=30,
+            fg_color=t['btn'], hover_color=t['danger'], text_color=t['text'],
+            font=ctk_ui_font(),
+            command=lambda r=row, v=var: self._remove_custom_keyword_row(r, v),
         )
         remove_btn.grid(row=0, column=1, padx=(4, 0))
         self._custom_keyword_vars.append(var)
+        if sync:
+            self.after_idle(self._sync_ignore_card_scroll)
 
-    def _remove_custom_keyword_row(self, row: ttk.Frame, var: tk.StringVar) -> None:
+    def _remove_custom_keyword_row(self, row: tk.Misc, var: tk.StringVar) -> None:
         if var in self._custom_keyword_vars:
             self._custom_keyword_vars.remove(var)
         row.destroy()
         self._save_settings()
+        # Keep one empty field so the control stays discoverable.
+        if not self._custom_keyword_vars:
+            self._add_custom_keyword_row('', sync=False)
+        self.after_idle(self._sync_ignore_card_scroll)
 
     def _clear_custom_keyword_rows(self) -> None:
-        for widget in self._custom_keywords_frame.winfo_children():
-            widget.destroy()
+        frame = getattr(self, '_custom_keywords_frame', None)
+        if frame is not None:
+            for widget in frame.winfo_children():
+                widget.destroy()
         self._custom_keyword_vars.clear()
 
     def _load_custom_keyword_rows(self, keywords: list[str]) -> None:
         self._clear_custom_keyword_rows()
         for keyword in keywords:
             if keyword.strip():
-                self._add_custom_keyword_row(keyword.strip())
+                self._add_custom_keyword_row(keyword.strip(), sync=False)
+        if not self._custom_keyword_vars:
+            self._add_custom_keyword_row('', sync=False)
+        self.after_idle(self._sync_ignore_card_scroll)
+
+    def _sync_ignore_card_scroll(self) -> None:
+        """Grow IGNORE card with content; scrollbar as soon as a keyword row exists."""
+        sf = getattr(self, '_ignore_scroll', None)
+        inner = getattr(self, '_ignore_inner', None)
+        if sf is None or inner is None:
+            return
+        inner.update_idletasks()
+        content_px = max(inner.winfo_reqheight(), 1)
+        max_logical = int(getattr(self, '_ignore_card_max_h', 240))
+        try:
+            max_px = int(sf._apply_widget_scaling(max_logical))
+            view_logical = max(1, int(round(sf._reverse_widget_scaling(content_px))))
+        except Exception:
+            max_px = max_logical
+            view_logical = content_px
+        has_keywords = len(self._custom_keyword_vars) > 0
+        if content_px > max_px:
+            sf.configure(height=max_logical)
+        else:
+            sf.configure(height=view_logical)
+        self._show_ignore_card_scrollbar(has_keywords)
+        try:
+            canvas = sf._parent_canvas
+            canvas.configure(scrollregion=canvas.bbox('all'))
+        except Exception:
+            pass
+
+    def _show_ignore_card_scrollbar(self, show: bool) -> None:
+        sf = getattr(self, '_ignore_scroll', None)
+        if sf is None:
+            return
+        try:
+            bs = sf._apply_widget_scaling(
+                sf._parent_frame.cget('corner_radius')
+                + sf._parent_frame.cget('border_width')
+            )
+        except Exception:
+            bs = 0
+        if show:
+            sf._create_grid()
+        else:
+            sf._scrollbar.grid_forget()
+            sf._parent_canvas.grid(
+                row=1, column=0, sticky='nsew', padx=bs, pady=bs,
+            )
 
     def _get_ignore_rules(self) -> IgnoreRules:
         keywords = tuple(
@@ -710,51 +819,16 @@ class PairFinderPanel(ttk.Frame):
         return IgnoreRules(
             ignore_parentheses=bool(self.ignore_parentheses.get()),
             ignore_square_brackets=bool(self.ignore_square_brackets.get()),
-            ignore_all_brackets=bool(self.ignore_all_brackets.get()),
             ignore_extra_spaces=bool(self.ignore_extra_spaces.get()),
             custom_keywords=keywords,
         )
 
-    def _action_button(self, parent, text, command, *, accent: bool = False) -> tk.Button:
-        C = COLORS
-        if accent:
-            return tk.Button(
-                parent, text=text, command=command,
-                font=ACTION_BTN_FONT, bg=C['accent'], fg='white',
-                activebackground=C['accent_hov'], activeforeground='white',
-                relief='flat', borderwidth=0, highlightthickness=0,
-                padx=ACTION_BTN_PADX, pady=ACTION_BTN_PADY, cursor='hand2',
-            )
-        return tk.Button(
-            parent, text=text, command=command,
-            font=ACTION_BTN_FONT, bg=C['panel2'], fg=C['fg'],
-            activebackground=C['panel'], activeforeground=C['fg'],
-            relief='flat', borderwidth=0, highlightthickness=0,
-            padx=ACTION_BTN_PADX, pady=ACTION_BTN_PADY, cursor='hand2',
-        )
-
-    def _path_button(self, parent: tk.Misc, text: str, command) -> tk.Button:
-        C = COLORS
-        return tk.Button(
-            parent, text=text, command=command,
-            font=PATH_BTN_FONT, bg=C['panel2'], fg=C['fg'],
-            activebackground=C['panel'], activeforeground=C['fg'],
-            relief='flat', borderwidth=0, highlightthickness=0,
-            padx=PATH_BTN_PADX, pady=PATH_BTN_PADY, cursor='hand2',
-        )
-
     def _path_row(self, parent, row, label, var, picker, opener, tip_text):
-        lbl = ttk.Label(parent, text=label)
-        lbl.grid(row=row, column=0, sticky='w', padx=(0, 10), pady=CTRL_ROW_PADY)
-        ent = ttk.Entry(parent, textvariable=var)
-        ent.grid(row=row, column=1, sticky='ew', pady=CTRL_ROW_PADY)
+        _, ent, _, _ = ctk_path_row(
+            parent, row, label, var, picker, opener,
+            tip_text=tip_text, open_tip=TIPS['open_path'],
+        )
         ent.bind('<FocusOut>', lambda _e, v=var: self._normalize_path_var(v))
-        browse_btn = self._path_button(parent, 'Browse', picker)
-        browse_btn.grid(row=row, column=2, padx=(4, 0), pady=CTRL_ROW_PADY)
-        open_btn = self._path_button(parent, 'Open', opener)
-        open_btn.grid(row=row, column=3, padx=(4, 0), pady=CTRL_ROW_PADY)
-        tip(lbl, ent, browse_btn, text=tip_text)
-        Tooltip(open_btn, TIPS['open_path'])
 
     def _normalize_path_var(self, var: tk.StringVar) -> None:
         normalized = display_path(var.get())
@@ -894,11 +968,7 @@ class PairFinderPanel(ttk.Frame):
         self._set_busy(True, 'Distributing originals…')
         self._worker = threading.Thread(
             target=self._run_distribute_originals,
-            args=(
-                inbox, root,
-                bool(self.align_sort_after.get()),
-                *self._align_sort_dirs(root),
-            ),
+            args=(inbox, root, *self._align_sort_dirs(root)),
             daemon=True,
         )
         self._worker.start()
@@ -907,16 +977,15 @@ class PairFinderPanel(ttk.Frame):
         self,
         inbox: Path,
         root: Path,
-        sort_after: bool,
         with_dir: Path,
         without_dir: Path,
     ) -> None:
         try:
-            moved, skipped, unmatched, rejected, sorted_with, sorted_without = distribute_originals(
+            moved, skipped, unmatched, rejected, _sorted_with, _sorted_without = distribute_originals(
                 inbox, root,
                 on_log=self._report_log,
                 on_progress=self._report_progress,
-                sort_after=sort_after,
+                sort_after=False,
                 with_original_dir=with_dir,
                 without_original_dir=without_dir,
             )
@@ -925,11 +994,6 @@ class PairFinderPanel(ttk.Frame):
                 f'rejected {rejected:,}',
                 'info',
             )
-            if sort_after:
-                self._log(
-                    f'Sorted · with original {sorted_with:,} · without {sorted_without:,}',
-                    'info',
-                )
             self._finish_worker(f'Done · {moved:,} moved')
         except Exception:
             self._log(traceback.format_exc(), 'err')
@@ -1028,12 +1092,29 @@ class PairFinderPanel(ttk.Frame):
         self._host._set_pair_busy(busy, status, self)
 
     def set_buttons_state(self, state: str) -> None:
-        for btn in (
-            self.find_btn, self.organize_btn,
-            self.export_list_btn, self.distribute_btn, self.sort_folders_btn,
-            self.align_btn, self.play_stems_btn,
-        ):
-            btn.configure(state=state)
+        # Color/cursor only — never state=disabled (CTk shrinks buttons on Windows).
+        disabled = state != 'normal'
+        dim = DARK['text_dim']
+        normal = DARK['text']
+        accent_btns = {self.find_btn, self.align_btn}
+        buttons = (
+            self.find_btn, self.organize_btn, self.play_stems_btn,
+            *self._align_action_buttons(),
+        )
+        for btn in buttons:
+            if disabled:
+                btn.configure(
+                    text_color=dim, cursor='arrow', height=PATH_BTN_HEIGHT,
+                )
+            elif btn in accent_btns:
+                btn.configure(
+                    text_color='#ffffff', cursor='hand2', height=PATH_BTN_HEIGHT,
+                )
+            else:
+                btn.configure(
+                    text_color=normal, cursor='hand2', height=PATH_BTN_HEIGHT,
+                )
+        ctk_pin_button_height(*buttons)
 
     def _start_find_pairs(self) -> None:
         if self._busy or self._host._organize_worker_active():
@@ -1103,7 +1184,7 @@ class PairFinderPanel(ttk.Frame):
                 on_log=self._report_log,
             )
             threshold = strictness_to_threshold(strictness)
-            fallback_note = 'tags + filename' if use_filename_fallback else 'tags only'
+            fallback_note = 'filename only' if use_filename_fallback else 'tags only'
             self._log(
                 f'Done · {ref_label} reference · {fallback_note} · threshold {threshold:.0%} · '
                 f'{len(result.pairs):,} pair(s) · '
@@ -1236,7 +1317,6 @@ class PairFinderPanel(ttk.Frame):
             'align_backup': bool(self.align_backup.get()),
             'align_skip_existing': bool(self.align_skip_existing.get()),
             'align_analysis_sec': int(self.align_analysis_sec.get()),
-            'align_sort_after': bool(self.align_sort_after.get()),
             'align_with_original_dir': self.align_with_original_dir.get(),
             'align_without_original_dir': self.align_without_original_dir.get(),
         }
@@ -1259,7 +1339,6 @@ class PairFinderPanel(ttk.Frame):
         rules = IgnoreRules.from_dict(data.get('ignore_rules'))
         self.ignore_parentheses.set(rules.ignore_parentheses)
         self.ignore_square_brackets.set(rules.ignore_square_brackets)
-        self.ignore_all_brackets.set(rules.ignore_all_brackets)
         self.ignore_extra_spaces.set(rules.ignore_extra_spaces)
         self._load_custom_keyword_rows(list(rules.custom_keywords))
         self.strictness_readout.configure(text=self._strictness_label())
@@ -1275,7 +1354,6 @@ class PairFinderPanel(ttk.Frame):
             self.align_analysis_sec.set(int(data.get('align_analysis_sec', 30)))
         except (TypeError, ValueError):
             pass
-        self.align_sort_after.set(bool(data.get('align_sort_after', True)))
 
     def _save_settings(self) -> None:
         data = load_settings()
@@ -1289,10 +1367,10 @@ class PairFinderPanel(ttk.Frame):
             self.organize_dir, self.reference_side, self.strictness,
             self.use_filename_fallback, self.include_subfolders,
             self.ignore_parentheses,
-            self.ignore_square_brackets, self.ignore_all_brackets,
+            self.ignore_square_brackets,
             self.ignore_extra_spaces,
             self.align_stems_root, self.align_originals_inbox, self.align_export_file,
-            self.align_backup, self.align_skip_existing, self.align_analysis_sec, self.align_sort_after,
+            self.align_backup, self.align_skip_existing, self.align_analysis_sec,
             self.align_with_original_dir, self.align_without_original_dir,
         ):
             var.trace_add('write', lambda *_: self._save_settings())

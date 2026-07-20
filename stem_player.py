@@ -13,7 +13,7 @@ import tkinter as tk
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
 
 from ffmpeg_bootstrap import subprocess_kwargs
 
@@ -963,6 +963,12 @@ class StemPlayerWindow(tk.Toplevel):
         self.title('STEM player')
         self.configure(bg=colors['bg'])
         self._window_icon = None
+        try:
+            from ui_theme import apply_toplevel_icon
+            self._window_icon = apply_toplevel_icon(self)
+        except Exception:
+            pass
+        self._corner_after_id: str | None = None
 
         self._build_ui()
         self._bind_keys()
@@ -1018,6 +1024,29 @@ class StemPlayerWindow(tk.Toplevel):
         self._default_h = win_h
         self.update_idletasks()
 
+    def _refresh_rounded_corners(self) -> None:
+        try:
+            from ui_theme import apply_toplevel_rounded_corners
+            apply_toplevel_rounded_corners(
+                self, maximized=self._is_maximized(),
+            )
+        except Exception:
+            pass
+
+    def _schedule_rounded_corners(self, delay_ms: int = 40) -> None:
+        job = getattr(self, '_corner_after_id', None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except (tk.TclError, ValueError):
+                pass
+
+        def _apply() -> None:
+            self._corner_after_id = None
+            self._refresh_rounded_corners()
+
+        self._corner_after_id = self.after(delay_ms, _apply)
+
     def _place_and_show(self) -> None:
         parent = self._parent_ref
         parent.update_idletasks()
@@ -1028,10 +1057,49 @@ class StemPlayerWindow(tk.Toplevel):
         self.lift(parent)
         self.focus_force()
         self.after_idle(self._apply_default_open_geometry)
+        self.after_idle(self._refresh_rounded_corners)
+
+    def _ctk_icon_btn(self, parent, text: str, command, *, text_color: str | None = None, width: int = 36):
+        """Compact CTk button matching Browse/Open chrome."""
+        from ui_theme import DARK, ctk_ui_font, ensure_ctk_dark
+
+        ctk = ensure_ctk_dark()
+        t = DARK
+        return ctk.CTkButton(
+            parent,
+            text=text,
+            command=command,
+            width=width,
+            height=30,
+            fg_color=t['btn'],
+            hover_color=t['btn_hover'],
+            text_color=text_color or t['text'],
+            font=ctk_ui_font(),
+            cursor='hand2',
+        )
+
+    def _ctk_volume_slider(self, parent, variable, command, *, width: int):
+        from ui_theme import DARK, ensure_ctk_dark
+
+        ctk = ensure_ctk_dark()
+        t = DARK
+        return ctk.CTkSlider(
+            parent,
+            from_=0,
+            to=100,
+            variable=variable,
+            command=command,
+            width=width,
+            height=16,
+            fg_color=t['control_bg'],
+            progress_color=t['accent'],
+            button_color=t['accent'],
+            button_hover_color=t['accent_hover'],
+        )
 
     def _build_ui(self) -> None:
         C = self._colors
-        from ui_theme import ACTION_BTN_FONT, ACTION_BTN_PADX, ACTION_BTN_PADY, CTRL_BTN_PADY
+        from ui_theme import ctk_action_button
 
         self._shortcuts_footer = tk.Frame(self, bg=C['bg'])
         self._shortcuts_footer.pack(side='bottom', fill='x')
@@ -1043,24 +1111,9 @@ class StemPlayerWindow(tk.Toplevel):
         header.pack(fill='x', padx=12, pady=(12, 6))
         header.pack_propagate(False)
 
-        load_btn = tk.Button(
-            header, text='📁  Load', command=self._load_folder,
-            font=ACTION_BTN_FONT, bg=C['panel2'], fg=C['fg_dim'],
-            activebackground=C['accent_hov'], activeforeground='white',
-            relief='flat', borderwidth=0,
-            padx=ACTION_BTN_PADX, pady=ACTION_BTN_PADY, cursor='hand2',
-        )
+        load_btn = ctk_action_button(header, '📁  Load', self._load_folder, width=88)
         load_btn.pack(side='left', padx=(8, 12))
         _bind_tooltip(load_btn, 'Choose a song folder to load stems. Use [ and ] for prev/next song.')
-
-        def _load_enter(_e=None):
-            load_btn.configure(bg=C['accent'], fg='white')
-
-        def _load_leave(_e=None):
-            load_btn.configure(bg=C['panel2'], fg=C['fg_dim'])
-
-        load_btn.bind('<Enter>', _load_enter, add='+')
-        load_btn.bind('<Leave>', _load_leave, add='+')
 
         self._title_frame = tk.Frame(header, bg=C['panel'])
         self._title_frame.pack(side='left', fill='x', expand=True)
@@ -1083,46 +1136,28 @@ class StemPlayerWindow(tk.Toplevel):
         transport = tk.Frame(header, bg=C['panel'])
         transport.pack(side='left', padx=(0, 12))
 
-        transport_btn = dict(
-            font=('Segoe UI', 10), bg=C['panel2'], fg=C['fg'],
-            activebackground=C['panel'], relief='flat', borderwidth=0,
-            width=3, height=1, padx=2, pady=CTRL_BTN_PADY, cursor='hand2',
-        )
-
         nav = tk.Frame(header, bg=C['panel'])
         nav.pack(side='left', padx=(0, 8))
-        self._btn_prev_song = tk.Button(
-            nav, text='◀', command=self._prev_song_folder,
-            **transport_btn,
-        )
+        self._btn_prev_song = self._ctk_icon_btn(nav, '◀', self._prev_song_folder)
         self._btn_prev_song.pack(side='left', padx=1)
-        self._btn_next_song = tk.Button(
-            nav, text='▶', command=self._next_song_folder,
-            **transport_btn,
-        )
+        self._btn_next_song = self._ctk_icon_btn(nav, '▶', self._next_song_folder)
         self._btn_next_song.pack(side='left', padx=1)
 
-        self._btn_skip_back = tk.Button(
-            transport, text='⏮', command=lambda: self._seek_relative(-SEEK_JUMP_SEC),
-            **transport_btn,
+        self._btn_skip_back = self._ctk_icon_btn(
+            transport, '⏮', lambda: self._seek_relative(-SEEK_JUMP_SEC),
         )
         self._btn_skip_back.pack(side='left', padx=2)
 
-        self._btn_play = tk.Button(
-            transport, text='⏵', command=self._toggle_play,
-            **transport_btn,
-        )
+        self._btn_play = self._ctk_icon_btn(transport, '⏵', self._toggle_play)
         self._btn_play.pack(side='left', padx=2)
 
-        self._btn_stop = tk.Button(
-            transport, text='■', command=self._stop,
-            **{**transport_btn, 'fg': C['fg_dim'], 'activeforeground': C['danger']},
+        self._btn_stop = self._ctk_icon_btn(
+            transport, '■', self._stop, text_color=C['fg_dim'],
         )
         self._btn_stop.pack(side='left', padx=2)
 
-        self._btn_skip_fwd = tk.Button(
-            transport, text='⏭', command=lambda: self._seek_relative(SEEK_JUMP_SEC),
-            **transport_btn,
+        self._btn_skip_fwd = self._ctk_icon_btn(
+            transport, '⏭', lambda: self._seek_relative(SEEK_JUMP_SEC),
         )
         self._btn_skip_fwd.pack(side='left', padx=2)
 
@@ -1132,10 +1167,8 @@ class StemPlayerWindow(tk.Toplevel):
         tk.Label(vol_frame, text='Master', bg=C['panel'], fg=C['fg_dim'],
                  font=('Segoe UI', 9)).pack(side='left', padx=(0, 6))
 
-        self._master_scale = ttk.Scale(
-            vol_frame, from_=0, to=100, orient='horizontal',
-            variable=self._master_var, command=self._on_master_volume,
-            length=120,
+        self._master_scale = self._ctk_volume_slider(
+            vol_frame, self._master_var, self._on_master_volume, width=120,
         )
         self._master_scale.pack(side='left')
 
@@ -2139,23 +2172,15 @@ class StemPlayerWindow(tk.Toplevel):
         btn_row = tk.Frame(ctrl, bg=C['bg'])
         btn_row.pack(anchor='w', pady=(4, 0), padx=2)
 
-        solo_btn = tk.Button(
-            btn_row, text='S', width=2,
-            font=('Segoe UI Semibold', 9),
-            bg=C['panel2'], fg=C['fg_dim'],
-            activebackground=C['panel'], relief='flat', borderwidth=0,
-            cursor='hand2',
-            command=lambda t=track: self._toggle_solo(t),
+        solo_btn = self._ctk_icon_btn(
+            btn_row, 'S', lambda t=track: self._toggle_solo(t),
+            text_color=C['fg_dim'], width=28,
         )
         solo_btn.pack(side='left', padx=(0, 4))
         _bind_tooltip(solo_btn, 'Solo')
-        mute_btn = tk.Button(
-            btn_row, text='M', width=2,
-            font=('Segoe UI Semibold', 9),
-            bg=C['panel2'], fg=C['fg_dim'],
-            activebackground=C['panel'], relief='flat', borderwidth=0,
-            cursor='hand2',
-            command=lambda t=track: self._toggle_mute(t),
+        mute_btn = self._ctk_icon_btn(
+            btn_row, 'M', lambda t=track: self._toggle_mute(t),
+            text_color=C['fg_dim'], width=28,
         )
         mute_btn.pack(side='left')
         _bind_tooltip(mute_btn, 'Mute')
@@ -2165,9 +2190,8 @@ class StemPlayerWindow(tk.Toplevel):
         def _vol_cb(_v, t=track, vv=vol_var):
             t.volume = float(vv.get()) / 100.0
 
-        vol_scale = ttk.Scale(
-            ctrl, from_=0, to=100, orient='horizontal',
-            variable=vol_var, command=_vol_cb, length=CONTROLS_W - 16,
+        vol_scale = self._ctk_volume_slider(
+            ctrl, vol_var, _vol_cb, width=CONTROLS_W - 16,
         )
         vol_scale.pack(fill='x', padx=4, pady=(6, 0))
 
@@ -2197,19 +2221,37 @@ class StemPlayerWindow(tk.Toplevel):
         btn = track._solo_btn
         if btn is None:
             return
+        C = self._colors
         if track.solo:
-            btn.configure(bg=self._colors['accent'], fg='white')
+            btn.configure(
+                fg_color=C['accent'],
+                hover_color=C['accent_hov'],
+                text_color='#ffffff',
+            )
         else:
-            btn.configure(bg=self._colors['panel2'], fg=self._colors['fg_dim'])
+            btn.configure(
+                fg_color=C['panel2'],
+                hover_color=C['border'],
+                text_color=C['fg_dim'],
+            )
 
     def _update_mute_btn(self, track: _TrackState) -> None:
         btn = track._mute_btn
         if btn is None:
             return
+        C = self._colors
         if track.muted:
-            btn.configure(bg=self._colors['danger'], fg='white')
+            btn.configure(
+                fg_color=C['danger'],
+                hover_color=C['danger'],
+                text_color='#ffffff',
+            )
         else:
-            btn.configure(bg=self._colors['panel2'], fg=self._colors['fg_dim'])
+            btn.configure(
+                fg_color=C['panel2'],
+                hover_color=C['border'],
+                text_color=C['fg_dim'],
+            )
 
     def _toggle_solo(self, track: _TrackState) -> None:
         track.solo = not track.solo
@@ -2484,13 +2526,16 @@ class StemPlayerWindow(tk.Toplevel):
             if not self._was_maximized:
                 self._allow_maximized_size()
             self._was_maximized = True
+            self._schedule_rounded_corners()
             self._schedule_redraw()
             return
         if getattr(self, '_was_maximized', False):
             self._was_maximized = False
             self._allow_maximized_size()
+            self._schedule_rounded_corners()
             self.after_idle(lambda: self._redraw_all(force=True))
             return
+        self._schedule_rounded_corners()
         self._schedule_redraw()
 
     def _draw_timeline(self, width: int, duration: float) -> None:

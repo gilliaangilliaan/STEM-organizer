@@ -89,13 +89,25 @@ def _prefix_token_lookup() -> dict[str, str]:
 _PREFIX_TOKEN_TO_CATEGORY = _prefix_token_lookup()
 
 
-def parse_category_prefix_display(display: str) -> tuple[str, str] | None:
+def parse_category_prefix_display(
+    display: str,
+    *,
+    known: dict[str, str] | None = None,
+) -> tuple[str, str] | None:
     """Split 'SYNTH - file.wav' into (canonical category name, remainder filename)."""
     if " - " not in display:
         return None
     head, tail = display.split(" - ", 1)
     token = head.strip().upper()
     category = _PREFIX_TOKEN_TO_CATEGORY.get(token)
+    if not category and known:
+        for name in known:
+            stripped = (name or "").strip()
+            if not stripped:
+                continue
+            if stripped.upper() == token or category_badge_label(stripped).upper() == token:
+                category = resolve_category_name(stripped)
+                break
     if not category:
         return None
     return (category, tail)
@@ -179,6 +191,80 @@ def applied_category_colors(rules: list[Rule]) -> dict[str, str]:
     for rule in rules:
         walk(rule)
     return colors
+
+
+def affix_prefix_token(affix: str) -> str:
+    """Extract the badge/prefix token from an affix like 'ELSE - '."""
+    text = (affix or "").strip()
+    if " - " in text:
+        return text.split(" - ", 1)[0].strip()
+    if text.endswith(" -"):
+        return text[:-2].strip()
+    if text.endswith("-"):
+        return text[:-1].strip()
+    return text
+
+
+def category_name_from_affix(affix: str, current_name: str = "") -> str:
+    """Derive a category name from PREFIX, preserving known names/casing when possible."""
+    token = affix_prefix_token(affix)
+    if not token:
+        return (current_name or "").strip()
+    current = (current_name or "").strip()
+    if current:
+        if current.upper() == token.upper():
+            return current
+        if category_badge_label(current).upper() == token.upper():
+            return current
+    known = _PREFIX_TOKEN_TO_CATEGORY.get(token.upper())
+    if known:
+        return known
+    if token.isupper() and len(token) <= 3:
+        return token
+    return " ".join(
+        part if part.isupper() and len(part) <= 3 else part.capitalize()
+        for part in token.replace("_", " ").split()
+    )
+
+
+def sync_category_names_from_affix(rules: list[Rule]) -> bool:
+    """Set each category name from its PREFIX token (e.g. ELSE - → Else / badge ELSE)."""
+    from track_renamer.engine.models import CategoryRule, ConditionGroup, OpRule
+
+    changed = False
+
+    def update_dict(raw: dict) -> None:
+        nonlocal changed
+        new_name = category_name_from_affix(raw.get("affix", ""), raw.get("name", ""))
+        if new_name and new_name != (raw.get("name") or ""):
+            raw["name"] = new_name
+            changed = True
+
+    def update_category(cat: CategoryRule) -> None:
+        nonlocal changed
+        new_name = category_name_from_affix(cat.affix, cat.name)
+        if new_name and new_name != cat.name:
+            cat.name = new_name
+            changed = True
+
+    def walk(rule: Rule) -> None:
+        if isinstance(rule, CategoryRule):
+            update_category(rule)
+        elif isinstance(rule, OpRule) and rule.op == "categoryBundle":
+            for raw in rule.params.get("categories", []):
+                if isinstance(raw, dict):
+                    update_dict(raw)
+                else:
+                    update_category(raw)
+        elif isinstance(rule, ConditionGroup):
+            for child in rule.children:
+                walk(child)
+            for branch in rule.branches:
+                walk(branch)
+
+    for rule in rules:
+        walk(rule)
+    return changed
 
 
 def sort_rule_category_keywords(rules: list[Rule]) -> bool:

@@ -1,3 +1,4 @@
+import gc
 import json
 import logging
 import time
@@ -36,17 +37,223 @@ def _status(msg):
 _status(f"{APP_NAME} v{APP_VERSION}")
 _status("Starting up...")
 
-_status("  loading torch / torchaudio...")
+_status("  loading torch...")
 import torch
-import torchaudio
 
 _status("  loading audio / data helpers...")
+import csv
+import librosa
 import numpy as np
 import soundfile as sf
-import pandas as pd
-from tqdm import tqdm
+from tqdm import tqdm as _tqdm_cls
 from mutagen.flac import FLAC
 from mutagen.id3 import COMM, ID3, TCON, TXXX
+
+# Optional — not required for decode/resample (librosa). May be absent or
+# mismatched after other packages (e.g. hear21passt) pull a CUDA wheel.
+try:
+    import torchaudio  # noqa: F401
+except Exception:
+    torchaudio = None
+
+
+def _write_results_csv(path, rows) -> None:
+    """Write list[dict] to CSV via stdlib (no pandas)."""
+    rows = [r for r in (rows or []) if isinstance(r, dict)]
+    if not rows:
+        Path(path).write_text("", encoding="utf-8")
+        return
+    # Stable column order: keys from first row, then any extras.
+    fieldnames: list[str] = list(rows[0].keys())
+    seen = set(fieldnames)
+    for row in rows[1:]:
+        for key in row:
+            if key not in seen:
+                fieldnames.append(key)
+                seen.add(key)
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+_STEM_PROGRESS_INTERVAL = 0.1
+_last_stem_progress_emit = 0.0
+
+
+def emit_stem_progress(
+    n,
+    total,
+    phase="",
+    *,
+    pct=None,
+    eta="",
+    force=False,
+    display_n=None,
+    display_total=None,
+):
+    """Machine progress for STEM host: __progress__ pct eta n total phase.
+
+    ``n`` may be fractional for smooth bars; ``display_n`` / ``display_total``
+    control the human count shown in the status bar (defaults from n/total).
+    """
+    global _last_stem_progress_emit
+    total_i = int(total or 0)
+    if total_i <= 0:
+        return
+    n_f = float(n or 0)
+    show_total = int(display_total if display_total is not None else total_i)
+    if display_n is not None:
+        n_i = int(max(0, min(show_total, int(display_n))))
+    else:
+        n_i = int(max(0, min(show_total, round(n_f))))
+    now = time.monotonic()
+    if (
+        not force
+        and n_f < float(total_i)
+        and (now - _last_stem_progress_emit) < _STEM_PROGRESS_INTERVAL
+    ):
+        return
+    _last_stem_progress_emit = now
+    if pct is None:
+        pct = 100.0 * min(n_f, float(total_i)) / float(total_i)
+    eta_s = "" if eta is None else str(eta)
+    phase_s = (phase or "").replace("\t", " ").strip()
+    print(
+        f"__progress__\t{float(pct):.2f}\t{eta_s}\t{n_i}\t{show_total}\t{phase_s}",
+        flush=True,
+    )
+
+
+def _fmt_confidence_pct(score) -> str:
+    """Fraction 0–1 → whole percent for LOG, e.g. 0.723 → '72%'."""
+    try:
+        return f"{int(round(float(score) * 100.0))}%"
+    except (TypeError, ValueError):
+        return "0%"
+
+
+def _log_gender_result(row):
+    """Classify-style LOG: === file === + badge + dim pct (e.g. female 72%)."""
+    name = Path(row.get("file") or "").name
+    gender = str(row.get("gender") or "").strip().lower()
+    reverb = str(row.get("reverb") or "").strip().lower()
+    gconf = _fmt_confidence_pct(row.get("confidence", 0))
+    rconf = _fmt_confidence_pct(row.get("reverb_confidence", 0))
+    print(flush=True)
+    print(f"=== {name} ===", flush=True)
+    if gender in ("female", "male"):
+        print(f"  {gender} {gconf}", flush=True)
+    elif gender:
+        print(f"GENDER: {gender}", flush=True)
+        print(f"  {gconf}", flush=True)
+    if reverb in ("dry", "wet"):
+        print(f"  {reverb} {rconf}", flush=True)
+    elif reverb and reverb != "?":
+        print(f"REVERB: {reverb}", flush=True)
+        print(f"  {rconf}", flush=True)
+
+
+def _log_genre_result(path, genre, style, conf):
+    """LOG block: === file ===, GENRE / STYLE, then dim pct."""
+    print(flush=True)
+    print(f"=== {Path(path).name} ===", flush=True)
+    print("GENRE:", genre, flush=True)
+    print("STYLE:", style or "", flush=True)
+    print(f"  {_fmt_confidence_pct(conf)}", flush=True)
+
+
+class _UiTqdm(_tqdm_cls):
+    """tqdm that drives STEM-organizer progress bar when stdout is piped."""
+
+    def __init__(self, *args, **kwargs):
+        # Must exist before super().__init__ — tqdm refreshes/display during init.
+        self._last_ui_emit = 0.0
+        self._ui_piped = not sys.stdout.isatty()
+        self._stem_phase = kwargs.pop("stem_phase", None)
+        self._stem_pct_scale = float(kwargs.pop("stem_pct_scale", 1.0) or 1.0)
+        self._stem_pct_offset = float(kwargs.pop("stem_pct_offset", 0.0) or 0.0)
+        kwargs.setdefault("file", sys.stdout)
+        kwargs.setdefault("ascii", True)
+        kwargs.setdefault(
+            "mininterval",
+            _STEM_PROGRESS_INTERVAL if self._ui_piped else 0.35,
+        )
+        kwargs.setdefault("dynamic_ncols", False)
+        kwargs.setdefault("ncols", 88)
+        super().__init__(*args, **kwargs)
+
+    def display(self, *args, **kwargs):
+        if self._ui_piped:
+            # Skip tqdm's \\r bar; only emit machine progress for the host.
+            try:
+                self._emit_stem_progress()
+            except Exception:
+                pass
+            return None
+        out = super().display(*args, **kwargs)
+        try:
+            self._emit_stem_progress()
+        except Exception:
+            pass
+        return out
+
+    def close(self):
+        try:
+            self._emit_stem_progress(force=True)
+        except Exception:
+            pass
+        if self._ui_piped:
+            # Avoid final bar line in the STEM LOG.
+            try:
+                self.disable = True
+            except Exception:
+                pass
+        return super().close()
+
+    def _emit_stem_progress(self, force: bool = False) -> None:
+        total = getattr(self, "total", None) or 0
+        if total <= 0:
+            return
+        n = int(getattr(self, "n", 0) or 0)
+        now = time.monotonic()
+        last = float(getattr(self, "_last_ui_emit", 0.0) or 0.0)
+        if (
+            not force
+            and n < total
+            and (now - last) < _STEM_PROGRESS_INTERVAL
+        ):
+            return
+        self._last_ui_emit = now
+        frac = float(n) / float(total)
+        pct = 100.0 * (
+            self._stem_pct_offset + self._stem_pct_scale * frac
+        )
+        eta = ""
+        try:
+            rate = self.format_dict.get("rate")
+            if rate:
+                eta = f"{(total - n) / float(rate):.1f}"
+        except Exception:
+            eta = ""
+        phase = self._stem_phase
+        if not phase:
+            try:
+                phase = (self.desc or "").strip()
+            except Exception:
+                phase = ""
+        emit_stem_progress(
+            n,
+            total,
+            phase or "",
+            pct=pct,
+            eta=eta,
+            force=True,
+        )
+
+
+tqdm = _UiTqdm
+
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4FreeForm
 from mutagen.wave import WAVE
@@ -71,9 +278,12 @@ OUTPUT_CSV_GENDER = "genre_gender_voice_results.csv"
 # Metadata toggles.
 # WRITE_METADATA=True  -> write tags at all. Set False to only export
 #                        the CSV and leave every file untouched.
+# OVERWRITE_TAGS=False -> skip files that already have genre/gender tags
+#                        (resume-friendly). True forces re-tag everything.
 # DRY_RUN              -> kept for parity with older versions, now only
 #                        controls the final banner message.
 WRITE_METADATA = True
+OVERWRITE_TAGS = False
 
 DRY_RUN = False
 
@@ -155,6 +365,12 @@ BATCH_SIZE = 64
 # (Batch mode only.)
 AUDIO_WORKERS = 8
 
+# Gender batch: never queue the whole library at once. Each Future
+# caches its mel-patch result until destroyed — with 80k files that
+# OOMs Windows (ACCESS_VIOLATION / taskkill 0xc000012d). Process and
+# tag in waves so RAM stays bounded and a crash keeps earlier tags.
+GENDER_FILE_CHUNK = 256
+
 
 # GPU timing debug
 # OFF in v0.7: the per-batch synchronize blocks the CPU->GPU
@@ -170,6 +386,29 @@ AUDIO_EXTENSIONS = {
     ".mp3",
     ".m4a"
 }
+
+# Overridden by GG_RECURSIVE in non-interactive (STEM organizer) mode.
+INCLUDE_SUBFOLDERS = True
+
+
+def iter_audio_files(folder):
+    """Yield audio files under folder (recursive when INCLUDE_SUBFOLDERS)."""
+    root = Path(folder)
+    it = root.rglob("*") if INCLUDE_SUBFOLDERS else root.iterdir()
+    for path in it:
+        if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
+            yield path
+
+
+def list_audio_files(folder):
+    """Collect audio paths with periodic scan feedback for large libraries."""
+    print("Scanning for audio files...", flush=True)
+    files = []
+    for i, path in enumerate(iter_audio_files(folder), 1):
+        files.append(str(path))
+        if i % 5000 == 0:
+            print(f"  …found {i:,} audio files", flush=True)
+    return files
 
 
 # ----------------------------------------------------------
@@ -202,6 +441,22 @@ GENDER_HEAD_URL = (
 )
 GENDER_EFFNET_NAME = "discogs-effnet-bs64-1.pb"
 GENDER_HEAD_NAME = "gender-discogs-effnet-1.pb"
+
+# ONNX / DirectML (GPU on Windows — TF 2.11+ has no native Win CUDA).
+GENDER_EFFNET_ONNX_NAME = "discogs-effnet-bsdynamic-1.onnx"
+GENDER_HEAD_ONNX_NAME = "gender-discogs-effnet-1.onnx"
+GENDER_EFFNET_ONNX_URL = (
+    "https://essentia.upf.edu/models/feature-extractors/"
+    "discogs-effnet/discogs-effnet-bsdynamic-1.onnx"
+)
+GENDER_HEAD_ONNX_URL = (
+    "https://essentia.upf.edu/models/classification-heads/"
+    "gender/gender-discogs-effnet-1.onnx"
+)
+GENDER_ORT_BATCH = 128
+_INSTRUMENT_MODELS = (
+    Path(__file__).resolve().parent.parent / "instrument_tagger" / "models"
+)
 
 _TF_SILENCED = False
 _MEL_FILTERBANK = None
@@ -267,6 +522,8 @@ if _GG_MODE:
     _gg_gender_fld = os.environ.get("GG_GENDER_FIELD", "comment").strip().lower()
     _gg_reverb     = os.environ.get("GG_REVERB_MODE",  "combined").strip().lower()
     _gg_write_meta = os.environ.get("GG_WRITE_META",   "1").strip()
+    _gg_overwrite  = os.environ.get("GG_OVERWRITE",    "0").strip()
+    _gg_recursive  = os.environ.get("GG_RECURSIVE",    "1").strip()
     _gg_csv        = os.environ.get("GG_CSV",          "").strip()
 
     CONTENT_TYPE     = "acapella" if _GG_MODE == "gender" else "instrumental"
@@ -276,6 +533,8 @@ if _GG_MODE:
     GENDER_TAG_FIELD = _gg_gender_fld if _gg_gender_fld in ("comment", "gender") else "comment"
     REVERB_TAG_MODE  = _gg_reverb if _gg_reverb in ("combined", "split") else "combined"
     WRITE_METADATA   = (_gg_write_meta != "0")
+    OVERWRITE_TAGS   = (_gg_overwrite == "1")
+    INCLUDE_SUBFOLDERS = (_gg_recursive != "0")
     RUNTIME_PROMPTS  = False
 
     if _gg_csv:
@@ -290,11 +549,7 @@ if _GG_MODE:
         )
         sys.exit(1)
 
-    _has_audio_env = any(
-        f.suffix.lower() in AUDIO_EXTENSIONS
-        for f in _input_path.rglob("*")
-        if f.is_file()
-    )
+    _has_audio_env = any(True for _ in iter_audio_files(_input_path))
     if not _has_audio_env:
         print(
             f"GG_MODE error: no supported audio files in {INPUT_FOLDER!r}",
@@ -305,6 +560,8 @@ if _GG_MODE:
     print(
         f"[GG] mode={CONTENT_TYPE}  folder={INPUT_FOLDER}"
         f"  batch={BATCH_MODE}  write_meta={WRITE_METADATA}"
+        f"  overwrite={OVERWRITE_TAGS}"
+        f"  subfolders={INCLUDE_SUBFOLDERS}"
         + (
             f"  reverb={REVERB_TAG_MODE}"
             if CONTENT_TYPE == "acapella"
@@ -419,11 +676,7 @@ if not _GG_MODE:
 
         # Quick sanity: any supported audio in this tree?
 
-        has_audio = any(
-            f.suffix.lower() in AUDIO_EXTENSIONS
-            for f in candidate.rglob("*")
-            if f.is_file()
-        )
+        has_audio = any(True for _ in iter_audio_files(candidate))
 
         if not has_audio:
 
@@ -712,6 +965,24 @@ def _silence_tensorflow():
     _TF_SILENCED = True
 
 
+def _download_model_file(path, url, status=print):
+    status(f"  downloading {path.name} ...")
+    try:
+        urllib.request.urlretrieve(url, path)
+    except Exception as exc:
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        raise SystemExit(
+            f"\nERROR: could not download {path.name}\n"
+            f"  reason: {exc}\n"
+            f"  url:    {url}\n\n"
+            f"Offline fix: place the file in:\n  {path.parent}\n"
+        ) from exc
+
+
 def ensure_gender_models(model_dir=None, status=print):
     """Download EffNet + gender .pb files if missing."""
 
@@ -722,30 +993,32 @@ def ensure_gender_models(model_dir=None, status=print):
     gender = model_dir / GENDER_HEAD_NAME
 
     for path, url in ((effnet, GENDER_EFFNET_URL), (gender, GENDER_HEAD_URL)):
-        if path.exists() and path.stat().st_size > 0:
+        if path.exists() and path.stat().st_size > 1000:
             continue
-        status(f"  downloading {path.name} ...")
-        try:
-            urllib.request.urlretrieve(url, path)
-        except Exception as exc:
-            if path.exists():
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
-            raise SystemExit(
-                f"\nERROR: could not download {path.name}\n"
-                f"  reason: {exc}\n"
-                f"  url:    {url}\n\n"
-                f"Offline / VM fix:\n"
-                f"  1. On a machine with internet, run the tagger once (or copy\n"
-                f"     from an existing install):\n"
-                f"       models\\{GENDER_EFFNET_NAME}\n"
-                f"       models\\{GENDER_HEAD_NAME}\n"
-                f"  2. Place both files in:\n"
-                f"       {model_dir}\n"
-                f"  3. Re-run. Download is skipped when those files exist.\n"
-            ) from exc
+        _download_model_file(path, url, status=status)
+
+    return effnet, gender
+
+
+def ensure_gender_onnx_models(model_dir=None, status=print):
+    """Download EffNet + gender .onnx files if missing."""
+
+    model_dir = Path(model_dir or GENDER_MODEL_DIR)
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    effnet = model_dir / GENDER_EFFNET_ONNX_NAME
+    gender = model_dir / GENDER_HEAD_ONNX_NAME
+
+    if not effnet.exists() or effnet.stat().st_size < 1000:
+        shared = _INSTRUMENT_MODELS / GENDER_EFFNET_ONNX_NAME
+        if shared.exists() and shared.stat().st_size > 1000:
+            status(f"  using shared {shared}")
+            effnet = shared
+        else:
+            _download_model_file(effnet, GENDER_EFFNET_ONNX_URL, status=status)
+
+    if not gender.exists() or gender.stat().st_size < 1000:
+        _download_model_file(gender, GENDER_HEAD_ONNX_URL, status=status)
 
     return effnet, gender
 
@@ -770,8 +1043,96 @@ def _wrap_frozen_graph(graph_path, input_names, output_names):
     )
 
 
-def load_gender_models(model_dir=None, status=print):
-    """Load EffNet embedding + gender head callables."""
+class _GenderTfBackend:
+    name = "tensorflow-cpu"
+
+    def __init__(self, embed_fn, gender_fn):
+        self.embed_fn = embed_fn
+        self.gender_fn = gender_fn
+
+    def predict_batch(self, chunk):
+        """chunk [N,128,96] -> probs [N,2]. Pads to 64 when N < 64 (TF graph)."""
+        import tensorflow as tf
+
+        valid = chunk.shape[0]
+        if valid < GENDER_BATCH_SIZE:
+            pad = np.zeros(
+                (
+                    GENDER_BATCH_SIZE - valid,
+                    GENDER_PATCH_SIZE,
+                    GENDER_N_MELS,
+                ),
+                dtype=np.float32,
+            )
+            chunk = np.concatenate([chunk, pad], axis=0)
+        elif valid > GENDER_BATCH_SIZE:
+            # Fixed bs64 graph — split.
+            parts = []
+            for start in range(0, valid, GENDER_BATCH_SIZE):
+                parts.append(
+                    self.predict_batch(chunk[start : start + GENDER_BATCH_SIZE])
+                )
+            return np.concatenate(parts, axis=0)
+
+        x = tf.convert_to_tensor(chunk, dtype=tf.float32)
+        embeddings = self.embed_fn(x)[0]
+        probs = self.gender_fn(embeddings)[0].numpy()
+        return probs[:valid]
+
+
+class _GenderOrtBackend:
+    def __init__(self, effnet_sess, head_sess, provider):
+        self.effnet = effnet_sess
+        self.head = head_sess
+        self.name = f"onnxruntime:{provider}"
+        self._mel_in = effnet_sess.get_inputs()[0].name
+        out_names = [o.name for o in effnet_sess.get_outputs()]
+        self._emb_out = "embeddings" if "embeddings" in out_names else out_names[-1]
+        self._head_in = head_sess.get_inputs()[0].name
+        self._head_out = head_sess.get_outputs()[0].name
+
+    def predict_batch(self, chunk):
+        """chunk [N,128,96] -> probs [N,2] (dynamic batch, no pad required)."""
+        emb = self.effnet.run([self._emb_out], {self._mel_in: chunk})[0]
+        return self.head.run([self._head_out], {self._head_in: emb})[0]
+
+
+def _ort_providers():
+    import onnxruntime as ort
+
+    available = set(ort.get_available_providers())
+    ordered = []
+    for name in (
+        "CUDAExecutionProvider",
+        "DmlExecutionProvider",
+        "CPUExecutionProvider",
+    ):
+        if name in available:
+            ordered.append(name)
+    return ordered or ["CPUExecutionProvider"]
+
+
+def load_gender_ort_backend(model_dir=None, status=print):
+    import onnxruntime as ort
+
+    effnet_path, head_path = ensure_gender_onnx_models(model_dir, status=status)
+    providers = _ort_providers()
+    status(f"  ONNX Runtime providers: {', '.join(providers)}")
+    so = ort.SessionOptions()
+    so.log_severity_level = 3
+    effnet = ort.InferenceSession(
+        str(effnet_path), sess_options=so, providers=providers
+    )
+    head = ort.InferenceSession(
+        str(head_path), sess_options=so, providers=providers
+    )
+    active = effnet.get_providers()[0]
+    status(f"  using {active} for discogs-effnet + gender head")
+    return _GenderOrtBackend(effnet, head, active)
+
+
+def load_gender_tf_backend(model_dir=None, status=print):
+    """Load EffNet + gender head via TensorFlow frozen graphs (CPU on Windows)."""
 
     _silence_tensorflow()
     status("  loading TensorFlow ...")
@@ -799,7 +1160,23 @@ def load_gender_models(model_dir=None, status=print):
         ["model/Softmax:0"],
     )
 
-    return embed_fn, gender_fn
+    return _GenderTfBackend(embed_fn, gender_fn)
+
+
+def load_gender_models(model_dir=None, status=print):
+    """
+    Load gender backend (ONNX DirectML/CUDA preferred, TF CPU fallback).
+
+    Returns a backend with .predict_batch(chunk) -> probs [N,2] and .name.
+    """
+
+    try:
+        import onnxruntime  # noqa: F401
+
+        return load_gender_ort_backend(model_dir, status=status)
+    except Exception as exc:
+        status(f"  ONNX Runtime unavailable ({exc}); falling back to TensorFlow")
+        return load_gender_tf_backend(model_dir, status=status)
 
 
 def load_mono_16k(filename):
@@ -1019,41 +1396,36 @@ def extract_patches(filename):
     return mel_patches(mel)
 
 
-def predict_patches(patches, embed_fn, gender_fn):
+def predict_patches(patches, backend):
     """Run EffNet + gender head on patches [n, 128, 96] -> probs [n, 2]."""
-    import tensorflow as tf
 
+    batch_size = (
+        GENDER_ORT_BATCH
+        if getattr(backend, "name", "").startswith("onnxruntime")
+        else GENDER_BATCH_SIZE
+    )
     n_patches = patches.shape[0]
     probs_all = []
 
-    for batch_start in range(0, n_patches, GENDER_BATCH_SIZE):
-        chunk = patches[batch_start : batch_start + GENDER_BATCH_SIZE]
-        valid = chunk.shape[0]
-
-        if valid < GENDER_BATCH_SIZE:
-            pad = np.zeros(
-                (
-                    GENDER_BATCH_SIZE - valid,
-                    GENDER_PATCH_SIZE,
-                    GENDER_N_MELS,
-                ),
-                dtype=np.float32,
-            )
-            chunk = np.concatenate([chunk, pad], axis=0)
-
-        embeddings = embed_fn(tf.constant(chunk))[0].numpy()
-        probs = gender_fn(tf.constant(embeddings))[0].numpy()
-        probs_all.append(probs[:valid])
+    for batch_start in range(0, n_patches, batch_size):
+        chunk = patches[batch_start : batch_start + batch_size]
+        probs_all.append(backend.predict_batch(chunk))
 
     return np.concatenate(probs_all, axis=0)
 
 
-def predict_fixed_batch(chunk64, embed_fn, gender_fn):
-    """One forward pass. chunk64 must be [64, 128, 96]. Returns [64, 2]."""
-    import tensorflow as tf
+def predict_fixed_batch(chunk64, backend, gender_fn=None):
+    """
+    One forward pass on a stacked patch batch.
 
-    embeddings = embed_fn(tf.constant(chunk64))[0].numpy()
-    return gender_fn(tf.constant(embeddings))[0].numpy()
+    `backend` is a gender backend (.predict_batch). The unused gender_fn
+    arg keeps older call sites that passed (embed_fn, gender_fn) working
+    when they still unpack two values — prefer passing backend alone.
+    """
+    if gender_fn is not None and not hasattr(backend, "predict_batch"):
+        # Legacy: (embed_fn, gender_fn) as two args.
+        backend = _GenderTfBackend(backend, gender_fn)
+    return backend.predict_batch(np.asarray(chunk64, dtype=np.float32))
 
 
 def probs_to_result(probs):
@@ -1071,11 +1443,29 @@ def probs_to_result(probs):
     }
 
 
-def classify_gender_file(filename, embed_fn, gender_fn):
+def calibrate_multiclass_confidence(top1, top2=None):
+    """Map ~519-way top-1 softmax to a binary-like score.
+
+    Renormalize top-1 vs top-2: p1/(p1+p2). Same reading as gender/reverb:
+    ~0.5 = barely beats runner-up, higher = clearer win. Raw top-1 stays in top5.
+    """
+    t1 = float(top1)
+    if top2 is None:
+        return t1
+    t2 = float(top2)
+    denom = t1 + t2
+    if denom <= 0.0:
+        return 0.0
+    return t1 / denom
+
+
+def classify_gender_file(filename, backend, gender_fn=None):
     """Run gender-discogs-effnet on one file."""
 
+    if gender_fn is not None and not hasattr(backend, "predict_batch"):
+        backend = _GenderTfBackend(backend, gender_fn)
     patches = extract_patches(filename)
-    probs = predict_patches(patches, embed_fn, gender_fn)
+    probs = predict_patches(patches, backend)
     return probs_to_result(probs)
 
 
@@ -1195,6 +1585,116 @@ def apply_audio_tags(filename, updates: dict) -> bool:
         return False
 
 
+def _first_str(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return str(value[0]).strip() if value else ""
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8", errors="replace").strip()
+        except Exception:
+            return ""
+    return str(value).strip()
+
+
+def read_tag_field(filename, field: str) -> str:
+    """Read one logical tag field (genre/style/comment/gender/reverb)."""
+    ext = Path(filename).suffix.lower()
+    try:
+        if ext == ".flac":
+            audio = FLAC(filename)
+            return _first_str(audio.get(field))
+
+        if ext in (".mp3", ".wav"):
+            audio = MP3(filename) if ext == ".mp3" else WAVE(filename)
+            tags = audio.tags
+            if tags is None:
+                return ""
+            if field == "genre":
+                frame = tags.get("TCON")
+                return _first_str(getattr(frame, "text", None))
+            if field == "comment":
+                frames = tags.getall("COMM")
+                return _first_str(frames[0].text if frames else "")
+            txxx = {
+                "style": "TXXX:STYLE",
+                "gender": "TXXX:GENDER",
+                "reverb": "TXXX:REVERB",
+            }.get(field)
+            if txxx:
+                frames = tags.getall(txxx)
+                return _first_str(frames[0].text if frames else "")
+            return ""
+
+        if ext in (".m4a", ".mp4"):
+            audio = MP4(filename)
+            if field in _MP4_STD:
+                return _first_str(audio.get(_MP4_STD[field]))
+            if field in _MP4_FREEFORM:
+                raw = audio.get(_MP4_FREEFORM[field])
+                if not raw:
+                    return ""
+                item = raw[0]
+                if isinstance(item, (bytes, bytearray, MP4FreeForm)):
+                    return bytes(item).decode("utf-8", errors="replace").strip()
+                return _first_str(item)
+            return ""
+
+    except Exception:
+        return ""
+    return ""
+
+
+def has_genre_tags(filename) -> bool:
+    """True when GENRE already has a non-empty value."""
+    return bool(read_tag_field(filename, "genre"))
+
+
+def has_gender_tags(filename) -> bool:
+    """True when target gender field already looks like female/male[+reverb]."""
+    field = (
+        GENDER_TAG_FIELD
+        if GENDER_TAG_FIELD in ("comment", "gender")
+        else "comment"
+    )
+    val = read_tag_field(filename, field).lower()
+    if not val:
+        return False
+    head = val.split("/", 1)[0].strip()
+    return head in ("female", "male")
+
+
+def filter_untagged_files(files, *, kind: str):
+    """Drop already-tagged files unless OVERWRITE_TAGS. Returns (kept, skipped)."""
+    if OVERWRITE_TAGS:
+        print(
+            "Overwrite existing tags is on — tagging all files "
+            "(not checking for existing tags).",
+            flush=True,
+        )
+        return list(files), 0
+    label = "gender" if kind == "gender" else "genre"
+    print(
+        f"Checking existing {label} tags "
+        f"({len(files):,} file(s)) — already tagged files will be skipped "
+        "(Overwrite existing tags is off)…",
+        flush=True,
+    )
+    check = has_gender_tags if kind == "gender" else has_genre_tags
+    kept = []
+    skipped = 0
+    iterator = files
+    if len(files) >= 200:
+        iterator = tqdm(files, desc="Checking tags")
+    for path in iterator:
+        if check(path):
+            skipped += 1
+        else:
+            kept.append(path)
+    return kept, skipped
+
+
 def write_metadata(filename, genre, style):
     """Write genre/style tags. Returns True if written."""
 
@@ -1261,7 +1761,7 @@ if CONTENT_TYPE == "acapella":
         print("Batched pipeline")
     else:
         print("Per-file mode")
-    print("gender-discogs-effnet (TF) + vocal_reverb.pt (mel-CNN)")
+    print("gender-discogs-effnet + vocal_reverb.pt (mel-CNN)")
     print(f"Recursive + {reverb_mode_label} metadata")
     print("==============================")
     print()
@@ -1272,8 +1772,8 @@ if CONTENT_TYPE == "acapella":
         print()
 
     print("Loading voice-gender models...")
-    embed_fn, gender_fn = load_gender_models(status=_status)
-    print("Models loaded")
+    gender_backend = load_gender_models(status=_status)
+    print(f"Models loaded ({gender_backend.name})")
     print()
 
     print("Loading vocal reverb classifier...")
@@ -1281,21 +1781,30 @@ if CONTENT_TYPE == "acapella":
     print("Reverb classifier loaded")
     print()
 
-    files = []
+    files = list_audio_files(INPUT_FOLDER)
+    total_found = len(files)
+    files, skipped_tagged = filter_untagged_files(files, kind="gender")
 
-    for file in Path(INPUT_FOLDER).rglob("*"):
-
-        if file.suffix.lower() in AUDIO_EXTENSIONS:
-
-            files.append(str(file))
-
-    print("Found", len(files), "files (recursive)")
+    print(
+        "Found",
+        total_found,
+        "files (recursive)" if INCLUDE_SUBFOLDERS else "files (top-level only)",
+    )
+    if skipped_tagged:
+        print(
+            f"Skipping {skipped_tagged} already tagged "
+            "(Overwrite existing tags is off)"
+        )
+    print(f"To process: {len(files)}")
     print()
 
     if not files:
 
-        print("No audio files found. Exiting.")
-        sys.exit(1)
+        print(
+            "No untagged audio files left. "
+            "Enable overwrite to re-tag, or pick another folder."
+        )
+        sys.exit(0)
 
     start_time = time.perf_counter()
     results = [None] * len(files)
@@ -1335,55 +1844,27 @@ if CONTENT_TYPE == "acapella":
         row["dry"] = round(rev["dry"], 4)
         return row
 
+    written = 0
+    skipped = 0
+
     if BATCH_MODE:
 
-        # Parallel mel/patch extract; pack patches across files into
-        # EffNet's fixed 64-patch TF batches.
+        # Parallel mel/patch extract in bounded waves. Never submit the
+        # whole library — Future objects cache patch arrays until GC.
 
         print("Processing gender (batch)...")
+        print(
+            f"  workers={AUDIO_WORKERS}  "
+            f"file_chunk={GENDER_FILE_CHUNK}  "
+            f"gpu_batch={GENDER_BATCH_SIZE}"
+        )
+        print(
+            f"  reverb workers={AUDIO_WORKERS}  "
+            f"file_chunk={REVERB_FILE_CHUNK}  "
+            f"gpu_batch={REVERB_GPU_BATCH}  "
+            f"device={getattr(reverb_router, 'device', '?')}"
+        )
         print()
-
-        score_storage = {}
-        errors = {}
-
-        pending_patches = []
-        pending_map = []
-
-        def _flush_gender_batch(force=False):
-
-            while pending_patches and (
-                force or len(pending_patches) >= GENDER_BATCH_SIZE
-            ):
-
-                take = min(GENDER_BATCH_SIZE, len(pending_patches))
-                chunk = pending_patches[:take]
-                mapping = pending_map[:take]
-                del pending_patches[:take]
-                del pending_map[:take]
-
-                stacked = np.stack(chunk, axis=0)
-
-                if take < GENDER_BATCH_SIZE:
-
-                    pad = np.zeros(
-                        (
-                            GENDER_BATCH_SIZE - take,
-                            GENDER_PATCH_SIZE,
-                            GENDER_N_MELS,
-                        ),
-                        dtype=np.float32,
-                    )
-                    stacked = np.concatenate([stacked, pad], axis=0)
-
-                probs = predict_fixed_batch(
-                    stacked,
-                    embed_fn,
-                    gender_fn,
-                )
-
-                for prob, idx in zip(probs[:take], mapping):
-
-                    score_storage.setdefault(idx, []).append(prob)
 
         def _extract_worker(args):
 
@@ -1399,112 +1880,269 @@ if CONTENT_TYPE == "acapella":
 
                 return index, None, str(exc)
 
-        with ThreadPoolExecutor(
-            max_workers=AUDIO_WORKERS
-        ) as executor:
+        files_total = len(files)
+        gender_started = time.perf_counter()
 
-            futures = {
-                executor.submit(
-                    _extract_worker,
-                    (i, f),
-                ):
-                i
-                for i, f in enumerate(files)
-            }
+        def _gender_eta(done_n):
+            if done_n <= 0:
+                return ""
+            rate = done_n / max(time.perf_counter() - gender_started, 1e-9)
+            if rate <= 0:
+                return ""
+            return f"{(files_total - done_n) / rate:.1f}"
 
-            for future in tqdm(
-                as_completed(futures),
-                total=len(futures),
-                desc="Audio",
-            ):
+        with tqdm(total=files_total, desc="Gender") as pbar:
 
-                index, patches, err = future.result()
+            for wave_start in range(0, files_total, GENDER_FILE_CHUNK):
 
-                if err is not None:
+                wave_end = min(wave_start + GENDER_FILE_CHUNK, files_total)
+                wave_files = files[wave_start:wave_end]
+                wave_len = wave_end - wave_start
 
-                    errors[index] = err
-                    continue
+                score_storage = {}
+                errors = {}
+                pending_patches = []
+                pending_map = []
 
-                for patch in patches:
+                def _flush_gender_batch(force=False):
 
-                    pending_patches.append(patch)
-                    pending_map.append(index)
+                    while pending_patches and (
+                        force
+                        or len(pending_patches) >= GENDER_BATCH_SIZE
+                    ):
 
-                if len(pending_patches) >= GENDER_BATCH_SIZE:
-
-                    _flush_gender_batch()
-
-        _flush_gender_batch(force=True)
-
-        for index, filename in enumerate(files):
-
-            if index in errors:
-
-                print("ERROR:", filename)
-                print(" ", errors[index])
-                results[index] = _empty_gender_row(
-                    filename,
-                    errors[index],
-                )
-                continue
-
-            probs = np.stack(score_storage[index], axis=0)
-            pred = probs_to_result(probs)
-
-            results[index] = {
-                "file": filename,
-                "gender": pred["gender"],
-                "confidence": round(pred["confidence"], 4),
-                "female": round(pred["female"], 4),
-                "male": round(pred["male"], 4),
-                "reverb": "",
-                "reverb_confidence": 0.0,
-                "wet": 0.0,
-                "dry": 0.0,
-                "n_patches": pred["n_patches"],
-                "error": "",
-            }
-
-        print()
-        print("Processing reverb (vocal mel-CNN, batched)...")
-        print(
-            f"  workers={AUDIO_WORKERS}  "
-            f"file_chunk={REVERB_FILE_CHUNK}  "
-            f"gpu_batch={REVERB_GPU_BATCH}  "
-            f"device={getattr(reverb_router, 'device', '?')}"
-        )
-        print()
-
-        reverb_jobs = [
-            (index, filename)
-            for index, filename in enumerate(files)
-            if results[index] is not None and results[index].get("gender")
-        ]
-
-        with tqdm(total=len(reverb_jobs), desc="Reverb") as pbar:
-            for start in range(0, len(reverb_jobs), REVERB_FILE_CHUNK):
-                chunk = reverb_jobs[start : start + REVERB_FILE_CHUNK]
-                idxs = [item[0] for item in chunk]
-                paths = [item[1] for item in chunk]
-                outs = reverb_router.predict_many(
-                    paths,
-                    gpu_batch_size=REVERB_GPU_BATCH,
-                    num_workers=AUDIO_WORKERS,
-                )
-                for index, rev in zip(idxs, outs):
-                    row = results[index]
-                    if isinstance(rev, BaseException):
-                        row["error"] = (
-                            (row.get("error") or "") + f" | reverb: {rev}"
-                        ).strip(" |")
-                    else:
-                        row["reverb"] = rev["reverb"]
-                        row["reverb_confidence"] = round(
-                            rev["reverb_confidence"], 4
+                        take = min(
+                            GENDER_BATCH_SIZE, len(pending_patches)
                         )
-                        row["wet"] = round(rev["wet"], 4)
-                        row["dry"] = round(rev["dry"], 4)
-                pbar.update(len(chunk))
+                        chunk = pending_patches[:take]
+                        mapping = pending_map[:take]
+                        del pending_patches[:take]
+                        del pending_map[:take]
+
+                        stacked = np.stack(chunk, axis=0)
+
+                        if take < GENDER_BATCH_SIZE:
+
+                            pad = np.zeros(
+                                (
+                                    GENDER_BATCH_SIZE - take,
+                                    GENDER_PATCH_SIZE,
+                                    GENDER_N_MELS,
+                                ),
+                                dtype=np.float32,
+                            )
+                            stacked = np.concatenate(
+                                [stacked, pad], axis=0
+                            )
+
+                        probs = predict_fixed_batch(
+                            stacked,
+                            gender_backend,
+                        )
+
+                        for prob, idx in zip(probs[:take], mapping):
+
+                            score_storage.setdefault(
+                                idx, []
+                            ).append(prob)
+
+                extract_done = 0
+
+                with ThreadPoolExecutor(
+                    max_workers=AUDIO_WORKERS
+                ) as executor:
+
+                    futures = [
+                        executor.submit(
+                            _extract_worker,
+                            (wave_start + i, filename),
+                        )
+                        for i, filename in enumerate(wave_files)
+                    ]
+
+                    for future in as_completed(futures):
+
+                        index, patches, err = future.result()
+                        extract_done += 1
+                        # Soft bar during extract (40% of this wave).
+                        soft_n = (
+                            wave_start
+                            + (extract_done / wave_len) * wave_len * 0.4
+                        )
+                        emit_stem_progress(
+                            soft_n,
+                            files_total,
+                            "extracting",
+                            eta=_gender_eta(wave_start),
+                            display_n=wave_start + extract_done,
+                        )
+
+                        if err is not None:
+
+                            errors[index] = err
+                            continue
+
+                        for patch in patches:
+
+                            pending_patches.append(patch)
+                            pending_map.append(index)
+
+                        del patches
+
+                        if len(pending_patches) >= GENDER_BATCH_SIZE:
+
+                            _flush_gender_batch()
+
+                    del futures
+
+                _flush_gender_batch(force=True)
+
+                for index in range(wave_start, wave_end):
+
+                    filename = files[index]
+
+                    if index in errors:
+
+                        print("ERROR:", filename, flush=True)
+                        print(" ", errors[index], flush=True)
+                        results[index] = _empty_gender_row(
+                            filename,
+                            errors[index],
+                        )
+                        continue
+
+                    probs = np.stack(score_storage[index], axis=0)
+                    pred = probs_to_result(probs)
+
+                    results[index] = {
+                        "file": filename,
+                        "gender": pred["gender"],
+                        "confidence": round(pred["confidence"], 4),
+                        "female": round(pred["female"], 4),
+                        "male": round(pred["male"], 4),
+                        "reverb": "",
+                        "reverb_confidence": 0.0,
+                        "wet": 0.0,
+                        "dry": 0.0,
+                        "n_patches": pred["n_patches"],
+                        "error": "",
+                    }
+
+                reverb_jobs = [
+                    (index, files[index])
+                    for index in range(wave_start, wave_end)
+                    if results[index] is not None
+                    and results[index].get("gender")
+                ]
+
+                for rev_start in range(
+                    0, len(reverb_jobs), REVERB_FILE_CHUNK
+                ):
+
+                    rev_chunk = reverb_jobs[
+                        rev_start : rev_start + REVERB_FILE_CHUNK
+                    ]
+                    idxs = [item[0] for item in rev_chunk]
+                    paths = [item[1] for item in rev_chunk]
+                    outs = reverb_router.predict_many(
+                        paths,
+                        gpu_batch_size=REVERB_GPU_BATCH,
+                        num_workers=AUDIO_WORKERS,
+                    )
+
+                    for index, rev in zip(idxs, outs):
+
+                        row = results[index]
+
+                        if isinstance(rev, BaseException):
+
+                            row["error"] = (
+                                (row.get("error") or "")
+                                + f" | reverb: {rev}"
+                            ).strip(" |")
+
+                        else:
+
+                            row["reverb"] = rev["reverb"]
+                            row["reverb_confidence"] = round(
+                                rev["reverb_confidence"], 4
+                            )
+                            row["wet"] = round(rev["wet"], 4)
+                            row["dry"] = round(rev["dry"], 4)
+
+                # Finalize per file: LOG + optional write + progress (60% of wave).
+                # Use a list so nested helper can mutate without nonlocal
+                # (this path runs at module scope, not inside a function).
+                finalize_state = [0]
+
+                def _advance_finalize(phase_name):
+                    finalize_state[0] += 1
+                    finalized_in_wave = finalize_state[0]
+                    done_n = wave_start + finalized_in_wave
+                    soft_n = (
+                        wave_start
+                        + wave_len * 0.4
+                        + finalized_in_wave * 0.6
+                    )
+                    emit_stem_progress(
+                        soft_n,
+                        files_total,
+                        phase_name,
+                        eta=_gender_eta(done_n),
+                        force=True,
+                        display_n=done_n,
+                    )
+                    pbar.n = done_n
+                    # Piped: host already got emit_stem_progress — avoid
+                    # refresh overwriting soft pct with integer n/total.
+                    if not getattr(pbar, "_ui_piped", False):
+                        pbar.refresh()
+
+                for index in range(wave_start, wave_end):
+
+                    row = results[index]
+
+                    if index in errors:
+
+                        _advance_finalize("tagging")
+                        continue
+
+                    if WRITE_METADATA:
+
+                        if not row or not row.get("gender"):
+
+                            skipped += 1
+
+                        else:
+
+                            ok = write_gender_metadata(
+                                row["file"],
+                                row["gender"],
+                                row.get("reverb") or None,
+                            )
+
+                            if ok:
+                                written += 1
+                            else:
+                                skipped += 1
+
+                    if row and row.get("gender"):
+                        _log_gender_result(row)
+
+                    _advance_finalize(
+                        "writing" if WRITE_METADATA else "tagging"
+                    )
+
+                del score_storage, errors, pending_patches, pending_map
+                gc.collect()
+
+        if WRITE_METADATA:
+
+            print("Tagged:", written, "| Skipped:", skipped)
+
+        else:
+
+            print("Metadata writing OFF")
 
         print()
 
@@ -1523,8 +2161,7 @@ if CONTENT_TYPE == "acapella":
 
                 pred = classify_gender_file(
                     filename,
-                    embed_fn,
-                    gender_fn,
+                    gender_backend,
                 )
 
             except Exception as exc:
@@ -1554,53 +2191,34 @@ if CONTENT_TYPE == "acapella":
             row = _merge_reverb(row, filename)
             results[index] = row
 
-            print()
-            print(Path(filename).name)
-            print("GENDER:", row["gender"])
-            print("REVERB:", row["reverb"] or "?")
-            print(
-                "CONF:",
-                row["confidence"],
-                "/",
-                row["reverb_confidence"],
-            )
+            _log_gender_result(row)
+
+            if WRITE_METADATA and row.get("gender"):
+
+                ok = write_gender_metadata(
+                    row["file"],
+                    row["gender"],
+                    row.get("reverb") or None,
+                )
+
+                if ok:
+                    written += 1
+                else:
+                    skipped += 1
+
+            elif WRITE_METADATA:
+
+                skipped += 1
 
         print()
 
-    written = 0
-    skipped = 0
+        if WRITE_METADATA:
 
-    if WRITE_METADATA:
+            print("Tagged:", written, "| Skipped:", skipped)
 
-        print(
-            f"Writing {reverb_mode_label} metadata to",
-            len(results),
-            "files...",
-        )
+        else:
 
-        for row in tqdm(results, desc="Tagging"):
-
-            if not row or not row["gender"]:
-
-                skipped += 1
-                continue
-
-            ok = write_gender_metadata(
-                row["file"],
-                row["gender"],
-                row.get("reverb") or None,
-            )
-
-            if ok:
-                written += 1
-            else:
-                skipped += 1
-
-        print("Tagged:", written, "| Skipped:", skipped)
-
-    else:
-
-        print("Metadata writing OFF")
+            print("Metadata writing OFF")
 
     elapsed = time.perf_counter() - start_time
     minutes = max(elapsed / 60, 1e-9)
@@ -1616,11 +2234,7 @@ if CONTENT_TYPE == "acapella":
 
     out_csv = OUTPUT_CSV_GENDER
 
-    pd.DataFrame(results).to_csv(
-        out_csv,
-        index=False,
-        encoding="utf-8",
-    )
+    _write_results_csv(out_csv, results)
 
     print()
     print("==============================")
@@ -1680,7 +2294,7 @@ print(
 
 print(
     "Torchaudio:",
-    torchaudio.__version__
+    getattr(torchaudio, "__version__", None) or "not installed (librosa resample)",
 )
 
 print(
@@ -1797,8 +2411,9 @@ print()
 def load_audio(filename):
 
     """
-    Decode audio via SoundFile (faster than librosa),
-    downmix to mono, resample to SAMPLE_RATE.
+    Decode audio via SoundFile (faster than librosa load),
+    downmix to mono, resample to SAMPLE_RATE via librosa
+    (avoids brittle torchaudio native wheels on Windows).
     Returns a 1D float32 torch tensor.
     """
 
@@ -1808,34 +2423,20 @@ def load_audio(filename):
         dtype="float32"
     )
 
-    audio = torch.from_numpy(
-        data.T
-    )
-
-
-    # stereo -> mono
-
-    if audio.shape[0] > 1:
-
-        audio = torch.mean(
-            audio,
-            dim=0,
-            keepdim=True
-        )
-
-    audio = audio.squeeze(0)
-
+    # stereo -> mono (numpy), then optional resample
+    audio_np = data.mean(axis=1)
 
     if sr != SAMPLE_RATE:
-
-        audio = torchaudio.functional.resample(
-            audio,
-            sr,
-            SAMPLE_RATE
+        audio_np = librosa.resample(
+            audio_np,
+            orig_sr=sr,
+            target_sr=SAMPLE_RATE,
+            res_type="soxr_hq",
         )
 
-
-    return audio
+    return torch.from_numpy(
+        np.ascontiguousarray(audio_np, dtype=np.float32)
+    )
 
 
 
@@ -2083,29 +2684,32 @@ def run_gpu_batch(batch):
 
 
 # ==========================================================
-# FIND FILES (recursive through all subfolders)
+# FIND FILES
 # ==========================================================
 
-files = []
-
-
-for file in Path(INPUT_FOLDER).rglob("*"):
-
-    if file.suffix.lower() in AUDIO_EXTENSIONS:
-
-        files.append(
-            str(file)
-        )
-
+files = list_audio_files(INPUT_FOLDER)
+total_found = len(files)
+files, skipped_tagged = filter_untagged_files(files, kind="genre")
 
 print(
     "Found",
-    len(files),
-    "files (recursive)"
+    total_found,
+    "files (recursive)" if INCLUDE_SUBFOLDERS else "files (top-level only)",
 )
-
+if skipped_tagged:
+    print(
+        f"Skipping {skipped_tagged} already tagged "
+        "(Overwrite existing tags is off)"
+    )
+print(f"To process: {len(files)}")
 print()
 
+if not files:
+    print(
+        "No untagged audio files left. "
+        "Enable overwrite to re-tag, or pick another folder."
+    )
+    sys.exit(0)
 
 
 # ==========================================================
@@ -2209,6 +2813,42 @@ score_storage = {}
 total_clips = 0
 
 
+# When metadata write follows, audio owns 85% of the bar so Tagging
+# never resets percent back to 0.
+_GENRE_AUDIO_WEIGHT = 0.85 if WRITE_METADATA else 1.0
+_GENRE_TAG_WEIGHT = 1.0 - _GENRE_AUDIO_WEIGHT
+
+
+def _log_genre_from_scores(index, scores_tensor):
+    """Compact LOG line from clip scores for one file."""
+    avg = torch.mean(scores_tensor, dim=0)
+    k = min(2, int(avg.numel()))
+    top = torch.topk(avg, k)
+    best_label = model.config.id2label[top.indices[0].item()]
+    top1 = top.values[0].item()
+    top2 = top.values[1].item() if k > 1 else None
+    best_score = round(calibrate_multiclass_confidence(top1, top2), 4)
+    parts = best_label.split("---")
+    genre = parts[0]
+    style = parts[1] if len(parts) > 1 else ""
+    _log_genre_result(files[index], genre, style, best_score)
+
+
+def _store_gpu_scores(scores, mapping):
+    """Accumulate clip scores; LOG each file once its batch lands."""
+    global total_clips
+    total_clips += len(mapping)
+    by_idx = {}
+    for score, idx in zip(scores, mapping):
+        score_storage.setdefault(idx, []).append(score)
+        by_idx.setdefault(idx, True)
+    for idx in by_idx:
+        _log_genre_from_scores(
+            idx,
+            torch.stack(score_storage[idx]),
+        )
+
+
 if BATCH_MODE:
 
     # ------------------------------------------------
@@ -2246,7 +2886,10 @@ if BATCH_MODE:
         for future in tqdm(
             as_completed(futures),
             total=len(futures),
-            desc="Audio"
+            desc="Audio",
+            stem_phase="audio",
+            stem_pct_scale=_GENRE_AUDIO_WEIGHT,
+            stem_pct_offset=0.0,
         ):
 
             index, inputs = future.result()
@@ -2266,23 +2909,7 @@ if BATCH_MODE:
                 scores, mapping = run_gpu_batch(
                     batch
                 )
-
-                total_clips += len(mapping)
-
-
-                for score, idx in zip(
-                    scores,
-                    mapping
-                ):
-
-                    score_storage.setdefault(
-                        idx,
-                        []
-                    ).append(
-                        score
-                    )
-
-
+                _store_gpu_scores(scores, mapping)
                 batch = []
 
 
@@ -2295,21 +2922,7 @@ if BATCH_MODE:
         scores, mapping = run_gpu_batch(
             batch
         )
-
-        total_clips += len(mapping)
-
-
-        for score, idx in zip(
-            scores,
-            mapping
-        ):
-
-            score_storage.setdefault(
-                idx,
-                []
-            ).append(
-                score
-            )
+        _store_gpu_scores(scores, mapping)
 
 
 
@@ -2338,7 +2951,10 @@ else:
     for index, filename in enumerate(
         tqdm(
             files,
-            desc="Analyzing"
+            desc="Analyzing",
+            stem_phase="analyzing",
+            stem_pct_scale=_GENRE_AUDIO_WEIGHT,
+            stem_pct_offset=0.0,
         )
     ):
 
@@ -2364,14 +2980,23 @@ else:
 
         top = torch.topk(
             avg,
-            1
+            min(2, int(avg.numel())),
         )
 
         best_label = model.config.id2label[
             top.indices[0].item()
         ]
 
-        best_score = top.values[0].item()
+        top1 = top.values[0].item()
+        top2 = (
+            top.values[1].item()
+            if top.values.numel() > 1
+            else None
+        )
+        best_score = calibrate_multiclass_confidence(
+            top1,
+            top2,
+        )
 
         parts = best_label.split(
             "---"
@@ -2386,28 +3011,11 @@ else:
         )
 
 
-        print()
-
-        print(
-            Path(filename).name
-        )
-
-        print(
-            "GENRE:",
-            genre
-        )
-
-        print(
-            "STYLE:",
-            style
-        )
-
-        print(
-            "CONF:",
-            round(
-                best_score,
-                4
-            )
+        _log_genre_result(
+            filename,
+            genre,
+            style,
+            round(best_score, 4),
         )
 
 
@@ -2469,6 +3077,7 @@ for index, filename in enumerate(files):
 
 
     best = predictions[0]
+    runner = predictions[1] if len(predictions) > 1 else None
 
     parts = best["label"].split(
         "---"
@@ -2482,13 +3091,17 @@ for index, filename in enumerate(files):
         else ""
     )
 
+    conf = calibrate_multiclass_confidence(
+        best["score"],
+        runner["score"] if runner else None,
+    )
 
     results.append(
         {
             "file": filename,
             "genre": genre,
             "style": style,
-            "confidence": best["score"],
+            "confidence": round(conf, 4),
             "top5": json.dumps(predictions)
         }
     )
@@ -2516,7 +3129,10 @@ if WRITE_METADATA:
 
     for row in tqdm(
         results,
-        desc="Tagging"
+        desc="Tagging",
+        stem_phase="tagging",
+        stem_pct_scale=_GENRE_TAG_WEIGHT,
+        stem_pct_offset=_GENRE_AUDIO_WEIGHT,
     ):
 
         ok = write_metadata(
@@ -2625,13 +3241,7 @@ if device == "cuda":
 # SAVE
 # ==========================================================
 
-pd.DataFrame(
-    results
-).to_csv(
-    OUTPUT_CSV,
-    index=False,
-    encoding="utf-8"
-)
+_write_results_csv(OUTPUT_CSV, results)
 
 
 print()

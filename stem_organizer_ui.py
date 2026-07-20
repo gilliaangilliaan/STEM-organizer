@@ -20,6 +20,11 @@ from ffmpeg_bootstrap import subprocess_kwargs
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk, filedialog, messagebox
+from ui_theme import (  # noqa: F401
+    ensure_ctk_dark, DARK, ctk_section, ctk_path_row,
+    ctk_ui_font, ctk_section_font, ttk_ui_font, HEADER_DESC_FONT,
+    ACTION_BTN_GAP, PATH_BTN_HEIGHT, ctk_pin_button_height,
+)
 
 # ML stack (torch, demucs, numpy, soundfile) — loaded via deps_bootstrap, not bundled in slim exe.
 np = None
@@ -270,7 +275,7 @@ SI_SDR_URL = (
     'https://source-separation.github.io/tutorial/basics/evaluation.html'
     '?highlight=sdr#si-sdr'
 )
-APP_VERSION = '1.0.5'
+APP_VERSION = '1.0.6'
 SPLASH_SIZE = 512
 SPLASH_PAD = 28
 SPLASH_CHROMA = '#010101'
@@ -1912,10 +1917,10 @@ class Worker(threading.Thread):
                 folder_had_errors = True
                 self._record_stem_skip(rel, path, 'error')
                 continue
-            label, _, top_share, margin, skip_reason = classify_to_category(
+            label, _, top_share, _margin, skip_reason = classify_to_category(
                 energies, mode_cfg, float(self.p['threshold']), float(self.p['min_margin']))
             self.log(
-                f"  {label} {top_share:.0%} (margin {margin:+.0%})  →  {path.name}"
+                f"  {label} {top_share:.0%}  →  {path.name}"
             )
             if label == 'skip':
                 skipped += 1
@@ -2580,12 +2585,14 @@ def _entry_select_colors() -> tuple[str, str]:
     )
 
 # tk.Label only — ttk TLabel styles ignore small font sizes on Windows/clam.
-HEADER_DESC_FONT = ('Segoe UI', 10)
+# Matches Rename Files subtitle (size 12, dim text).
+HEADER_DESC_FONT = ('Segoe UI', 12)
+HEADER_DESC_COLOR = '#9aa0b4'  # DARK['text_dim']
 ACTION_BTN_FONT = ('Segoe UI Semibold', 10)
 ACTION_BTN_PADX = 14
 ACTION_BTN_PADY = 4
 CTRL_FIELD_PAD = 3
-CTRL_ROW_PADY = 4
+CTRL_ROW_PADY = 2
 CTRL_BTN_FONT = ('Segoe UI', 10)
 CTRL_BTN_PADX = 12
 CTRL_BTN_PADY = 4
@@ -2616,6 +2623,8 @@ STATUS_BOTTOM_PAD = 2
 
 LOG_FONT = ('Consolas', 10)
 LOG_FONT_BOLD = ('Consolas', 10, 'bold')
+# Confidence % — dim + slightly smaller than body LOG text.
+LOG_PCT_FONT = ('Consolas', 8)
 # Log chips: Arial (clean sans-serif on Windows); shared with About legend.
 LOG_STEM_CHIP_FONT_SIZE = 9
 LOG_STEM_GAP_TAG = 'log_stem_gap'
@@ -2634,13 +2643,33 @@ LOG_STEM_COLORS = {
     'vocals':       '#a855f7',
     'instrumental': '#60A5FA',
 }
+# Genre & Gender badges (Classify-style chips).
+# Soft chip fill / wet text = button text (COLORS['log_fg']).
+LOG_GG_COLORS = {
+    'female': '#ec4899',  # pink
+    'male':   '#60A5FA',  # blue (same family as instrumental)
+    'dry':    COLORS['log_fg'],  # genre + dry bg
+    'wet':    '#262833',  # wet + style chip bg
+}
+LOG_GG_FG = {
+    'dry': '#262833',  # dark on soft fill
+    'wet': COLORS['log_fg'],  # soft white on wet/style
+}
 LOG_SKIP_COLOR = '#636b7a'
 LOG_MARGIN_COLOR = '#9aa0b4'
 LOG_DELETED_COLOR = '#e89292'
 LOG_WARN_COLOR = '#ecc990'
 STEM_CLASSIFY_RE = re.compile(
-    r'^(\s+)([a-z_]+)( \d+%)( \(margin [^)]+\))(  →  .+)$'
+    # Optional pct; legacy margin ignored if present.
+    r'^(\s+)([a-z_]+)(?: (\d+%))?(?: \(margin [^)]+\))?(  →  .+)$'
 )
+GG_HEADER_RE = re.compile(r'^=== .+ ===\s*$')
+GG_BADGE_RE = re.compile(
+    r'^(\s*)(female|male|dry|wet)'
+    r'(?: \(confidence [^)]+\)| (\d+%))?\s*$',
+    re.IGNORECASE,
+)
+GG_PCT_ONLY_RE = re.compile(r'^(\s*)(\d+%)\s*$')
 
 
 _stem_chip_font_obj: tkfont.Font | None = None
@@ -2657,8 +2686,13 @@ def _resolve_log_stem_chip_font(text: tk.Misc) -> tuple[str, ...]:
     return 'Segoe UI Semibold', LOG_STEM_CHIP_FONT_SIZE
 
 
-def _pad_stem_chip(font: tkfont.Font, label: str, width_px: int) -> str:
-    text = label.strip().lower()
+def _pad_chip_to_width(
+    font: tkfont.Font, label: str, width_px: int, *, lower: bool = False,
+) -> str:
+    """Pad with spaces to at least width_px; longer labels keep ~1-space sides (bg grows)."""
+    text = label.strip()
+    if lower:
+        text = text.lower()
     left = right = 1
     while font.measure((' ' * left) + text + (' ' * right)) < width_px:
         if left <= right:
@@ -2668,23 +2702,33 @@ def _pad_stem_chip(font: tkfont.Font, label: str, width_px: int) -> str:
     return (' ' * left) + text + (' ' * right)
 
 
+def _pad_stem_chip(font: tkfont.Font, label: str, width_px: int) -> str:
+    return _pad_chip_to_width(font, label, width_px, lower=True)
+
+
 def _stem_chip_color(label: str) -> str:
     key = label.strip().lower()
     if key == 'skip':
         return LOG_SKIP_COLOR
+    if key in LOG_GG_COLORS:
+        return LOG_GG_COLORS[key]
     return LOG_STEM_COLORS.get(key, COLORS['panel2'])
+
+
+def _chip_label_set() -> list[str]:
+    return list(LOG_STEM_COLORS.keys()) + list(LOG_GG_COLORS.keys()) + ['skip']
 
 
 def _init_stem_chip_layout(text: tk.Misc) -> None:
     """Precompute equal-width chip strings (Arial + pixel padding)."""
     global _stem_chip_font_obj, _log_stem_chip_font_spec, _stem_chip_cache, _stem_chip_width_px
-    if _stem_chip_cache:
+    labels = _chip_label_set()
+    if _stem_chip_cache and set(labels).issubset(_stem_chip_cache):
         return
     spec = _resolve_log_stem_chip_font(text)
     _log_stem_chip_font_spec = spec
     _stem_chip_font_obj = tkfont.Font(root=text, font=spec)
     font = _stem_chip_font_obj
-    labels = list(LOG_STEM_COLORS.keys()) + ['skip']
     longest = max(labels, key=len)
     target = max(font.measure(longest), font.measure('n' * 9)) + 16
     provisional = {lb: _pad_stem_chip(font, lb, target) for lb in labels}
@@ -2704,6 +2748,58 @@ def _format_stem_chip_text(label: str) -> str:
     return f' {text} '
 
 
+def _format_gg_value_chip(label: str) -> str:
+    """
+    Genre/style chip: same min width as gender/reverb badges; keep case.
+    Longer text → chip grows (no clipping).
+    """
+    text = (label or '?').strip() or '?'
+    if _stem_chip_font_obj is not None and _stem_chip_width_px > 0:
+        return _pad_chip_to_width(
+            _stem_chip_font_obj, text, _stem_chip_width_px, lower=False,
+        )
+    return f' {text} '
+
+
+def _gg_confidence_tag(text: str) -> str:
+    """Green if percent > 70 (or fraction > 0.7), pale orange otherwise."""
+    try:
+        m = re.search(r'(-?\d+(?:\.\d+)?)', text or '')
+        if not m:
+            return 'gg_conf_low'
+        v = float(m.group(1))
+        # Whole percent (72) vs legacy fraction (0.72).
+        if v <= 1.0 and '%' not in (text or ''):
+            v *= 100.0
+        if v > 70.0:
+            return 'gg_conf'
+    except ValueError:
+        pass
+    return 'gg_conf_low'
+
+
+def _gg_insert_confidence(text_widget: tk.Text, conf_text: str) -> None:
+    """Insert '(confidence 72%)' with only the percent value colored."""
+    raw = conf_text or ''
+    # Keep leading gap after badge (strip() was eating the space).
+    lead = raw[: len(raw) - len(raw.lstrip())]
+    if lead:
+        text_widget.insert('end', lead, 'log_margin')
+    body = raw.strip()
+    m = re.match(
+        r'^(\(confidence\s+)(-?\d+(?:\.\d+)?)(%?)(\))\s*$',
+        body,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        text_widget.insert('end', body or raw, 'log_margin')
+        return
+    text_widget.insert('end', m.group(1), 'log_margin')
+    value = m.group(2) + (m.group(3) or '')
+    text_widget.insert('end', value, _gg_confidence_tag(value))
+    text_widget.insert('end', m.group(4), 'log_margin')
+
+
 def _ensure_stem_chip_layout(parent: tk.Misc) -> None:
     _init_stem_chip_layout(parent)
 
@@ -2717,7 +2813,7 @@ def _stem_log_tag(label: str) -> str:
     key = label.lower()
     if key == 'skip':
         return 'log_stem_skip'
-    if key in LOG_STEM_COLORS:
+    if key in LOG_STEM_COLORS or key in LOG_GG_COLORS:
         return f'log_stem_{key}'
     return 'log_stem_unknown'
 
@@ -2726,10 +2822,10 @@ def _configure_stem_log_tags(text: tk.Text) -> None:
     """Colored stem labels via text tags (scales; embedded Label chips stop after ~N lines)."""
     _ensure_stem_chip_layout(text)
     chip_font = _stem_chip_font_spec(text)
-    for stem, color in LOG_STEM_COLORS.items():
+    for stem, color in {**LOG_STEM_COLORS, **LOG_GG_COLORS}.items():
         text.tag_configure(
             f'log_stem_{stem}',
-            foreground='white',
+            foreground=LOG_GG_FG.get(stem, 'white'),
             background=color,
             font=chip_font,
         )
@@ -2842,7 +2938,7 @@ ABOUT_BULLETS = (
 
 ABOUT_HOW_IT_WORKS_TAIL = (
     'Accepted stems are summed from their original files (not AI-separated). '
-    'You can filter short or incomplete outputs, append duration to folder names, '
+    'You can filter short or incomplete outputs, '
     'resume by skipping existing results, and export an optional mixture.wav per song.\n\n'
     'Additionally, you can play 2-stem or 4-stem folders to audition mixes, '
     'using the STEM player with the Play button.'
@@ -2997,7 +3093,17 @@ def show_device_notice_dialog(parent: tk.Misc) -> bool:
     dlg.protocol('WM_DELETE_WINDOW', close_dialog)
 
     dlg.update_idletasks()
-    _center_toplevel(dlg, max(480, outer.winfo_reqwidth() + 48), outer.winfo_reqheight() + 40)
+    width = max(480, outer.winfo_reqwidth() + 48)
+    height = outer.winfo_reqheight() + 40
+    # Center on parent + dark title bar — same as About / help dialogs.
+    top = parent.winfo_toplevel()
+    top.update_idletasks()
+    x = top.winfo_rootx() + max(0, (top.winfo_width() - width) // 2)
+    y = top.winfo_rooty() + max(0, (top.winfo_height() - height) // 2)
+    dlg.geometry(f'{width}x{height}+{x}+{y}')
+    dlg.update_idletasks()
+    _win_apply_dwm_rounded_corners(dlg)
+    dlg.after(20, lambda: _win_apply_dwm_rounded_corners(dlg))
     dlg.grab_set()
     dlg.focus_force()
     parent.wait_window(dlg)
@@ -3404,7 +3510,18 @@ def show_about_dialog(parent: tk.Tk, icon: tk.PhotoImage | None = None) -> None:
     dlg.update_idletasks()
 
     dialog_h = _about_toplevel_height(dlg, outer, ABOUT_DIALOG_W)
-    _center_toplevel(dlg, ABOUT_DIALOG_W, dialog_h)
+    # Center on parent window — same as Match / Genre / Rename help dialogs.
+    top = parent.winfo_toplevel()
+    top.update_idletasks()
+    width = ABOUT_DIALOG_W
+    x = top.winfo_rootx() + max(0, (top.winfo_width() - width) // 2)
+    y = top.winfo_rooty() + max(0, (top.winfo_height() - dialog_h) // 2)
+    dlg.geometry(f'{width}x{dialog_h}+{x}+{y}')
+    dlg.update_idletasks()
+
+    # Same dark title bar / DWM chrome as Match / Genre / Rename help.
+    _win_apply_dwm_rounded_corners(dlg)
+    dlg.after(20, lambda: _win_apply_dwm_rounded_corners(dlg))
 
     dlg.grab_set()
     dlg.focus_force()
@@ -3465,7 +3582,10 @@ class InfoIcon(tk.Canvas):
         Tooltip(self, 'Show more info/help.')
 
     def _color(self) -> str:
-        return _tint_hex(COLORS['fg'], COLORS['bg'], self._opacity)
+        # Match tab description dim color; brighten to fg on hover.
+        if self._opacity >= INFO_ICON_OPACITY_FULL:
+            return COLORS['fg']
+        return HEADER_DESC_COLOR
 
     def _redraw(self) -> None:
         self.delete('all')
@@ -3833,6 +3953,8 @@ TITLE_BAR_HEIGHT = 36
 TITLE_ICON_SIZE = 22
 TITLE_BAR_CONTENT_PAD_Y = 5
 RESIZE_BORDER = 6
+# Outer window clip radius (custom title bar / overrideredirect).
+WINDOW_CORNER_RADIUS = 12
 _USE_CUSTOM_TITLE_BAR = sys.platform == 'win32'
 WIN_DEFAULT_W = 1200
 WIN_DEFAULT_H = 1018
@@ -3840,12 +3962,15 @@ WIN_MIN_W = 1000
 WIN_MIN_H = 720
 CONTENT_PAD = 18
 CONTENT_PAD_Y = 10
-HEADER_TOP_PAD = 8
+HEADER_TOP_PAD = 4
 ACTIONS_BOTTOM_PAD = 12
-SECTION_INNER_PAD = 16
+# Extra air between dark tab panels and the action button row.
+# Keeps Align (tallest) from sitting flush against Play / Start / etc.
+ACTIONS_TOP_GAP = 20
+SECTION_INNER_PAD = 10
 CLASS_FRAME_PAD = (SECTION_INNER_PAD, 3, SECTION_INNER_PAD, SECTION_INNER_PAD)
-CLASS_TAB_CONTENT_PAD = (0, 6)
-SECTION_GAP = 14
+CLASS_TAB_CONTENT_PAD = (0, 3)
+SECTION_GAP = 8
 SECTION_SIDE_PAD_LEFT = 14
 SECTION_SIDE_PAD_RIGHT = 4
 LOG_PAD_BOTTOM = ACTIONS_BOTTOM_PAD
@@ -3997,6 +4122,107 @@ def apply_native_window_frame(root: tk.Misc) -> None:
         ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         ex = (ex | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex)
+    except Exception:
+        pass
+
+
+def _win_colorref_from_hex(hex_color: str) -> int:
+    """COLORREF 0x00BBGGRR from #RRGGBB."""
+    h = hex_color.lstrip('#')
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return (b << 16) | (g << 8) | r
+
+
+def _win_apply_rounded_corners(
+    root: tk.Misc,
+    *,
+    maximized: bool = False,
+    radius: int = WINDOW_CORNER_RADIUS,
+) -> None:
+    """Clip frameless (overrideredirect) window via SetWindowRgn.
+
+    Skips no-op updates — SetWindowRgn loops make Windows show the busy cursor.
+    Do not use this on normal decorated Toplevels (help / STEM player) — that
+    leaves a white square frame. Those use `_win_apply_dwm_rounded_corners`.
+    """
+    if sys.platform != 'win32':
+        return
+    if getattr(root, '_rounding_corners', False):
+        return
+    try:
+        w = max(int(root.winfo_width()), 1)
+        h = max(int(root.winfo_height()), 1)
+        if w < 2 or h < 2:
+            return
+        key = (w, h, bool(maximized), int(radius), 'rgn')
+        if getattr(root, '_round_corner_key', None) == key:
+            return
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        # No flush — update_idletasks here prolongs the busy cursor on startup.
+        hwnd = _win_toplevel_hwnd(root, flush=False)
+        root._rounding_corners = True  # type: ignore[attr-defined]
+        try:
+            if maximized or radius <= 0:
+                user32.SetWindowRgn(hwnd, 0, True)
+            else:
+                # CreateRoundRectRgn: right/bottom exclusive; ellipse = 2*r.
+                hrgn = gdi32.CreateRoundRectRgn(
+                    0, 0, w + 1, h + 1, radius * 2, radius * 2,
+                )
+                if not hrgn:
+                    return
+                # On success the system owns hrgn — do not DeleteObject.
+                if not user32.SetWindowRgn(hwnd, hrgn, True):
+                    gdi32.DeleteObject(hrgn)
+                    return
+            root._round_corner_key = key  # type: ignore[attr-defined]
+        finally:
+            root._rounding_corners = False  # type: ignore[attr-defined]
+    except Exception:
+        try:
+            root._rounding_corners = False  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def _win_apply_dwm_rounded_corners(
+    root: tk.Misc,
+    *,
+    maximized: bool = False,
+) -> None:
+    """Native Win11 rounded corners + dark border for decorated Toplevels."""
+    if sys.platform != 'win32':
+        return
+    try:
+        user32 = ctypes.windll.user32
+        dwmapi = ctypes.windll.dwmapi
+        hwnd = _win_toplevel_hwnd(root, flush=False)
+        # Drop any prior SetWindowRgn clip (causes white square halo on framed wins).
+        user32.SetWindowRgn(hwnd, 0, True)
+
+        # DWMWA_WINDOW_CORNER_PREFERENCE = 33
+        # DWMWCP_DONOTROUND = 1, DWMWCP_ROUND = 2
+        pref = ctypes.c_int(1 if maximized else 2)
+        dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+
+        # DWMWA_BORDER_COLOR = 34 — match app border (kills light/white frame).
+        border = ctypes.c_uint(_win_colorref_from_hex(COLORS['border']))
+        dwmapi.DwmSetWindowAttribute(
+            hwnd, 34, ctypes.byref(border), ctypes.sizeof(border),
+        )
+        # DWMWA_CAPTION_COLOR = 35 — dark title bar on STEM player / help.
+        caption = ctypes.c_uint(_win_colorref_from_hex(COLORS['panel']))
+        dwmapi.DwmSetWindowAttribute(
+            hwnd, 35, ctypes.byref(caption), ctypes.sizeof(caption),
+        )
+        # DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        dark = ctypes.c_int(1)
+        dwmapi.DwmSetWindowAttribute(
+            hwnd, 20, ctypes.byref(dark), ctypes.sizeof(dark),
+        )
+        root._round_corner_key = (bool(maximized), 'dwm')  # type: ignore[attr-defined]
     except Exception:
         pass
 
@@ -4227,7 +4453,8 @@ def apply_theme(root: tk.Tk) -> None:
                                       'arrowcolor': C['fg_dim'], 'insertcolor': C['fg'],
                                       'selectbackground': select_active,
                                       'selectforeground': C['fg'],
-                                      'padding': CTRL_FIELD_PAD},
+                                      'padding': CTRL_FIELD_PAD,
+                                      'font': ttk_ui_font()},
         'Vertical.TScrollbar':       {'background': C['panel2'], 'troughcolor': C['log_bg'],
                                       'bordercolor': C['border'], 'arrowcolor': C['fg_dim'],
                                       'darkcolor': C['panel'], 'lightcolor': C['panel2']},
@@ -4604,6 +4831,7 @@ class App(tk.Tk):
         self._resource_visible = False
         self._stopping = False
         self._pair_busy = False
+        self._rename_busy = False
 
         self.log_queue: queue.Queue = queue.Queue()
         self.worker = None
@@ -4626,6 +4854,7 @@ class App(tk.Tk):
             self._pre_minimize_bounds: tuple[int, int, int, int] | None = None
             self._restore_after_minimize = False
             self._minimize_restore_job: str | None = None
+            self._corner_after_id: str | None = None
         self._build_ui()
         if _USE_CUSTOM_TITLE_BAR:
             self._enable_edge_resize()
@@ -4634,7 +4863,9 @@ class App(tk.Tk):
         self._center_on_screen()
         if _USE_CUSTOM_TITLE_BAR:
             apply_native_window_frame(self)
+            self._refresh_window_corners()
             self.bind('<Map>', self._on_window_map, add='+')
+            self.bind('<Configure>', self._on_window_configure_corners, add='+')
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         self.update_idletasks()
         self._force_main_window_visible()
@@ -4642,6 +4873,46 @@ class App(tk.Tk):
         self.after(300, self._maybe_show_device_notice)
         # Re-assert visibility after any deferred widget init (e.g. CTk).
         self.after(250, self._force_main_window_visible)
+        # Build Rename off-screen so first tab click doesn't paint widget-by-widget.
+        self.after(400, self._preload_renamer_panel)
+
+    def _refresh_window_corners(self) -> None:
+        """Re-apply rounded clip for current size / maximize state."""
+        if not _USE_CUSTOM_TITLE_BAR:
+            return
+        _win_apply_rounded_corners(
+            self, maximized=bool(getattr(self, '_is_maximized', False)),
+        )
+
+    def _schedule_window_corners(self, delay_ms: int = 80) -> None:
+        """Debounce corner region updates during resize."""
+        if not _USE_CUSTOM_TITLE_BAR:
+            return
+        job = getattr(self, '_corner_after_id', None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except (tk.TclError, ValueError):
+                pass
+
+        def _apply() -> None:
+            self._corner_after_id = None
+            if getattr(self, '_resize_active', False):
+                return
+            if getattr(self, '_rounding_corners', False):
+                return
+            self._refresh_window_corners()
+
+        self._corner_after_id = self.after(delay_ms, _apply)
+
+    def _on_window_configure_corners(self, event) -> None:
+        if event.widget is not self:
+            return
+        if getattr(self, '_resize_active', False):
+            return
+        if getattr(self, '_rounding_corners', False):
+            return
+        self._schedule_window_corners()
 
     def _force_main_window_visible(self) -> None:
         """Ensure the main window is not left withdrawn/off-screen after splash."""
@@ -4658,6 +4929,8 @@ class App(tk.Tk):
                     ctypes.windll.user32.SetForegroundWindow(hwnd)
                 except Exception:
                     pass
+            # One deferred corner pass — sync refresh here caused busy-cursor flicker.
+            self._schedule_window_corners(120)
         except tk.TclError:
             pass
 
@@ -4696,53 +4969,19 @@ class App(tk.Tk):
         return self._active_mode() == 'rename'
 
     def _active_mode(self) -> str:
-        selected = self.mode_notebook.select()
-        if selected == str(self._organize_tab):
-            return 'classify'
-        if selected == str(self._pair_finder_tab):
-            return 'match'
-        if selected == str(self._genre_gender_tab):
-            return 'genre_gender'
-        if selected == str(self._rename_tab):
-            return 'rename'
-        raise RuntimeError(f'Unknown mode tab: {selected}')
+        name = self.mode_notebook.get()
+        return {
+            'Classify':      'classify',
+            'Match & Align': 'match',
+            'Genre & Gender': 'genre_gender',
+            'Rename':        'rename',
+        }[name]
 
     def _renamer_destructive_busy(self) -> bool:
         panel = getattr(self, 'renamer_panel', None)
         return panel is not None and bool(panel.destructive_busy)
 
-    def _ensure_renamer_panel(self) -> bool:
-        """Lazy-load Rename (CustomTkinter) so startup is not blocked/hidden."""
-        if getattr(self, 'renamer_panel', None) is not None:
-            return True
-        try:
-            from track_renamer_panel import TrackRenamerPanel
-            _patch_hand_cursor_controls(include_ctk=True)
-            self.renamer_panel = TrackRenamerPanel(self._rename_tab, host=self)
-            self.renamer_panel.pack(fill='both', expand=True)
-            if hasattr(self, '_rename_reveal_overlay'):
-                self._rename_reveal_overlay.lift()
-            self._force_main_window_visible()
-            return True
-        except Exception as exc:
-            self.renamer_panel = None
-            messagebox.showerror(
-                'Rename tab',
-                'Could not load Track Renamer.\n\n'
-                f'{exc}\n\n'
-                'Other tabs still work. See startup_error.log beside the exe if present.',
-                parent=self,
-            )
-            try:
-                (APP_DIR / 'startup_error.log').write_text(
-                    traceback.format_exc(), encoding='utf-8',
-                )
-            except OSError:
-                pass
-            return False
-
     def _show_standard_mode_layout(self) -> None:
-        self._cover_rename_workspace()
         self._left_frame.configure(width=540)
         self._left_frame.pack_propagate(False)
         self._content_frame.columnconfigure(0, weight=0, minsize=540)
@@ -4751,104 +4990,308 @@ class App(tk.Tk):
             row=0, column=0, columnspan=1, sticky='nsw', padx=(0, 14),
         )
         self._right_frame.grid()
-        if not self._actions_frame.winfo_manager():
-            self._actions_frame.pack(
-                side='bottom', fill='x', padx=SECTION_PADX,
-                pady=(4, ACTIONS_BOTTOM_PAD),
-            )
+        self._restore_actions_frame()
+
+    def _restore_actions_frame(self) -> None:
+        """Show action bar again after Rename (parent must stay mapped to avoid CTk shrink)."""
+        af = self._actions_frame
+        try:
+            af.pack_propagate(True)
+        except tk.TclError:
+            pass
+        # Undo Rename collapse (height=1); let packed buttons define height.
+        try:
+            if hasattr(af, '_set_dimensions'):
+                af._set_dimensions(height=PATH_BTN_HEIGHT)
+            else:
+                af.configure(height=PATH_BTN_HEIGHT)
+            af.pack_propagate(True)
+        except tk.TclError:
+            pass
+        pack_kw = dict(
+            side='bottom', fill='x', padx=SECTION_PADX,
+            pady=(ACTIONS_TOP_GAP, ACTIONS_BOTTOM_PAD),
+        )
+        if not af.winfo_manager():
+            af.pack(**pack_kw)
+        else:
+            af.pack_configure(**pack_kw)
 
     def _show_rename_mode_layout(self) -> None:
         self._left_frame.pack_propagate(True)
-        self._actions_frame.pack_forget()
+        # Hide buttons only — do NOT pack_forget the actions frame (that
+        # was shrinking CTk buttons after returning from Rename).
+        self._hide_organize_action_bar()
+        if hasattr(self, 'pair_panel'):
+            self.pair_panel.hide_action_bar()
+        if hasattr(self, 'gg_panel'):
+            self.gg_panel.hide_action_bar()
+        # Collapse empty bar so Rename keeps full height.
+        # Shrink pad by 22px vs standard (20+12) so rules/preview grow and
+        # wavebar/Cancel/Rename shift down; Idle/Device status stays put.
+        af = self._actions_frame
+        af.configure(height=1)
+        try:
+            af.pack_propagate(False)
+        except tk.TclError:
+            pass
+        pack_kw = dict(
+            side='bottom', fill='x', padx=SECTION_PADX,
+            pady=(0, 10),
+        )
+        if not af.winfo_manager():
+            af.pack(**pack_kw)
+        else:
+            af.pack_configure(**pack_kw)
         self._right_frame.grid_remove()
         self._content_frame.columnconfigure(0, weight=1, minsize=540)
         self._content_frame.columnconfigure(1, weight=0)
         self._left_frame.grid_configure(
             row=0, column=0, columnspan=2, sticky='nsew', padx=0,
         )
-        self._schedule_rename_workspace_reveal()
-
-    def _cover_rename_workspace(self) -> None:
-        if self._rename_reveal_job is not None:
-            try:
-                self.after_cancel(self._rename_reveal_job)
-            except tk.TclError:
-                pass
-            self._rename_reveal_job = None
-        self._rename_reveal_overlay.place(
-            x=0, y=0, relwidth=1, relheight=1,
-        )
-        self._rename_reveal_overlay.lift()
-
-    def _schedule_rename_workspace_reveal(self) -> None:
-        self._cover_rename_workspace()
-
-        def reveal() -> None:
-            self._rename_reveal_job = None
-            if self._rename_mode_active() and getattr(self, 'renamer_panel', None):
-                self._rename_reveal_overlay.place_forget()
-                self.renamer_panel.focus_workspace()
-
-        # Let CTk complete its width-dependent geometry and queued row render.
-        self._rename_reveal_job = self.after(120, reveal)
 
     def _show_organize_action_bar(self) -> None:
+        self._restore_actions_frame()
         self.start_btn.pack(side='left')
-        self.stop_btn.pack(side='left', padx=(8, 0))
-        self.save_log_btn.pack(side='left', padx=(8, 0))
-        self.clear_log_btn.pack(side='left', padx=(8, 0))
+        self.stop_btn.pack(side='left', padx=(ACTION_BTN_GAP, 0))
+        self.save_log_btn.pack(side='left', padx=(ACTION_BTN_GAP, 0))
+        self.clear_log_btn.pack(side='left', padx=(ACTION_BTN_GAP, 0))
         self.play_btn.pack(side='right')
+        self._pin_action_bar_heights()
 
     def _hide_organize_action_bar(self) -> None:
         for widget in self._organize_action_widgets:
             widget.pack_forget()
 
+    def _pin_action_bar_heights(self) -> None:
+        """Keep shared bottom-bar buttons at fixed height across tab switches."""
+        buttons = list(self._organize_action_widgets)
+        pair = getattr(self, 'pair_panel', None)
+        if pair is not None:
+            buttons.extend((
+                getattr(pair, 'find_btn', None),
+                getattr(pair, 'organize_btn', None),
+                getattr(pair, 'play_stems_btn', None),
+                getattr(pair, 'export_list_btn', None),
+                getattr(pair, 'distribute_btn', None),
+                getattr(pair, 'sort_folders_btn', None),
+                getattr(pair, 'align_btn', None),
+            ))
+        gg = getattr(self, 'gg_panel', None)
+        if gg is not None:
+            buttons.extend((
+                getattr(gg, 'genre_btn', None),
+                getattr(gg, 'gender_btn', None),
+                getattr(gg, 'stop_btn', None),
+            ))
+        ctk_pin_button_height(*buttons)
+
+    def _pin_action_bar_heights_later(self) -> None:
+        """Pin now and again after layout settles (post-Rename return)."""
+        self._pin_action_bar_heights()
+        self.after_idle(self._pin_action_bar_heights)
+        self.after(50, self._pin_action_bar_heights)
+
+    def _show_rename_veil(self, text: str = 'Loading Rename…') -> None:
+        """Opaque cover over Rename tab body only (not mode tabs / action pad)."""
+        # Tab content frame sits below the mode segmented button and above the
+        # collapsed action bar — smaller at top and bottom than left_frame.
+        parent = self._rename_tab
+        veil = getattr(self, '_rename_veil', None)
+        if veil is not None:
+            try:
+                if veil.master is not parent:
+                    veil.destroy()
+                    veil = None
+            except tk.TclError:
+                veil = None
+            if veil is None:
+                self._rename_veil = None
+                self._rename_veil_label = None
+        if veil is None:
+            ctk = ensure_ctk_dark()
+            veil = ctk.CTkFrame(
+                parent, fg_color=DARK['bg'], corner_radius=0,
+            )
+            lbl = ctk.CTkLabel(
+                veil, text=text,
+                font=ctk.CTkFont(family='Segoe UI', size=14),
+                text_color=DARK['text_dim'],
+            )
+            lbl.place(relx=0.5, rely=0.45, anchor='center')
+            self._rename_veil = veil
+            self._rename_veil_label = lbl
+        else:
+            try:
+                self._rename_veil_label.configure(text=text)
+            except tk.TclError:
+                pass
+        veil.place(relx=0, rely=0, relwidth=1, relheight=1)
+        veil.lift()
+
+    def _hide_rename_veil(self) -> None:
+        veil = getattr(self, '_rename_veil', None)
+        if veil is None:
+            return
+        try:
+            veil.place_forget()
+        except tk.TclError:
+            pass
+
+    def _unmap_rename_holder(self) -> None:
+        """Keep Rename content unmapped so return visits don't flash before the veil."""
+        holder = getattr(self, '_rename_holder', None)
+        if holder is None:
+            return
+        try:
+            if holder.winfo_ismapped():
+                holder.pack_forget()
+        except tk.TclError:
+            pass
+
+    def _renamer_compute_ready(self) -> bool:
+        panel = getattr(self, 'renamer_panel', None)
+        if panel is None:
+            return False
+        preview = getattr(panel, 'preview_panel', None)
+        if preview is None or not hasattr(preview, 'lazy_compute_complete'):
+            return True
+        try:
+            return bool(preview.lazy_compute_complete())
+        except Exception:
+            return True
+
+    def _preload_renamer_panel(self) -> None:
+        """Build Rename UI into an unmapped holder so widgets never paint mid-build."""
+        if self.renamer_panel is not None or getattr(self, '_renamer_building', False):
+            return
+        holder = getattr(self, '_rename_holder', None)
+        if holder is None:
+            return
+        self._renamer_building = True
+        try:
+            from track_renamer_panel import TrackRenamerPanel
+            _patch_hand_cursor_controls(include_ctk=True)
+            panel = TrackRenamerPanel(holder, host=self)
+            panel.pack(fill='both', expand=True)
+            self.renamer_panel = panel
+        finally:
+            self._renamer_building = False
+        self._poll_renamer_compute()
+
+    def _poll_renamer_compute(self) -> None:
+        if not self._renamer_compute_ready():
+            self.after(40, self._poll_renamer_compute)
+            return
+        self._renamer_ready = True
+        if getattr(self, '_renamer_reveal_pending', False):
+            self._reveal_renamer_panel(getattr(self, '_renamer_reveal_gen', 0))
+
+    def _reveal_renamer_panel(self, gen: int | None = None) -> None:
+        """Map prebuilt Rename UI under the veil, then uncover after paint settles."""
+        if gen is None:
+            gen = getattr(self, '_renamer_reveal_gen', 0)
+        if not self._renamer_ready or self.renamer_panel is None:
+            self._renamer_reveal_pending = True
+            if self.renamer_panel is None and not getattr(self, '_renamer_building', False):
+                self._preload_renamer_panel()
+            elif not self._renamer_ready:
+                self._poll_renamer_compute()
+            return
+        self._renamer_reveal_pending = False
+        holder = self._rename_holder
+        try:
+            if not holder.winfo_ismapped():
+                holder.pack(fill='both', expand=True)
+        except tk.TclError:
+            holder.pack(fill='both', expand=True)
+        # Layout + first preview paint while still covered by veil.
+        try:
+            self.update_idletasks()
+            preview = getattr(self.renamer_panel, 'preview_panel', None)
+            if preview is not None and hasattr(preview, '_render_visible'):
+                preview._render_visible()
+            self.update_idletasks()
+        except Exception:
+            pass
+        self._show_rename_veil()  # keep cover on top after pack
+        self.after(200, lambda g=gen: self._finish_renamer_reveal(g))
+
+    def _finish_renamer_reveal(self, gen: int | None = None) -> None:
+        if gen is not None and gen != getattr(self, '_renamer_reveal_gen', 0):
+            return
+        if self._active_mode() != 'rename':
+            self._hide_rename_veil()
+            return
+        self._hide_rename_veil()
+        panel = self.renamer_panel
+        if panel is not None:
+            panel.on_tab_shown()
+
+    def _begin_rename_tab_show(self) -> None:
+        """Every Rename visit: layout → veil → remount under cover → uncover."""
+        self._renamer_reveal_gen = getattr(self, '_renamer_reveal_gen', 0) + 1
+        gen = self._renamer_reveal_gen
+        self.pair_panel.hide_action_bar()
+        if hasattr(self, 'gg_panel'):
+            self.gg_panel.hide_action_bar()
+        self._hide_organize_action_bar()
+        # Unmap first so CTk tab switch can't flash the dense Rename tree.
+        self._unmap_rename_holder()
+        # Reclaim pad / expand column BEFORE cover so Loading matches final size.
+        self._show_rename_mode_layout()
+        self.update_idletasks()
+        self._show_rename_veil()
+        self.update_idletasks()
+        try:
+            self.update()  # paint veil at final Rename footprint
+        except tk.TclError:
+            pass
+        self._renamer_reveal_pending = True
+        if self.renamer_panel is None:
+            self._preload_renamer_panel()
+        self._reveal_renamer_panel(gen)
+
     def _on_mode_tab_changed(self, _event=None) -> None:
         mode = self._active_mode()
         rename_visible = mode == 'rename'
-        if rename_visible and not self._ensure_renamer_panel():
-            try:
-                self.mode_notebook.select(self._organize_tab)
-            except Exception:
-                pass
-            return
         if rename_visible != self._renamer_tab_visible:
             panel = getattr(self, 'renamer_panel', None)
-            if panel is not None:
-                if rename_visible:
-                    panel.on_tab_shown()
-                else:
-                    panel.on_tab_hidden()
+            if panel is not None and self._renamer_ready and not rename_visible:
+                panel.on_tab_hidden()
             self._renamer_tab_visible = rename_visible
 
         if mode == 'rename':
-            self.pair_panel.hide_action_bar()
-            if hasattr(self, 'gg_panel'):
-                self.gg_panel.hide_action_bar()
-            self._hide_organize_action_bar()
-            self._show_rename_mode_layout()
-        elif mode == 'classify':
-            self._show_standard_mode_layout()
-            self.pair_panel.hide_action_bar()
-            if hasattr(self, 'gg_panel'):
-                self.gg_panel.hide_action_bar()
-            self._show_organize_action_bar()
-            self._update_action_buttons_for_tab()
-        elif mode == 'match':
-            self._show_standard_mode_layout()
-            self._hide_organize_action_bar()
-            if hasattr(self, 'gg_panel'):
-                self.gg_panel.hide_action_bar()
-            self.pair_panel.show_action_bar()
-            if not self._pair_busy:
-                self.pair_panel.set_buttons_state('normal')
-        elif mode == 'genre_gender':
-            self._show_standard_mode_layout()
-            self._hide_organize_action_bar()
-            self.pair_panel.hide_action_bar()
-            self.gg_panel.show_action_bar()
-            if not self._pair_busy:
-                self.gg_panel.set_buttons_state('normal')
+            self._begin_rename_tab_show()
+        else:
+            self._renamer_reveal_gen = getattr(self, '_renamer_reveal_gen', 0) + 1
+            self._renamer_reveal_pending = False
+            self._unmap_rename_holder()
+            self._hide_rename_veil()
+            if mode == 'classify':
+                self._show_standard_mode_layout()
+                self.pair_panel.hide_action_bar()
+                if hasattr(self, 'gg_panel'):
+                    self.gg_panel.hide_action_bar()
+                self._show_organize_action_bar()
+                self._update_action_buttons_for_tab()
+            elif mode == 'match':
+                self._show_standard_mode_layout()
+                self._hide_organize_action_bar()
+                if hasattr(self, 'gg_panel'):
+                    self.gg_panel.hide_action_bar()
+                self.pair_panel.show_action_bar()
+                if not self._pair_busy:
+                    self.pair_panel.set_buttons_state('normal')
+            elif mode == 'genre_gender':
+                self._show_standard_mode_layout()
+                self._hide_organize_action_bar()
+                self.pair_panel.hide_action_bar()
+                self.gg_panel.show_action_bar()
+                if not self._pair_busy:
+                    self.gg_panel.set_buttons_state('normal')
+            # Rename unmaps the action bar parent; re-pin after layout settles.
+            self._pin_action_bar_heights_later()
 
     def _set_action_buttons(self, running: bool, *, sdr: bool = False) -> None:
         """Only swap colors — never disabled/style changes (ttk shrinks on both)."""
@@ -4859,11 +5302,28 @@ class App(tk.Tk):
         if not self._classify_mode_active():
             return
         if running:
-            self.start_btn.configure(fg=COLORS['fg_dim'], cursor='arrow')
-            self.stop_btn.configure(fg=COLORS['danger'], cursor='hand2')
+            self.start_btn.configure(
+                text_color=DARK['text_dim'], cursor='arrow', height=PATH_BTN_HEIGHT,
+            )
+            self.stop_btn.configure(
+                text_color=DARK['danger'], cursor='hand2', height=PATH_BTN_HEIGHT,
+            )
+            for btn in (self.save_log_btn, self.clear_log_btn, self.play_btn):
+                btn.configure(
+                    text_color=DARK['text_dim'], cursor='arrow', height=PATH_BTN_HEIGHT,
+                )
         else:
-            self.start_btn.configure(fg='white', cursor='hand2')
-            self.stop_btn.configure(fg=COLORS['fg_dim'], cursor='arrow')
+            self.start_btn.configure(
+                text_color='#ffffff', cursor='hand2', height=PATH_BTN_HEIGHT,
+            )
+            self.stop_btn.configure(
+                text_color=DARK['text_dim'], cursor='arrow', height=PATH_BTN_HEIGHT,
+            )
+            for btn in (self.save_log_btn, self.clear_log_btn, self.play_btn):
+                btn.configure(
+                    text_color=DARK['text'], cursor='hand2', height=PATH_BTN_HEIGHT,
+                )
+        self._pin_action_bar_heights()
 
     def _update_action_buttons_for_tab(self) -> None:
         if not self._classify_mode_active():
@@ -4873,25 +5333,39 @@ class App(tk.Tk):
             (self.sdr_worker is not None and self.sdr_worker.is_alive()) if sdr
             else (self.worker is not None and self.worker.is_alive())
         )
+        # Never toggle state= — CTk buttons shrink on Windows when re-enabled.
         if sdr:
-            self.start_btn.configure(text='▶  Start SI-SDR', command=self._start_sdr)
-            self.stop_btn.configure(command=self._stop_sdr)
-            self.save_log_btn.configure(text='Save SI-SDR log', command=self._save_sdr_log)
+            self.start_btn.configure(
+                text='▶  Start SI-SDR', command=self._start_sdr, width=108,
+                height=PATH_BTN_HEIGHT,
+            )
+            self.stop_btn.configure(command=self._stop_sdr, height=PATH_BTN_HEIGHT)
+            self.save_log_btn.configure(
+                text='Save SI-SDR log', command=self._save_sdr_log, width=108,
+                height=PATH_BTN_HEIGHT,
+            )
             self._action_tooltips['start'].set_text(TIPS['start_sdr'])
             self._action_tooltips['stop'].set_text(TIPS['stop_sdr'])
             self._action_tooltips['save'].set_text(TIPS['save_sdr_log'])
         else:
-            self.start_btn.configure(text='▶  Start RMS', command=self._start)
-            self.stop_btn.configure(command=self._stop)
-            self.save_log_btn.configure(text='Save RMS log', command=self._save_log)
+            self.start_btn.configure(
+                text='▶  Start RMS', command=self._start, width=96,
+                height=PATH_BTN_HEIGHT,
+            )
+            self.stop_btn.configure(command=self._stop, height=PATH_BTN_HEIGHT)
+            self.save_log_btn.configure(
+                text='Save RMS log', command=self._save_log, width=96,
+                height=PATH_BTN_HEIGHT,
+            )
             self._action_tooltips['start'].set_text(TIPS['start'])
             self._action_tooltips['stop'].set_text(TIPS['stop'])
             self._action_tooltips['save'].set_text(TIPS['save_log'])
         self._set_action_buttons(running, sdr=sdr)
+        self._pin_action_bar_heights()
 
     def _on_class_tab_changed(self, _event=None) -> None:
-        idx = self.cls_notebook.index(self.cls_notebook.select())
-        self._class_tab.set('sdr' if idx == 1 else 'rms')
+        tab_name = self.cls_notebook.get()
+        self._class_tab.set('sdr' if tab_name == 'SI-SDR' else 'rms')
         self._update_action_buttons_for_tab()
         self._refresh_cls_frame()
 
@@ -4913,44 +5387,91 @@ class App(tk.Tk):
             var.set(normalized)
 
     def _path_row(self, parent, row, label, var, picker, opener, tip_text):
-        lbl = ttk.Label(parent, text=label)
+        ctk = ensure_ctk_dark()
+        t = DARK
+        _font = ctk_ui_font()
+        lbl = ctk.CTkLabel(
+            parent, text=label, text_color=t['label'], font=_font,
+        )
         lbl.grid(row=row, column=0, sticky='w', padx=(0, 10), pady=CTRL_ROW_PADY)
-        ent = ttk.Entry(parent, textvariable=var)
+        ent = ctk.CTkEntry(
+            parent, textvariable=var,
+            fg_color=t['control_bg'], border_color=t['border'],
+            text_color=t['entry_text'], font=_font, height=30,
+        )
         ent.grid(row=row, column=1, sticky='ew', pady=CTRL_ROW_PADY)
         ent.bind('<FocusOut>', lambda _e, v=var: self._normalize_path_var(v))
-        browse_btn = self._path_button(parent, 'Browse', picker)
+        browse_btn = ctk.CTkButton(
+            parent, text='Browse', width=72, height=30,
+            fg_color=t['btn'], hover_color=t['btn_hover'], text_color=t['text'],
+            font=_font, command=picker,
+        )
         browse_btn.grid(row=row, column=2, padx=(4, 0), pady=CTRL_ROW_PADY)
-        open_btn = self._path_button(parent, 'Open', opener)
+        open_btn = ctk.CTkButton(
+            parent, text='Open', width=64, height=30,
+            fg_color=t['btn'], hover_color=t['btn_hover'], text_color=t['text'],
+            font=_font, command=opener,
+        )
         open_btn.grid(row=row, column=3, padx=(4, 0), pady=CTRL_ROW_PADY)
         tip(lbl, ent, browse_btn, text=tip_text)
         Tooltip(open_btn, TIPS['open_path'])
 
     def _combo_field(self, parent, row, col, label, var, values, tip_text, *,
                      sticky='ew', width=None):
-        lbl = ttk.Label(parent, text=label)
+        ctk = ensure_ctk_dark()
+        t = DARK
+        _font = ctk_ui_font()
+        lbl = ctk.CTkLabel(
+            parent, text=label, text_color=t['label'], font=_font,
+        )
         lbl.grid(row=row, column=col, sticky='w', padx=(0, 10), pady=CTRL_ROW_PADY)
-        cb_kw = dict(textvariable=var, values=values, state='readonly')
-        if width is not None:
-            cb_kw['width'] = width
-        cb = ttk.Combobox(parent, **cb_kw)
+        cb_width = (width * 8 + 24) if width is not None else 200
+        cb = ctk.CTkOptionMenu(
+            parent,
+            variable=var,
+            values=list(values),
+            fg_color=t['control_bg'],
+            button_color=t['btn'],
+            button_hover_color=t['btn_hover'],
+            text_color=t['text'],
+            dropdown_fg_color=t['panel'],
+            dropdown_hover_color=t['btn_hover'],
+            dropdown_text_color=t['text'],
+            font=_font,
+            dropdown_font=_font,
+            width=cb_width,
+            height=30,
+        )
         cb.grid(row=row, column=col + 1, sticky=sticky,
                 padx=(0, 16) if col == 0 else 0, pady=CTRL_ROW_PADY)
-        for seq in ('<Control-a>', '<Control-A>', '<KeyPress>'):
-            cb.bind(seq, lambda e: 'break')
-        cb.bind('<<ComboboxSelected>>', lambda e: cb.selection_clear())
-        cb.bind('<FocusIn>',            lambda e: cb.selection_clear())
         tip(lbl, cb, text=tip_text)
 
     def _slider_field(self, parent, row, col, label, var, lo, hi, fmt, tip_text):
-        lbl = ttk.Label(parent, text=label)
-        lbl.grid(row=row, column=col, sticky='w', padx=(0, 10), pady=6)
-        row_frm = ttk.Frame(parent)
-        row_frm.grid(row=row, column=col + 1, sticky='ew',
-                     padx=(0, 16) if col == 0 else 0, pady=6)
+        ctk = ensure_ctk_dark()
+        t = DARK
+        _font = ctk_ui_font()
+        lbl = ctk.CTkLabel(
+            parent, text=label, text_color=t['label'], font=_font,
+        )
+        lbl.grid(row=row, column=col, sticky='w', padx=(0, 10), pady=3)
+        row_frm = ctk.CTkFrame(parent, fg_color='transparent')
+        # Left column: gap before next field. Right column: small inset from border.
+        row_frm.grid(
+            row=row, column=col + 1, sticky='ew',
+            padx=(0, 16) if col == 0 else (0, 6), pady=3,
+        )
         row_frm.columnconfigure(0, weight=1)
-        readout = ttk.Label(row_frm, text=fmt(var.get()), style='Dim.TLabel', width=5)
-        scale = ttk.Scale(row_frm, from_=lo, to=hi, orient='horizontal', variable=var,
-                          command=lambda _v: readout.configure(text=fmt(var.get())))
+        readout = ctk.CTkLabel(
+            row_frm, text=fmt(var.get()), text_color=t['text'],
+            width=40, anchor='e', font=_font,
+        )
+        scale = ctk.CTkSlider(
+            row_frm, from_=lo, to=hi, variable=var,
+            button_color=t['accent'], button_hover_color=t['accent_hover'],
+            progress_color=t['accent'], fg_color=t['control_bg'],
+            height=16,
+            command=lambda _v: readout.configure(text=fmt(var.get())),
+        )
         scale.grid(row=0, column=0, sticky='ew')
         readout.grid(row=0, column=1, padx=(8, 0))
         tip(lbl, scale, readout, text=tip_text)
@@ -4969,6 +5490,7 @@ class App(tk.Tk):
         if getattr(self, '_resize_active', False):
             return
         apply_native_window_frame(self)
+        self._refresh_window_corners()
         if not self._restore_after_minimize or self._pre_minimize_bounds is None:
             return
         self._restore_after_minimize = False
@@ -4985,6 +5507,7 @@ class App(tk.Tk):
             if _USE_CUSTOM_TITLE_BAR:
                 _win_move_resize(self, x, y, w, h)
             _sync_tk_geometry(self, x, y, w, h)
+            self._refresh_window_corners()
 
         # Windows completes SW_RESTORE after the Map event is dispatched.
         self._minimize_restore_job = self.after(30, restore_bounds)
@@ -5148,6 +5671,7 @@ class App(tk.Tk):
             rect = _win_window_rect(self)
             if rect is not None:
                 _sync_tk_geometry(self, *rect)
+            self._refresh_window_corners()
 
         self.bind('<Motion>', _on_motion, add='+')
         self.bind('<ButtonPress-1>', _on_press, add='+')
@@ -5176,6 +5700,8 @@ class App(tk.Tk):
             if self._restore_geometry:
                 self.geometry(self._restore_geometry)
             self._is_maximized = False
+            self.update_idletasks()
+            self._refresh_window_corners()
             return
         self.update_idletasks()
         self._restore_geometry = self.geometry()
@@ -5185,6 +5711,7 @@ class App(tk.Tk):
             _win_move_resize(self, x, y, w, h)
         _sync_tk_geometry(self, x, y, w, h)
         self._is_maximized = True
+        self._refresh_window_corners()
 
     def _title_button(self, parent, text, command, hover_bg, hover_fg=None):
         fg = COLORS['fg_dim']
@@ -5248,6 +5775,7 @@ class App(tk.Tk):
         self._title_bar = bar
 
     def _build_ui(self):
+        ctk = ensure_ctk_dark()
         content_row = 1 if _USE_CUSTOM_TITLE_BAR else 0
         bottom_row = 2 if _USE_CUSTOM_TITLE_BAR else 1
 
@@ -5257,7 +5785,7 @@ class App(tk.Tk):
             self.rowconfigure(0, weight=0)
             self._build_custom_title_bar()
 
-        content = ttk.Frame(self)
+        content = ctk.CTkFrame(self, fg_color='transparent')
         content.grid(row=content_row, column=0, sticky='nsew',
                      padx=CONTENT_PAD, pady=(0, CONTENT_PAD_Y))
         self._content_frame = content
@@ -5265,93 +5793,93 @@ class App(tk.Tk):
         content.columnconfigure(1, weight=1)
         content.rowconfigure(0, weight=1)
 
-        left = ttk.Frame(content, width=540)
+        left = ctk.CTkFrame(content, fg_color='transparent', width=540)
         left.grid(row=0, column=0, sticky='nsw', padx=(0, 14))
         left.pack_propagate(False)
         self._left_frame = left
 
-        actions = ttk.Frame(left)
-        actions.pack(side='bottom', fill='x', padx=SECTION_PADX, pady=(4, ACTIONS_BOTTOM_PAD))
+        actions = ctk.CTkFrame(left, fg_color='transparent')
+        actions.pack(
+            side='bottom', fill='x', padx=SECTION_PADX,
+            pady=(ACTIONS_TOP_GAP, ACTIONS_BOTTOM_PAD),
+        )
         self._actions_frame = actions
-        C = COLORS
-        self.start_btn = tk.Button(
+        t = DARK
+        _btn_font = ctk_ui_font()
+        self.start_btn = ctk.CTkButton(
             actions, text='▶  Start RMS', command=self._start,
-            font=ACTION_BTN_FONT, bg=C['accent'], fg='white',
-            activebackground=C['accent_hov'], activeforeground='white',
-            relief='flat', borderwidth=0, highlightthickness=0,
-            padx=ACTION_BTN_PADX, pady=ACTION_BTN_PADY, cursor='hand2',
+            font=_btn_font, width=96, height=PATH_BTN_HEIGHT,
+            fg_color=t['accent'], hover_color=t['accent_hover'],
+            text_color='#ffffff', cursor='hand2',
         )
         self.start_btn.pack(side='left')
-        self.stop_btn = tk.Button(
+        self.stop_btn = ctk.CTkButton(
             actions, text='■  Stop', command=self._stop,
-            font=ACTION_BTN_FONT, bg=C['panel2'], fg=C['fg_dim'],
-            activebackground=C['panel'], activeforeground=C['danger'],
-            relief='flat', borderwidth=0, highlightthickness=0,
-            padx=ACTION_BTN_PADX, pady=ACTION_BTN_PADY, cursor='arrow',
+            font=_btn_font, width=64, height=PATH_BTN_HEIGHT,
+            fg_color=t['btn'], hover_color=t['btn_hover'],
+            text_color=t['text_dim'], cursor='arrow',
         )
-        self.stop_btn.pack(side='left', padx=(8, 0))
-        self.save_log_btn = tk.Button(
+        self.stop_btn.pack(side='left', padx=(ACTION_BTN_GAP, 0))
+        self.save_log_btn = ctk.CTkButton(
             actions, text='Save RMS log', command=self._save_log,
-            font=ACTION_BTN_FONT, bg=C['panel2'], fg=C['fg_dim'],
-            activebackground=C['panel'], activeforeground=C['fg'],
-            relief='flat', borderwidth=0, highlightthickness=0,
-            padx=ACTION_BTN_PADX, pady=ACTION_BTN_PADY, cursor='hand2',
+            font=_btn_font, width=96, height=PATH_BTN_HEIGHT,
+            fg_color=t['btn'], hover_color=t['btn_hover'],
+            text_color=t['text'], cursor='hand2',
         )
-        self.save_log_btn.pack(side='left', padx=(8, 0))
-        self.clear_log_btn = tk.Button(
+        self.save_log_btn.pack(side='left', padx=(ACTION_BTN_GAP, 0))
+        self.clear_log_btn = ctk.CTkButton(
             actions, text='Clear log', command=self._clear_log,
-            font=ACTION_BTN_FONT, bg=C['panel2'], fg=C['fg_dim'],
-            activebackground=C['panel'], activeforeground=C['fg'],
-            relief='flat', borderwidth=0, highlightthickness=0,
-            padx=ACTION_BTN_PADX, pady=ACTION_BTN_PADY, cursor='hand2',
+            font=_btn_font, width=76, height=PATH_BTN_HEIGHT,
+            fg_color=t['btn'], hover_color=t['btn_hover'],
+            text_color=t['text'], cursor='hand2',
         )
-        self.clear_log_btn.pack(side='left', padx=(8, 0))
+        self.clear_log_btn.pack(side='left', padx=(ACTION_BTN_GAP, 0))
         self._action_tooltips = {
             'start': Tooltip(self.start_btn, TIPS['start']),
             'stop': Tooltip(self.stop_btn, TIPS['stop']),
             'save': Tooltip(self.save_log_btn, TIPS['save_log']),
             'clear': Tooltip(self.clear_log_btn, TIPS['clear_log']),
         }
-        self.play_btn = tk.Button(
+        self.play_btn = ctk.CTkButton(
             actions, text='♫  Play', command=self._open_stem_player,
-            font=ACTION_BTN_FONT, bg=C['panel2'], fg=C['fg_dim'],
-            activebackground=C['accent_hov'], activeforeground='white',
-            relief='flat', borderwidth=0, highlightthickness=0,
-            padx=ACTION_BTN_PADX, pady=ACTION_BTN_PADY, cursor='hand2',
+            font=_btn_font, width=72, height=PATH_BTN_HEIGHT,
+            fg_color=t['btn'], hover_color=t['accent'],
+            text_color=t['text'], cursor='hand2',
         )
         self.play_btn.pack(side='right')
         Tooltip(self.play_btn, TIPS['play_stems'])
-
-        def _play_enter(_e=None):
-            self.play_btn.configure(bg=C['accent'], fg='white')
-
-        def _play_leave(_e=None):
-            self.play_btn.configure(bg=C['panel2'], fg=C['fg_dim'])
-
-        self.play_btn.bind('<Enter>', _play_enter, add='+')
-        self.play_btn.bind('<Leave>', _play_leave, add='+')
         self._organize_action_widgets = (
             self.start_btn, self.stop_btn, self.save_log_btn,
             self.clear_log_btn, self.play_btn,
         )
 
-        left_body = ttk.Frame(left)
+        left_body = ctk.CTkFrame(left, fg_color='transparent')
         left_body.pack(side='top', fill='both', expand=True)
 
-        self.mode_notebook = ttk.Notebook(left_body, style='Mode.TNotebook', takefocus=0)
+        self.mode_notebook = ctk.CTkTabview(
+            left_body,
+            fg_color=DARK['bg'],
+            segmented_button_fg_color=DARK['panel'],
+            segmented_button_selected_color=DARK['accent'],
+            segmented_button_selected_hover_color=DARK['accent_hover'],
+            segmented_button_unselected_color=DARK['panel'],
+            segmented_button_unselected_hover_color=DARK['btn_hover'],
+            text_color=DARK['text'],
+            text_color_disabled=DARK['text_dim'],
+            command=self._on_mode_tab_changed,
+        )
         self.mode_notebook.pack(fill='both', expand=True)
-        organize_tab = ttk.Frame(self.mode_notebook)
-        pair_finder_tab = ttk.Frame(self.mode_notebook)
-        genre_gender_tab = ttk.Frame(self.mode_notebook)
-        rename_tab = ttk.Frame(self.mode_notebook)
+        for _tab_name in ('Classify', 'Match & Align', 'Genre & Gender', 'Rename'):
+            self.mode_notebook.add(_tab_name)
+        self.mode_notebook._segmented_button.configure(font=ctk_ui_font())
+        organize_tab = self.mode_notebook.tab('Classify')
+        pair_finder_tab = self.mode_notebook.tab('Match & Align')
+        genre_gender_tab = self.mode_notebook.tab('Genre & Gender')
+        rename_tab = self.mode_notebook.tab('Rename')
         self._organize_tab = organize_tab
         self._pair_finder_tab = pair_finder_tab
         self._genre_gender_tab = genre_gender_tab
         self._rename_tab = rename_tab
-        self.mode_notebook.add(organize_tab, text='  Classify  ')
-        self.mode_notebook.add(pair_finder_tab, text='  Match & Align  ')
-        self.mode_notebook.add(genre_gender_tab, text='  Genre & Gender  ')
-        self.mode_notebook.add(rename_tab, text='  Rename  ')
 
         from pair_finder_panel import PairFinderPanel
         self.pair_panel = PairFinderPanel(
@@ -5367,52 +5895,52 @@ class App(tk.Tk):
         self.gg_panel.pack(fill='both', expand=True)
         self.gg_panel.attach_action_bar(actions)
 
-        # Rename / CustomTkinter is loaded on first tab visit (keeps splash→UI
-        # handoff reliable; avoids a withdrawn main window on some VMs).
         self.renamer_panel = None
-        self._rename_reveal_job = None
-        self._rename_reveal_overlay = tk.Frame(
-            rename_tab,
-            bg=COLORS['bg'],
-            highlightthickness=0,
-            borderwidth=0,
-        )
-        self._rename_reveal_overlay.place(
-            x=0, y=0, relwidth=1, relheight=1,
-        )
-        self._rename_reveal_overlay.lift()
+        self._renamer_ready = False
+        self._renamer_building = False
+        self._renamer_reveal_pending = False
+        self._renamer_reveal_gen = 0
+        self._rename_veil = None
+        self._rename_veil_label = None
+        # Unmapped until reveal — build widgets here so nothing paints mid-construction.
+        self._rename_holder = ctk.CTkFrame(rename_tab, fg_color=DARK['bg'], corner_radius=0)
         self._renamer_tab_visible = None
-        self.mode_notebook.bind('<<NotebookTabChanged>>', self._on_mode_tab_changed)
 
-        right = ttk.Frame(content)
+        right = ctk.CTkFrame(content, fg_color='transparent')
         right.grid(row=0, column=1, sticky='nsew')
         self._right_frame = right
         right.rowconfigure(0, weight=1)
         right.columnconfigure(0, weight=1)
 
-        header = ttk.Frame(organize_tab)
-        header.pack(fill='x', padx=SECTION_PADX, pady=(HEADER_TOP_PAD, 12))
-        desc_row = tk.Frame(header, bg=COLORS['bg'])
+        header = ctk.CTkFrame(organize_tab, fg_color='transparent')
+        header.pack(fill='x', padx=SECTION_PADX, pady=(HEADER_TOP_PAD, 6))
+        desc_row = ctk.CTkFrame(header, fg_color='transparent')
         desc_row.pack(fill='x', anchor='w')
-        tk.Label(
+        ctk.CTkLabel(
             desc_row,
             text='Classifies stems, mixes originals into 2/4-stem folders.',
-            font=HEADER_DESC_FONT, fg=COLORS['fg'], bg=COLORS['bg'],
-            wraplength=470, justify='left',
+            font=ctk_ui_font(),
+            text_color=DARK['text_dim'],
+            wraplength=470,
+            justify='left',
         ).pack(side='left')
-        InfoIcon(desc_row, self._show_about_dialog).pack(side='left', padx=(4, 0))
+        # CTkLabel is taller than the glyph; pin icon to top so it sits with the text.
+        InfoIcon(desc_row, self._show_about_dialog).pack(
+            side='left', padx=(4, 0), anchor='n', pady=(5, 0),
+        )
         if not FFMPEG:
             from ffmpeg_bootstrap import ffmpeg_missing_message
 
-            tk.Label(
+            ctk.CTkLabel(
                 header,
                 text=ffmpeg_missing_message(),
-                font=STATUS_FONT, fg=COLORS['fg_dim'], bg=COLORS['bg'],
-                wraplength=500, justify='left',
+                font=ctk.CTkFont(family='Segoe UI', size=9),
+                text_color=DARK['text_dim'],
+                wraplength=500,
+                justify='left',
             ).pack(anchor='w', pady=(4, 0))
 
-        paths = ttk.LabelFrame(organize_tab, text='  PATHS  ', padding=SECTION_INNER_PAD)
-        paths.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
+        paths = ctk_section(organize_tab, 'PATHS')
         paths.columnconfigure(1, weight=1)
         self._path_row(paths, 0, 'Input',  self.input_dir,  self._pick_input,
                        self._open_input, TIPS['input'])
@@ -5420,65 +5948,72 @@ class App(tk.Tk):
                        self._open_output, TIPS['output'])
         self._combo_field(paths, 2, 0, 'Scan',   self.scan_label,   list(SCAN_MODES),   TIPS['scan'],
                           sticky='w', width=PATH_COMBO_WIDTH)
-        naming_lbl = ttk.Label(paths, text='Naming')
-        naming_lbl.grid(row=3, column=0, sticky='w', padx=(0, 10), pady=CTRL_ROW_PADY)
-        naming_cell = ttk.Frame(paths)
-        naming_cell.grid(row=3, column=1, columnspan=3, sticky='ew', pady=CTRL_ROW_PADY)
-        naming_cell.columnconfigure(1, weight=1)
-        naming_cb = ttk.Combobox(
-            naming_cell, textvariable=self.naming_label, values=list(NAMING_MODES),
-            state='readonly', width=PATH_COMBO_WIDTH,
-        )
-        naming_cb.grid(row=0, column=0, sticky='w', padx=(0, 16))
-        for seq in ('<Control-a>', '<Control-A>', '<KeyPress>'):
-            naming_cb.bind(seq, lambda e: 'break')
-        naming_cb.bind('<<ComboboxSelected>>', lambda e: naming_cb.selection_clear())
-        naming_cb.bind('<FocusIn>', lambda e: naming_cb.selection_clear())
-        tip(naming_lbl, naming_cb, text=TIPS['naming'])
-        dur_chk = ttk.Checkbutton(
-            naming_cell, text='Append duration to output folder name',
-            variable=self.append_duration,
-        )
-        dur_chk.grid(row=0, column=1, sticky='e')
-        Tooltip(dur_chk, TIPS['duration'])
+        self._combo_field(paths, 3, 0, 'Naming', self.naming_label, list(NAMING_MODES), TIPS['naming'],
+                          sticky='w', width=PATH_COMBO_WIDTH)
+        _ui = ctk_ui_font()
 
-        filters = ttk.LabelFrame(organize_tab, text='  OUTPUT FILTERS  ', padding=SECTION_INNER_PAD)
-        filters.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
+        filters = ctk_section(organize_tab, 'OUTPUT FILTERS')
         filters.columnconfigure(0, weight=1)
-        filter_row0 = ttk.Frame(filters)
-        filter_row0.grid(row=0, column=0, sticky='ew', pady=4)
-        filter_left = ttk.Frame(filter_row0)
+        filter_row0 = ctk.CTkFrame(filters, fg_color='transparent')
+        filter_row0.grid(row=0, column=0, sticky='ew', pady=2)
+        filter_left = ctk.CTkFrame(filter_row0, fg_color='transparent')
         filter_left.pack(side='left')
-        short_chk = ttk.Checkbutton(
-            filter_left, text='Delete folder if shorter than',
+        short_chk = ctk.CTkCheckBox(
+            filter_left,
+            text='Delete folder if shorter than',
             variable=self.delete_if_short,
+            onvalue=True, offvalue=False,
+            fg_color=DARK['accent'],
+            hover_color=DARK['accent_hover'],
+            text_color=DARK['text'],
+            border_color=DARK['border'],
+            checkmark_color='#ffffff',
+            font=_ui,
             command=self._update_filter_state,
         )
         short_chk.pack(side='left')
         Tooltip(short_chk, TIPS['delete_short'])
-        dur_ctrl = ttk.Frame(filter_left)
+        dur_ctrl = ctk.CTkFrame(filter_left, fg_color='transparent')
         dur_ctrl.pack(side='left', padx=(8, 0))
         self.min_dur_sp = ttk.Spinbox(
             dur_ctrl, from_=1, to=600, textvariable=self.min_duration_sec, width=6,
+            font=ttk_ui_font(),
         )
         self.min_dur_sp.pack(side='left')
-        ttk.Label(dur_ctrl, text='seconds', style='Dim.TLabel').pack(side='left', padx=(8, 0))
+        ctk.CTkLabel(
+            dur_ctrl, text='seconds', text_color=DARK['text_dim'], font=_ui,
+        ).pack(side='left', padx=(8, 0))
         tip(self.min_dur_sp, text=TIPS['min_duration'])
-        skip_chk = ttk.Checkbutton(
-            filter_row0, text='Skip if output already exists',
+        skip_chk = ctk.CTkCheckBox(
+            filter_row0,
+            text='Skip if output already exists',
             variable=self.skip_existing,
+            onvalue=True, offvalue=False,
+            fg_color=DARK['accent'],
+            hover_color=DARK['accent_hover'],
+            text_color=DARK['text'],
+            border_color=DARK['border'],
+            checkmark_color='#ffffff',
+            font=_ui,
         )
         skip_chk.pack(side='right')
         Tooltip(skip_chk, TIPS['skip_existing'])
-        incomplete_chk = ttk.Checkbutton(
-            filters, text='Delete folder if any expected stem is missing',
+        incomplete_chk = ctk.CTkCheckBox(
+            filters,
+            text='Delete folder if any expected stem is missing',
             variable=self.delete_if_incomplete,
+            onvalue=True, offvalue=False,
+            fg_color=DARK['accent'],
+            hover_color=DARK['accent_hover'],
+            text_color=DARK['text'],
+            border_color=DARK['border'],
+            checkmark_color='#ffffff',
+            font=_ui,
         )
         incomplete_chk.grid(row=1, column=0, sticky='w', pady=(2, 0))
         Tooltip(incomplete_chk, TIPS['delete_incomplete'])
 
-        opts = ttk.LabelFrame(organize_tab, text='  OPTIONS  ', padding=SECTION_INNER_PAD)
-        opts.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
+        opts = ctk_section(organize_tab, 'OPTIONS')
         opts.columnconfigure(1, weight=1)
         opts.columnconfigure(3, weight=1)
         self._combo_field(opts, 0, 0, 'Model',   self.model_label, list(MODELS),          TIPS['model'])
@@ -5486,72 +6021,166 @@ class App(tk.Tk):
         self._combo_field(opts, 1, 0, 'Quality', self.quality,     list(QUALITY_PRESETS), TIPS['quality'])
         if cuda_effective():
             cuda_text = 'Use CUDA (GPU)'
-            cuda_state = 'normal'
+            cuda_enabled = True
         elif torch.cuda.is_available():
             cuda_text = 'Use CUDA (GPU)   ·   incompatible PyTorch build'
-            cuda_state = 'disabled'
+            cuda_enabled = False
         elif torch_cuda_built():
             cuda_text = 'Use CUDA (GPU)   ·   no GPU detected'
-            cuda_state = 'disabled'
+            cuda_enabled = False
         else:
             cuda_text = 'Use CUDA (GPU)   ·   unavailable'
-            cuda_state = 'disabled'
-        cuda_chk = ttk.Checkbutton(opts, text=cuda_text, variable=self.use_cuda, state=cuda_state)
-        cuda_chk.grid(row=1, column=2, columnspan=2, sticky='w', pady=6)
+            cuda_enabled = False
+        cuda_chk = ctk.CTkCheckBox(
+            opts,
+            text=cuda_text,
+            variable=self.use_cuda,
+            onvalue=True, offvalue=False,
+            fg_color=DARK['accent'],
+            hover_color=DARK['accent_hover'],
+            text_color=DARK['text'] if cuda_enabled else DARK['text_dim'],
+            border_color=DARK['border'],
+            checkmark_color='#ffffff',
+            font=_ui,
+            state='normal' if cuda_enabled else 'disabled',
+        )
+        cuda_chk.grid(row=1, column=2, columnspan=2, sticky='w', pady=3)
         Tooltip(cuda_chk, TIPS['cuda'])
         self._combo_field(opts, 2, 0, 'On ambiguous', self.ambig_label, list(AMBIG_MODES), TIPS['ambig'])
 
-        cls = ttk.LabelFrame(organize_tab, text='  CLASSIFICATION  ', padding=CLASS_FRAME_PAD)
-        cls.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
-        cls.columnconfigure(0, weight=1)
-        self.cls_frame = cls
+        # CLASSIFICATION: RMS/SI-SDR hang on the card top border (CTk overhang).
+        cls_wrap = ctk.CTkFrame(organize_tab, fg_color='transparent')
+        cls_wrap.pack(fill='x', padx=SECTION_PADX, pady=(0, SECTION_GAP))
+        ctk.CTkLabel(
+            cls_wrap,
+            text='CLASSIFICATION',
+            font=ctk_section_font(),
+            text_color=DARK['text_dim'],
+            anchor='w',
+        ).pack(anchor='w', pady=(0, 3))
 
-        self.cls_notebook = ttk.Notebook(cls, style='Class.TNotebook')
-        self.cls_notebook.grid(row=0, column=0, sticky='ew')
-        self.cls_rms_tab = ttk.Frame(self.cls_notebook, padding=CLASS_TAB_CONTENT_PAD)
-        self.cls_sdr_tab = ttk.Frame(self.cls_notebook, padding=CLASS_TAB_CONTENT_PAD)
-        self.cls_notebook.add(self.cls_rms_tab, text='RMS')
-        self.cls_notebook.add(self.cls_sdr_tab, text='SI-SDR')
-        self.cls_notebook.bind('<<NotebookTabChanged>>', self._on_class_tab_changed)
+        cls_slot = ctk.CTkFrame(cls_wrap, fg_color='transparent')
+        cls_slot.pack(fill='x')
+
+        # Shorter card so bottom border isn't clipped by the tab body / action bar.
+        _cls_h = 248
+        _hang = 6
+        self.cls_notebook = ctk.CTkTabview(
+            cls_slot,
+            fg_color=DARK['panel'],
+            bg_color=DARK['bg'],
+            border_color=DARK['border'],
+            border_width=1,
+            corner_radius=8,
+            segmented_button_fg_color=DARK['panel2'],
+            segmented_button_selected_color=DARK['accent'],
+            segmented_button_selected_hover_color=DARK['accent_hover'],
+            segmented_button_unselected_color=DARK['panel2'],
+            segmented_button_unselected_hover_color=DARK['btn_hover'],
+            text_color=DARK['text'],
+            text_color_disabled=DARK['text_dim'],
+            anchor='n',
+            height=_cls_h,
+            command=self._on_class_tab_changed,
+        )
+        self.cls_notebook._segmented_button.configure(font=_ui)
+        self.cls_notebook._outer_spacing = 0
+        self.cls_notebook._outer_button_overhang = _hang
+        self.cls_notebook._configure_grid()
+        self.cls_notebook._set_grid_canvas()
+        self.cls_notebook._set_grid_segmented_button()
+        self.cls_notebook._configure_segmented_button_background_corners()
+        self.cls_notebook.place(x=0, y=0, relwidth=1)
+        # Slot a few px taller than the card so the bottom border isn't clipped.
+        cls_slot.configure(height=_cls_h + 4)
+        cls_slot.pack_propagate(False)
+        self.cls_frame = self.cls_notebook
+        self.cls_notebook.add('RMS')
+        self.cls_notebook.add('SI-SDR')
+        self.cls_rms_tab = self.cls_notebook.tab('RMS')
+        self.cls_sdr_tab = self.cls_notebook.tab('SI-SDR')
 
         self.cls_rms_tab.columnconfigure(1, weight=1)
         self.cls_rms_tab.columnconfigure(3, weight=1)
         pct = lambda v: f"{v:.0%}"
         self._slider_field(self.cls_rms_tab, 0, 0, 'Confidence', self.threshold,  0.10, 0.90, pct, TIPS['confidence'])
         self._slider_field(self.cls_rms_tab, 0, 2, 'Min. margin', self.min_margin, 0.00, 0.50, pct, TIPS['margin'])
-        batch_lbl = ttk.Label(self.cls_rms_tab, text='Batch size')
-        batch_lbl.grid(row=1, column=0, sticky='w', padx=(0, 10), pady=6)
-        batch_sp = ttk.Spinbox(self.cls_rms_tab, from_=1, to=16, textvariable=self.batch_size, width=6)
-        batch_sp.grid(row=1, column=1, sticky='w', pady=6)
+        batch_lbl = ctk.CTkLabel(
+            self.cls_rms_tab, text='Batch size', text_color=DARK['label'], font=_ui,
+        )
+        batch_lbl.grid(row=1, column=0, sticky='w', padx=(0, 10), pady=3)
+        batch_sp = ttk.Spinbox(
+            self.cls_rms_tab, from_=1, to=16, textvariable=self.batch_size, width=6,
+            font=ttk_ui_font(),
+        )
+        batch_sp.grid(row=1, column=1, sticky='w', pady=3)
         tip(batch_lbl, batch_sp, text=TIPS['batch'])
-        peak_chk = ttk.Checkbutton(self.cls_rms_tab, text='Normalize so summed mixture peaks at -1 dB',
-                                   variable=self.peak_norm)
-        peak_chk.grid(row=1, column=2, columnspan=2, sticky='w', pady=6)
-        Tooltip(peak_chk, TIPS['peak_norm'])
-        dedup_chk = ttk.Checkbutton(self.cls_rms_tab, text='Remove duplicate stems (keep quietest)',
-                                    variable=self.dedup)
-        dedup_chk.grid(row=2, column=0, columnspan=4, sticky='w', pady=6)
+        dedup_chk = ctk.CTkCheckBox(
+            self.cls_rms_tab,
+            text='Remove duplicate stems (keep quietest)',
+            variable=self.dedup,
+            onvalue=True, offvalue=False,
+            fg_color=DARK['accent'],
+            hover_color=DARK['accent_hover'],
+            text_color=DARK['text'],
+            border_color=DARK['border'],
+            checkmark_color='#ffffff',
+            font=_ui,
+        )
+        dedup_chk.grid(row=2, column=0, columnspan=4, sticky='w', pady=3)
         Tooltip(dedup_chk, TIPS['dedup'])
-        self.mix_chk = ttk.Checkbutton(self.cls_rms_tab, text='Also write mixture.wav (WAV quality only)',
-                                       variable=self.make_mixture)
-        self.mix_chk.grid(row=3, column=0, columnspan=4, sticky='w', pady=6)
+        peak_chk = ctk.CTkCheckBox(
+            self.cls_rms_tab,
+            text='Normalize so summed mixture peaks at -1 dB',
+            variable=self.peak_norm,
+            onvalue=True, offvalue=False,
+            fg_color=DARK['accent'],
+            hover_color=DARK['accent_hover'],
+            text_color=DARK['text'],
+            border_color=DARK['border'],
+            checkmark_color='#ffffff',
+            font=_ui,
+        )
+        peak_chk.grid(row=3, column=0, columnspan=4, sticky='w', pady=3)
+        Tooltip(peak_chk, TIPS['peak_norm'])
+        self.mix_chk = ctk.CTkCheckBox(
+            self.cls_rms_tab,
+            text='Also write mixture.wav (WAV quality only)',
+            variable=self.make_mixture,
+            onvalue=True, offvalue=False,
+            fg_color=DARK['accent'],
+            hover_color=DARK['accent_hover'],
+            text_color=DARK['text'],
+            border_color=DARK['border'],
+            checkmark_color='#ffffff',
+            font=_ui,
+        )
+        self.mix_chk.grid(row=4, column=0, columnspan=4, sticky='w', pady=3)
         Tooltip(self.mix_chk, TIPS['mixture'])
 
         self.cls_sdr_tab.columnconfigure(1, weight=1)
-        tk.Label(
+        self._sdr_thresh_frame = ctk.CTkFrame(self.cls_sdr_tab, fg_color='transparent')
+        self._sdr_thresh_frame.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 2))
+        self._sdr_thresh_frame.columnconfigure(1, weight=1)
+        ctk.CTkLabel(
             self.cls_sdr_tab,
             text='Threshold (deletes anything below stated value)',
-            font=SDR_THRESH_NOTE_FONT, fg=COLORS['fg_dim'], bg=COLORS['bg'],
-        ).grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 8))
-        self._sdr_thresh_frame = ttk.Frame(self.cls_sdr_tab)
-        self._sdr_thresh_frame.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(0, 4))
-        self._sdr_thresh_frame.columnconfigure(1, weight=1)
-        sdr_del_chk = ttk.Checkbutton(
+            font=_ui,
+            text_color=DARK['text_dim'],
+        ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(6, 4))
+        sdr_del_chk = ctk.CTkCheckBox(
             self.cls_sdr_tab,
             text='Delete folder if any expected stem is missing after SI-SDR determination',
             variable=self.sdr_delete_folder,
+            onvalue=True, offvalue=False,
+            fg_color=DARK['accent'],
+            hover_color=DARK['accent_hover'],
+            text_color=DARK['text'],
+            border_color=DARK['border'],
+            checkmark_color='#ffffff',
+            font=_ui,
         )
-        sdr_del_chk.grid(row=2, column=0, columnspan=2, sticky='w', pady=(10, 0))
+        sdr_del_chk.grid(row=2, column=0, columnspan=2, sticky='w', pady=(0, 0))
         Tooltip(sdr_del_chk, TIPS['sdr_delete_folder'])
         self.stem_mode.trace_add('write', lambda *_: self._rebuild_sdr_thresholds())
         self._rebuild_sdr_thresholds()
@@ -5560,10 +6189,27 @@ class App(tk.Tk):
         self._update_mixture_state()
         self._update_filter_state()
 
-        log_frame = ttk.LabelFrame(right, text='  LOG  ', padding=LOG_INNER_PAD)
-        log_frame.grid(row=0, column=0, sticky='nsew',
+        _log_wrap = ctk.CTkFrame(
+            right,
+            fg_color=DARK['panel'],
+            border_color=DARK['border'],
+            border_width=1,
+            corner_radius=8,
+        )
+        _log_wrap.grid(row=0, column=0, sticky='nsew',
                        pady=(HEADER_TOP_PAD, LOG_PAD_BOTTOM),
                        padx=(0, SECTION_SIDE_PAD_LEFT))
+        _log_wrap.rowconfigure(1, weight=1)
+        _log_wrap.columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            _log_wrap, text='LOG',
+            font=ctk_section_font(),
+            text_color=DARK['text_dim'], anchor='w',
+        ).grid(row=0, column=0, columnspan=2, sticky='w',
+               padx=LOG_INNER_PAD, pady=(LOG_INNER_PAD - 4, 4))
+        log_frame = ctk.CTkFrame(_log_wrap, fg_color='transparent')
+        log_frame.grid(row=1, column=0, columnspan=2, sticky='nsew',
+                       padx=LOG_INNER_PAD, pady=(0, LOG_INNER_PAD))
         log_frame.rowconfigure(0, weight=1)
         log_frame.columnconfigure(0, weight=1)
         self.log_text = tk.Text(log_frame, wrap='word', state='disabled',
@@ -5571,17 +6217,37 @@ class App(tk.Tk):
                                 insertbackground=COLORS['fg'], relief='flat', borderwidth=0,
                                 font=LOG_FONT, padx=10, pady=8)
         self.log_text.grid(row=0, column=0, sticky='nsew')
-        scroll = DarkScrollbar(log_frame, command=self.log_text.yview)
-        scroll.grid(row=0, column=1, sticky='ns')
-        self.log_text.configure(yscrollcommand=scroll.set)
+        # Same CTk thumb style as IGNORE WHEN MATCHING (border / accent hover).
+        # Shown only when content overflows (see _on_log_scroll).
+        scroll = ctk.CTkScrollbar(
+            log_frame,
+            command=self.log_text.yview,
+            fg_color=COLORS['log_bg'],
+            button_color=DARK['scrollbar'],
+            button_hover_color=DARK['scrollbar_hover'],
+        )
+        self._log_scrollbar = scroll
+        self.log_text.configure(yscrollcommand=self._on_log_scroll)
         bind_mousewheel(self.log_text, self.log_text.yview)
         bind_mousewheel(log_frame, self.log_text.yview)
         for tag, color in (('err', '#ff7a7a'), ('warn', LOG_WARN_COLOR),
                            ('ok', '#7ee0a0'), ('info', COLORS['fg_dim']),
                            ('detail', COLORS['log_fg']),
                            ('sdr_pass', SDR_PASS_COLOR), ('sdr_fail', SDR_FAIL_COLOR),
-                           ('sdr_label', SDR_LABEL_COLOR)):
+                           ('sdr_label', SDR_LABEL_COLOR),
+                           # Genre & Gender result blocks
+                           ('gg_file', COLORS['fg_dim']),
+                           ('gg_key', COLORS['fg_dim']),
+                           ('gg_val', COLORS['log_fg']),
+                           ('gg_conf', '#7ee0a0'),
+                           ('gg_conf_low', '#e0b07a'),
+                           ('gg_result', COLORS['log_fg'])):
             self.log_text.tag_configure(tag, foreground=color)
+        self.log_text.tag_configure(
+            'log_pct',
+            foreground=COLORS['fg_dim'],
+            font=LOG_PCT_FONT,
+        )
         self.log_text.tag_configure('deleted', foreground=LOG_DELETED_COLOR)
         self.log_text.tag_configure('log_margin', foreground=LOG_MARGIN_COLOR)
         _configure_stem_log_tags(self.log_text)
@@ -5598,7 +6264,7 @@ class App(tk.Tk):
             background=COLORS['log_bg'],
         )
 
-        bottom = ttk.Frame(self)
+        bottom = ctk.CTkFrame(self, fg_color='transparent')
         bottom.grid(row=bottom_row, column=0, sticky='ew',
                     padx=CONTENT_PAD, pady=(STATUS_TOP_PAD, STATUS_BOTTOM_PAD))
         bottom.columnconfigure(0, weight=1)
@@ -5815,18 +6481,49 @@ class App(tk.Tk):
         for key in self._resource_bars:
             self._set_resource_bar(key, 0.0)
 
-    def _tick_resources(self) -> None:
-        self._resource_tick_id = None
-        running = (
+    def _status_work_active(self) -> bool:
+        return (
             (self.worker is not None and self.worker.is_alive())
             or (self.sdr_worker is not None and self.sdr_worker.is_alive())
             or self._pair_busy
+            or getattr(self, '_rename_busy', False)
         )
-        if not running:
+
+    def _tick_resources(self) -> None:
+        self._resource_tick_id = None
+        if not self._status_work_active():
             self._stop_resource_monitor()
             return
         self._sample_resources()
         self._resource_tick_id = self.after(1000, self._tick_resources)
+
+    def _maybe_show_status_idle(self) -> None:
+        if self._status_work_active():
+            return
+        self._show_status_idle()
+
+    def _set_rename_busy(
+        self,
+        busy: bool,
+        status: str = '',
+        *,
+        pct: float | None = None,
+        eta: float | None = None,
+    ) -> None:
+        """Drive bottom status bar (progress / ETA / CPU·GPU) from Rename tab."""
+        was_busy = bool(getattr(self, '_rename_busy', False))
+        self._rename_busy = bool(busy)
+        if status:
+            self.status_var.set(status)
+        if busy:
+            if not was_busy:
+                self._show_status_progress()
+            if pct is not None:
+                self._update_progress(float(pct), eta)
+        else:
+            if was_busy:
+                self._update_progress(100.0, None)
+                self.after(300, self._maybe_show_status_idle)
 
     def _rebuild_sdr_thresholds(self) -> None:
         saved = {
@@ -5846,13 +6543,23 @@ class App(tk.Tk):
                 default = settings_saved[cat]
             var = tk.IntVar(value=int(default))
             self.sdr_thresholds[cat] = var
-            lbl = ttk.Label(self._sdr_thresh_frame, text=f'{cat}:')
+            ctk = ensure_ctk_dark()
+            _ui = ctk_ui_font()
+            lbl = ctk.CTkLabel(
+                self._sdr_thresh_frame, text=f'{str(cat).capitalize()}:',
+                text_color=DARK['label'], font=_ui,
+            )
             lbl.grid(row=i, column=0, sticky='w', padx=(0, 10), pady=2)
-            ctrl = ttk.Frame(self._sdr_thresh_frame)
+            ctrl = ctk.CTkFrame(self._sdr_thresh_frame, fg_color='transparent')
             ctrl.grid(row=i, column=1, sticky='w', pady=2)
-            sp = ttk.Spinbox(ctrl, from_=0, to=100, textvariable=var, width=6)
+            sp = ttk.Spinbox(
+                ctrl, from_=0, to=100, textvariable=var, width=6,
+                font=ttk_ui_font(),
+            )
             sp.pack(side='left')
-            ttk.Label(ctrl, text='SI-SDR', style='Dim.TLabel').pack(side='left', padx=(8, 0))
+            ctk.CTkLabel(
+                ctrl, text='SI-SDR', text_color=DARK['text'], font=_ui,
+            ).pack(side='left', padx=(8, 0))
             tip(lbl, sp, text=TIPS['sdr_threshold'])
             if not getattr(self, '_loading_settings', False):
                 sp.bind('<FocusOut>', self._autosave_sdr_threshold, add='+')
@@ -5860,10 +6567,9 @@ class App(tk.Tk):
         self._refresh_cls_frame()
 
     def _refresh_cls_frame(self) -> None:
-        """Re-sync LabelFrame border after classification tab content changes."""
+        """Re-sync frame after classification tab content changes."""
         if not hasattr(self, 'cls_frame'):
             return
-        self.cls_notebook.update_idletasks()
         self.cls_frame.update_idletasks()
 
     def _autosave_sdr_threshold(self, _event=None) -> None:
@@ -5946,9 +6652,22 @@ class App(tk.Tk):
         self._start_resource_monitor()
         self.after(50, self._redraw_progress_fill)
 
-    def _update_progress(self, pct: float, eta: float | None) -> None:
+    def _update_progress(
+        self,
+        pct: float,
+        eta: float | None,
+        n: int | None = None,
+        total: int | None = None,
+        phase: str | None = None,
+    ) -> None:
         self._progress_pct_value = float(pct)
+        # Always show percent on the bar (n/total/phase stay optional for callers).
         self._progress_pct_lbl.configure(text=f'{pct:.0f}%')
+        if n is not None and total is not None and int(total) > 0:
+            detail = f'{int(n):,}/{int(total):,}'
+            if phase:
+                detail = f'{phase} {detail}'
+            self.status_var.set(detail)
         self.eta_var.set(f'ETA {format_eta(eta)}')
         self._redraw_progress_fill()
 
@@ -5979,7 +6698,7 @@ class App(tk.Tk):
             'ambig_label':  self.ambig_label.get(),
             'scan_label':   self.scan_label.get(),
             'naming_label': self.naming_label.get(),
-            'append_duration': self.append_duration.get(),
+            'append_duration': False,
             'delete_if_short': self.delete_if_short.get(),
             'min_duration_sec': _safe_tk_int(self.min_duration_sec, 8),
             'delete_if_incomplete': self.delete_if_incomplete.get(),
@@ -6023,7 +6742,7 @@ class App(tk.Tk):
             self.ambig_label.set(_valid_label(data.get('ambig_label'), AMBIG_MODES, next(iter(AMBIG_MODES))))
             self.scan_label.set(_valid_label(data.get('scan_label'), SCAN_MODES, next(iter(SCAN_MODES))))
             self.naming_label.set(_valid_label(data.get('naming_label'), NAMING_MODES, next(iter(NAMING_MODES))))
-            self.append_duration.set(bool(data.get('append_duration', self.append_duration.get())))
+            self.append_duration.set(False)
             self.delete_if_short.set(bool(data.get('delete_if_short', self.delete_if_short.get())))
             self.min_duration_sec.set(int(data.get('min_duration_sec', _safe_tk_int(self.min_duration_sec, 8))))
             self.delete_if_incomplete.set(
@@ -6067,7 +6786,7 @@ class App(tk.Tk):
             self.input_dir, self.output_dir, self.use_cuda, self.model_label,
             self.stem_mode, self.quality, self.threshold, self.min_margin,
             self.batch_size, self.peak_norm, self.make_mixture, self.dedup,
-            self.ambig_label, self.scan_label, self.naming_label, self.append_duration,
+            self.ambig_label, self.scan_label, self.naming_label,
             self.delete_if_short, self.min_duration_sec, self.delete_if_incomplete, self.skip_existing,
             self.sdr_delete_folder,
         ):
@@ -6094,12 +6813,6 @@ class App(tk.Tk):
             self.worker.stop()
         if self.sdr_worker and self.sdr_worker.is_alive():
             self.sdr_worker.stop()
-        if self._rename_reveal_job is not None:
-            try:
-                self.after_cancel(self._rename_reveal_job)
-            except tk.TclError:
-                pass
-            self._rename_reveal_job = None
         if getattr(self, '_minimize_restore_job', None) is not None:
             try:
                 self.after_cancel(self._minimize_restore_job)
@@ -6195,7 +6908,7 @@ class App(tk.Tk):
             'ambig_mode':   AMBIG_MODES[self.ambig_label.get()],
             'scan_mode':    SCAN_MODES[self.scan_label.get()],
             'naming_mode':  NAMING_MODES[self.naming_label.get()],
-            'append_duration': self.append_duration.get(),
+            'append_duration': False,
             'delete_if_short': self.delete_if_short.get(),
             'min_duration_sec': _safe_tk_int(self.min_duration_sec, 8),
             'delete_if_incomplete': self.delete_if_incomplete.get(),
@@ -6329,6 +7042,7 @@ class App(tk.Tk):
             or (self.sdr_worker is not None and self.sdr_worker.is_alive())
             or self._renamer_destructive_busy()
             or self._pair_busy
+            or getattr(self, '_rename_busy', False)
         )
 
     def _set_pair_busy(self, busy: bool, status: str, panel) -> None:
@@ -6337,20 +7051,201 @@ class App(tk.Tk):
         panel.set_buttons_state('disabled' if busy else 'normal')
         if busy:
             if self._classify_mode_active():
-                self.start_btn.configure(state='disabled')
-                self.stop_btn.configure(state='disabled')
-                self.save_log_btn.configure(state='disabled')
-                self.clear_log_btn.configure(state='disabled')
+                # Dim only — state=disabled shrinks CTk button height on Windows.
+                for btn in (
+                    self.start_btn, self.stop_btn,
+                    self.save_log_btn, self.clear_log_btn, self.play_btn,
+                ):
+                    btn.configure(
+                        text_color=DARK['text_dim'],
+                        cursor='arrow',
+                        height=PATH_BTN_HEIGHT,
+                    )
             self._show_status_progress()
         else:
             if self._classify_mode_active():
                 self._update_action_buttons_for_tab()
             self._update_progress(100.0, None)
-            self.after(300, self._show_status_idle)
+            self.after(300, self._maybe_show_status_idle)
+        self._pin_action_bar_heights()
+
+    def _on_log_scroll(self, first, last) -> None:
+        """Update LOG scrollbar; show only when content overflows."""
+        sb = getattr(self, '_log_scrollbar', None)
+        if sb is None:
+            return
+        try:
+            first_f, last_f = float(first), float(last)
+        except (TypeError, ValueError):
+            return
+        sb.set(first_f, last_f)
+        need = (last_f - first_f) < 0.999
+        try:
+            mapped = bool(sb.winfo_ismapped())
+        except tk.TclError:
+            return
+        if need and not mapped:
+            sb.grid(row=0, column=1, sticky='ns')
+        elif not need and mapped:
+            sb.grid_forget()
+
+    def _gg_insert_dim_pct(self, pct: str, *, indent: str = '  ') -> None:
+        """Dim percentage — same color as === filename === (info / fg_dim)."""
+        text = (pct or '').strip()
+        if not text:
+            return
+        if not text.endswith('%'):
+            text = f'{text}%'
+        self.log_text.insert('end', indent)
+        self.log_text.insert('end', text, 'log_pct')
+        self.log_text.insert('end', '\n')
+        self.log_text.insert('end', '\u200b\n', LOG_FOLDER_STEM_GAP_TAG)
+
+    def _gg_flush_genre_style_row(
+        self,
+        genre: str | None,
+        style: str | None,
+        conf_pct: str | None = None,
+    ) -> None:
+        """Genre chip, style chip below, optional dim pct (Rename-style)."""
+        _ensure_stem_chip_layout(self.log_text)
+        genre = (genre or '').strip()
+        style = (style or '').strip()
+        conf = (conf_pct or '').strip()
+        if not genre and not style and not conf:
+            return
+        if genre:
+            self.log_text.insert('end', '  ')
+            self.log_text.insert(
+                'end',
+                _format_gg_value_chip(genre),
+                _stem_log_tag('dry'),
+            )
+            if conf:
+                self.log_text.insert('end', f'  {conf}', 'log_pct')
+                conf = ''
+            self.log_text.insert('end', '\n')
+            self.log_text.insert('end', '\u200b\n', LOG_FOLDER_STEM_GAP_TAG)
+        if style:
+            self.log_text.insert('end', '  ')
+            self.log_text.insert(
+                'end',
+                _format_gg_value_chip(style),
+                _stem_log_tag('wet'),
+            )
+            self.log_text.insert('end', '\n')
+            self.log_text.insert('end', '\u200b\n', LOG_FOLDER_STEM_GAP_TAG)
+        if conf:
+            self._gg_insert_dim_pct(conf)
+
+    def _gg_flush_pending_genre(self) -> None:
+        pending = getattr(self, '_gg_pending_genre', None)
+        style = getattr(self, '_gg_pending_style', None)
+        if pending or style:
+            self._gg_pending_genre = None
+            self._gg_pending_style = None
+            self._gg_flush_genre_style_row(pending, style)
 
     def _append_pair_log(self, message: str, tag: str = 'info') -> None:
         self.log_text.configure(state='normal')
-        self.log_text.insert('end', message + '\n', tag if tag in ('err', 'warn', 'ok', 'info', 'detail') else 'info')
+        line = message or ''
+        # Gender/reverb:  female 72%   /   dry 55%
+        badge_m = GG_BADGE_RE.match(line)
+        if badge_m:
+            self._gg_flush_pending_genre()
+            indent, label, pct = (
+                badge_m.group(1), badge_m.group(2), badge_m.group(3),
+            )
+            self.log_text.insert('end', indent or '  ')
+            self.log_text.insert(
+                'end',
+                _format_stem_chip_text(label),
+                _stem_log_tag(label),
+            )
+            if pct:
+                self.log_text.insert('end', f'  {pct}', 'log_pct')
+            self.log_text.insert('end', '\n')
+            # Same gap height as under === filename === (equal air top/bottom).
+            self.log_text.insert('end', '\u200b\n', LOG_FOLDER_STEM_GAP_TAG)
+        elif GG_HEADER_RE.match(line.strip()):
+            self._gg_flush_pending_genre()
+            # Same dim as "Starting genre tagger on:" (info / fg_dim).
+            self.log_text.insert('end', line.strip() + '\n', 'info')
+            # Air before first badge — match gap after bottom badge.
+            self.log_text.insert('end', '\u200b\n', LOG_FOLDER_STEM_GAP_TAG)
+        else:
+            # Genre: buffer GENRE + STYLE, then CONF / bare 72%.
+            key_m = re.match(
+                r'^(GENRE|STYLE|CONF|GENDER|REVERB):\s*(.*)$',
+                line,
+                flags=re.IGNORECASE,
+            )
+            if key_m:
+                key = key_m.group(1).upper()
+                val = (key_m.group(2) or '').strip()
+                if key == 'GENRE' and val:
+                    self._gg_pending_genre = val
+                elif key == 'STYLE':
+                    self._gg_pending_style = val
+                elif key == 'CONF' and val:
+                    genre = getattr(self, '_gg_pending_genre', None)
+                    style = getattr(self, '_gg_pending_style', None)
+                    self._gg_pending_genre = None
+                    self._gg_pending_style = None
+                    conf_val = val
+                    try:
+                        if not conf_val.endswith('%'):
+                            conf_val = (
+                                f"{int(round(float(conf_val) * 100.0))}%"
+                            )
+                    except ValueError:
+                        pass
+                    self._gg_flush_genre_style_row(genre, style, conf_val)
+                else:
+                    self._gg_flush_pending_genre()
+                    # Fallback (unknown gender/reverb strings, …).
+                    self.log_text.insert('end', f'{key}: ', 'gg_key')
+                    self.log_text.insert('end', val + '\n', 'gg_val')
+            else:
+                pct_only = GG_PCT_ONLY_RE.match(line)
+                conf_legacy = re.match(
+                    r'^(\s*)\(confidence\s+([^)]+)\)\s*$',
+                    line,
+                    flags=re.IGNORECASE,
+                )
+                if pct_only or conf_legacy:
+                    genre = getattr(self, '_gg_pending_genre', None)
+                    style = getattr(self, '_gg_pending_style', None)
+                    self._gg_pending_genre = None
+                    self._gg_pending_style = None
+                    if pct_only:
+                        conf_val = pct_only.group(2)
+                    else:
+                        conf_val = (conf_legacy.group(2) or '').strip()
+                        try:
+                            if not conf_val.endswith('%'):
+                                conf_val = (
+                                    f"{int(round(float(conf_val) * 100.0))}%"
+                                )
+                        except ValueError:
+                            pass
+                    self._gg_flush_genre_style_row(genre, style, conf_val)
+                else:
+                    self._gg_flush_pending_genre()
+                    allowed = {
+                        'err', 'warn', 'ok', 'info', 'detail', 'log_pct',
+                        'gg_file', 'gg_key', 'gg_val', 'gg_conf', 'gg_conf_low',
+                        'gg_result',
+                    }
+                    use = tag if tag in allowed else 'info'
+                    self.log_text.insert('end', line + '\n', use)
+        # Huge batch runs: trim oldest lines so the widget stays responsive.
+        try:
+            end_line = int(float(str(self.log_text.index('end-1c')).split('.')[0]))
+            if end_line > 1500:
+                self.log_text.delete('1.0', f'{end_line - 1200}.0')
+        except (tk.TclError, ValueError, TypeError):
+            pass
         self.log_text.see('end')
         self.log_text.configure(state='disabled')
 
@@ -6405,7 +7300,7 @@ class App(tk.Tk):
 
     def _offer_sdr_after_rms(self) -> None:
         self._sdr_use_output_dir = True
-        self.cls_notebook.select(1)
+        self.cls_notebook.set('SI-SDR')
         messagebox.showinfo(
             'Calculate SI-SDR?',
             'RMS classification is complete.\n\n'
@@ -6435,9 +7330,19 @@ class App(tk.Tk):
                 try:
                     if msg is DONE_SENTINEL:
                         self._job_finished()
-                    elif isinstance(msg, tuple) and len(msg) == 3 and msg[0] == PROGRESS_TAG:
-                        _, pct, eta = msg
-                        self._update_progress(float(pct), eta)
+                    elif isinstance(msg, tuple) and msg and msg[0] == PROGRESS_TAG:
+                        pct = msg[1] if len(msg) > 1 else 0.0
+                        eta = msg[2] if len(msg) > 2 else None
+                        n = msg[3] if len(msg) > 3 else None
+                        total = msg[4] if len(msg) > 4 else None
+                        phase = msg[5] if len(msg) > 5 else None
+                        self._update_progress(
+                            float(pct),
+                            eta,
+                            n=n,
+                            total=total,
+                            phase=phase or None,
+                        )
                     elif isinstance(msg, tuple) and len(msg) == 3 and msg[0] == PAIR_LOG_TAG:
                         self._append_pair_log(msg[1], msg[2])
                     elif isinstance(msg, tuple) and len(msg) == 4 and msg[0] == SDR_LOG_TAG:
@@ -6481,13 +7386,13 @@ class App(tk.Tk):
             if self._pending_stem_block_gap:
                 self.log_text.insert('end', '\u200b\n', LOG_FOLDER_STEM_GAP_TAG)
                 self._pending_stem_block_gap = False
-            indent, label, share, margin, suffix = (
-                m.group(1), m.group(2), m.group(3), m.group(4), m.group(5),
+            indent, label, pct, suffix = (
+                m.group(1), m.group(2), m.group(3), m.group(4),
             )
             self.log_text.insert('end', indent)
             self.log_text.insert('end', _format_stem_chip_text(label), _stem_log_tag(label))
-            self.log_text.insert('end', share)
-            self.log_text.insert('end', margin, 'log_margin')
+            if pct:
+                self.log_text.insert('end', f'  {pct}', 'log_pct')
             self.log_text.insert('end', suffix)
             self.log_text.insert('end', '\n')
             self.log_text.insert('end', '\u200b\n', LOG_STEM_GAP_TAG)
@@ -6527,8 +7432,9 @@ class App(tk.Tk):
             elif s.startswith('===') or s.startswith('['):
                 tag = 'info'
             else:
-                tag = None
-            self.log_text.insert('end', line + '\n', () if tag is None else (tag,))
+                # Intro / status chatter — same dim as === filename === (fg_dim).
+                tag = 'info'
+            self.log_text.insert('end', line + '\n', (tag,))
             if line.strip() in STEM_BLOCK_GAP_AFTER:
                 self._pending_stem_block_gap = True
             if FOLDER_TITLE_RE.match(line):

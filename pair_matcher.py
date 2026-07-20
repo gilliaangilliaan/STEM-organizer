@@ -34,7 +34,6 @@ STEM_SUFFIX_RE = re.compile(
 class IgnoreRules:
     ignore_parentheses: bool = True
     ignore_square_brackets: bool = True
-    ignore_all_brackets: bool = True
     ignore_extra_spaces: bool = True
     custom_keywords: tuple[str, ...] = ()
 
@@ -48,10 +47,11 @@ class IgnoreRules:
         cleaned = tuple(
             str(k).strip() for k in keywords if str(k).strip()
         )
+        # Legacy: ignore_all_brackets meant both paren + square on.
+        legacy_both = bool(data.get('ignore_all_brackets', False))
         return cls(
-            ignore_parentheses=bool(data.get('ignore_parentheses', True)),
-            ignore_square_brackets=bool(data.get('ignore_square_brackets', True)),
-            ignore_all_brackets=bool(data.get('ignore_all_brackets', True)),
+            ignore_parentheses=bool(data.get('ignore_parentheses', True)) or legacy_both,
+            ignore_square_brackets=bool(data.get('ignore_square_brackets', True)) or legacy_both,
             ignore_extra_spaces=bool(data.get('ignore_extra_spaces', True)),
             custom_keywords=cleaned,
         )
@@ -60,7 +60,6 @@ class IgnoreRules:
         return {
             'ignore_parentheses': self.ignore_parentheses,
             'ignore_square_brackets': self.ignore_square_brackets,
-            'ignore_all_brackets': self.ignore_all_brackets,
             'ignore_extra_spaces': self.ignore_extra_spaces,
             'custom_keywords': list(self.custom_keywords),
         }
@@ -108,9 +107,9 @@ def apply_ignore_rules(value: str, rules: IgnoreRules | None) -> str:
     if not rules:
         return text
 
-    if rules.ignore_all_brackets or rules.ignore_parentheses:
+    if rules.ignore_parentheses:
         text = re.sub(r'\([^)]*\)', ' ', text)
-    if rules.ignore_all_brackets or rules.ignore_square_brackets:
+    if rules.ignore_square_brackets:
         text = re.sub(r'\[[^\]]*\]', ' ', text)
 
     for keyword in rules.custom_keywords:
@@ -163,11 +162,15 @@ def strictness_to_threshold(strictness: float) -> float:
 
 
 def read_audio_tags(path: Path, *, use_filename_fallback: bool = True) -> TrackTags:
+    """Read artist/title for matching.
+
+    use_filename_fallback=True  -> parse from filename only (ignore tags)
+    use_filename_fallback=False -> metadata tags only
+    """
+    if use_filename_fallback:
+        artist, title = parse_filename_tags(path)
+        return TrackTags(path=path, artist=artist, title=title)
     artist, title = _read_tags_from_file(path)
-    if use_filename_fallback and (not artist or not title):
-        parsed_artist, parsed_title = parse_filename_tags(path)
-        artist = artist or parsed_artist
-        title = title or parsed_title
     return TrackTags(path=path, artist=artist, title=title)
 
 

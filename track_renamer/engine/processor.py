@@ -118,19 +118,25 @@ def _apply_rules_to_name(
                         break
             continue
 
+        ctx: dict[str, Any] = {
+            "track": track,
+            "original_name": original_name,
+            "current_name": current,
+            "index": index,
+            "counter": index,
+            "variables": variables,
+        }
+
         if isinstance(rule, CategoryRule):
-            current = apply_op(current, "categoryBundle", {"categories": [rule.to_dict()]}, ctx={})
+            current = apply_op(
+                current,
+                "categoryBundle",
+                {"categories": [rule.to_dict()]},
+                ctx,
+            )
             continue
 
         if isinstance(rule, OpRule):
-            ctx: dict[str, Any] = {
-                "track": track,
-                "original_name": original_name,
-                "current_name": current,
-                "index": index,
-                "counter": index,
-                "variables": variables,
-            }
             current = apply_op(current, rule.op, rule.params, ctx)
 
     return current

@@ -12,21 +12,34 @@ set "VENV=.build-venv"
 set "PY=%VENV%\Scripts\python.exe"
 
 echo [1/4] Checking Python ...
-where python >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: python not found on PATH.
-    pause
-    exit /b 1
-)
+REM Windows Store alias makes "where python" succeed with a stub that is not a real interpreter.
+python -c "import sys" >nul 2>&1
+if errorlevel 1 goto no_python
 
-python -c "import sys; raise SystemExit(0 if sys.version_info[:2] in ((3,10),(3,11)) else 1)"
+python -c "import sys; raise SystemExit(0 if sys.version_info[:2] in ((3,10),(3,11)) else 1)" >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Build requires Python 3.10.x or 3.11.x on PATH.
+    echo Wrong Python version:
+    python --version
+    echo Download 3.10 or 3.11 from here:
+    echo https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe
+    echo NOTE: During install, Add python.exe to PATH
+    echo After installed, run build.bat again
     pause
     exit /b 1
 )
 python --version
 echo.
+goto python_ok
+
+:no_python
+echo Python was not found; Download and install it from here:
+echo https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe
+echo NOTE: During install, Add python.exe to PATH
+echo After installed, run build.bat again
+pause
+exit /b 1
+
+:python_ok
 
 echo [2/4] Preparing build environment ...
 if not exist "%PY%" (
@@ -53,7 +66,7 @@ echo.
 
 echo [3/4] Running PyInstaller ...
 echo   Bundling UI into dist\STEM-organizer.exe
-echo   This usually takes 1-3 minutes - output below:
+echo   This usually takes ~1 minute - output below:
 echo.
 
 "%PY%" -m PyInstaller --noconfirm --clean --log-level=INFO stem_organizer.spec 2>&1
@@ -81,13 +94,20 @@ copy /Y "genre_gender_tagger\readme.md" "dist\genre_gender_tagger\" >nul
 if exist "genre_gender_tagger\models\*.pb" copy /Y "genre_gender_tagger\models\*.pb" "dist\genre_gender_tagger\models\" >nul
 if exist "genre_gender_tagger\models\vocal_reverb.pt" copy /Y "genre_gender_tagger\models\vocal_reverb.pt" "dist\genre_gender_tagger\models\" >nul
 
+echo   Copying instrument_tagger\ ^(Rename Auto-detect, no venv^) ...
+if exist "dist\instrument_tagger" rmdir /S /Q "dist\instrument_tagger"
+mkdir "dist\instrument_tagger" >nul
+copy /Y "instrument_tagger\instrument_tagger.py" "dist\instrument_tagger\" >nul
+copy /Y "instrument_tagger\passt_mel.py" "dist\instrument_tagger\" >nul
+copy /Y "instrument_tagger\install-deps.bat" "dist\instrument_tagger\" >nul
+
 echo.
 echo ========================================
 echo   SUCCESS
 echo ========================================
 echo   dist\STEM-organizer.exe
-echo   dist\install-deps.bat  ^(run once for PyTorch/Demucs^)
-echo   dist\genre_gender_tagger\  ^(run its install-deps.bat for Genre ^& Gender^)
+echo   dist\install-deps.bat  ^(run this now^)
+echo   dist\genre_gender_tagger\  + dist\instrument_tagger\
 echo.
 pause
 exit /b 0

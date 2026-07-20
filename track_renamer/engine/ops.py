@@ -6,9 +6,24 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .defaults import TITLE_CASE_ACRONYMS
+from .defaults import (
+    DEFAULT_CATEGORY_SOURCE,
+    TITLE_CASE_ACRONYMS,
+    map_instrument_to_category,
+)
 from .models import CategoryRule, Track
 from .tokens import resolve_tokens
+
+# Imported lazily in _apply_ml_category to avoid cycles if enrich imports ops later.
+def _ml_should_apply(track: Track) -> str:
+    from track_renamer.instrument_enrich import classify_decision
+
+    action, _category = classify_decision(
+        track.instrument,
+        float(getattr(track, "instrument_score", 0.0) or 0.0),
+        second_score=float(getattr(track, "instrument_second", 0.0) or 0.0),
+    )
+    return action
 
 # Words ending in "s" that should not be singularized (bass -> bas).
 _NO_SINGULARIZE = frozenset(
@@ -56,6 +71,7 @@ class CompiledKeyword:
 
 @dataclass(frozen=True, slots=True)
 class CompiledCategory:
+    name: str
     enabled: bool
     affix: str
     affix_position: str
@@ -193,6 +209,7 @@ def compile_category_bundle(raw_categories: Any) -> CompiledCategoryBundle:
             keyword_order += 1
         compiled.append(
             CompiledCategory(
+                name=(cat.name or "").strip(),
                 enabled=cat.enabled,
                 affix=cat.affix,
                 affix_position=cat.affix_position,
@@ -212,20 +229,30 @@ def compile_category_bundle(raw_categories: Any) -> CompiledCategoryBundle:
     )
 
 
-def _compiled_keyword_matches(
-    keyword: CompiledKeyword,
-    mode: str,
-    haystack: str,
-    tokens: frozenset[str],
-) -> bool:
-    if mode != "wholeWord":
-        return any(variant in haystack for variant in keyword.variants)
-    if any(variant in tokens for variant in keyword.variants):
-        return True
-    return any(pattern.search(haystack) for pattern in keyword.boundary_patterns)
+def _category_index_by_name(bundle: CompiledCategoryBundle, name: str) -> int:
+    key = (name or "").strip().casefold()
+    if not key:
+        return -1
+    for index, category in enumerate(bundle.categories):
+        if category.enabled and category.name.casefold() == key:
+            return index
+    return -1
 
 
-def _apply_compiled_category(name: str, bundle: CompiledCategoryBundle) -> str:
+def _apply_category_affix(name: str, category: CompiledCategory) -> str:
+    affix = category.affix
+    if (
+        category.existing_affix_policy == "skip"
+        and affix
+        and name.lower().startswith(affix.lower())
+    ):
+        return name
+    if category.affix_position == "prefix":
+        return f"{affix}{name}"
+    return f"{name}{affix}"
+
+
+def _find_keyword_category_index(name: str, bundle: CompiledCategoryBundle) -> int:
     haystack = name.lower()
     tokens = _filename_tokens(name)
     best_length = 0
@@ -251,20 +278,61 @@ def _apply_compiled_category(name: str, bundle: CompiledCategoryBundle) -> str:
     for variant, length, order, category_index in bundle.contains_candidates:
         if length >= best_length and variant in haystack:
             consider(length, order, category_index)
+    return best_category_index
 
-    if best_category_index < 0:
+
+def _compiled_keyword_matches(
+    keyword: CompiledKeyword,
+    mode: str,
+    haystack: str,
+    tokens: frozenset[str],
+) -> bool:
+    if mode != "wholeWord":
+        return any(variant in haystack for variant in keyword.variants)
+    if any(variant in tokens for variant in keyword.variants):
+        return True
+    return any(pattern.search(haystack) for pattern in keyword.boundary_patterns)
+
+
+def _apply_ml_category(
+    name: str,
+    bundle: CompiledCategoryBundle,
+    track: Track,
+) -> str:
+    if _ml_should_apply(track) != "apply":
         return name
-    best_cat = bundle.categories[best_category_index]
-    affix = best_cat.affix
-    if (
-        best_cat.existing_affix_policy == "skip"
-        and affix
-        and haystack.startswith(affix.lower())
-    ):
+    mapped = (track.category or "").strip() or map_instrument_to_category(
+        track.instrument
+    )
+    if not mapped:
         return name
-    if best_cat.affix_position == "prefix":
-        return f"{affix}{name}"
-    return f"{name}{affix}"
+    index = _category_index_by_name(bundle, mapped)
+    if index < 0:
+        return name
+    return _apply_category_affix(name, bundle.categories[index])
+
+
+def _apply_compiled_category(
+    name: str,
+    bundle: CompiledCategoryBundle,
+    *,
+    track: Track | None = None,
+    source: str = DEFAULT_CATEGORY_SOURCE,
+) -> str:
+    mode = (source or DEFAULT_CATEGORY_SOURCE).strip().lower()
+    if mode not in ("filename", "model", "combo"):
+        mode = DEFAULT_CATEGORY_SOURCE
+
+    if mode in ("filename", "combo"):
+        keyword_index = _find_keyword_category_index(name, bundle)
+        if keyword_index >= 0:
+            return _apply_category_affix(name, bundle.categories[keyword_index])
+        if mode == "filename":
+            return name
+
+    if mode in ("model", "combo") and track is not None:
+        return _apply_ml_category(name, bundle, track)
+    return name
 
 
 def _resolve(text: str, ctx: dict[str, Any]) -> str:
@@ -415,7 +483,12 @@ def apply_op(name: str, op: str, params: dict[str, Any], ctx: dict[str, Any]) ->
 
     if op in ("categoryBundle", "renameGroupsByCategory"):
         raw = p.get("categories", [])
-        return _apply_compiled_category(name, compile_category_bundle(raw))
+        return _apply_compiled_category(
+            name,
+            compile_category_bundle(raw),
+            track=ctx.get("track"),
+            source=str(p.get("source", DEFAULT_CATEGORY_SOURCE)),
+        )
 
     if op == "padNumericSuffix":
         def repl(m: re.Match[str]) -> str:

@@ -20,6 +20,416 @@ COLORS = {
     'status_pct':    '#ffffff',
 }
 
+# Renamer-compatible dark tokens (shared CTk look across all tabs).
+DARK = {
+    "bg": COLORS["bg"],
+    "panel": COLORS["panel"],
+    "panel_2": COLORS["panel2"],
+    "card": COLORS["panel2"],
+    "input": COLORS["panel"],
+    "control_bg": COLORS["panel2"],
+    "border": COLORS["border"],
+    "border_soft": COLORS["status_trough"],
+    # Scrollbar thumb: dim = border; hover = neutral gray lift (no accent tint).
+    "scrollbar": COLORS["border"],
+    "scrollbar_hover": "#565968",
+    # Labels / buttons: softer. Inputs: brighter.
+    "text": COLORS["log_fg"],
+    "text_dim": COLORS["fg_dim"],
+    # Field labels (Stems root, Export list, …) — same as button text.
+    "label": COLORS["log_fg"],
+    "text_mute": "#7a8199",
+    "entry_text": COLORS["fg"],
+    "accent": COLORS["accent"],
+    "accent_hover": COLORS["accent_hov"],
+    "accent_soft": "#2a2540",
+    "active_row": "#44485f",
+    "loading_bg": "#2a2540",
+    "changed": COLORS["accent_hov"],
+    "unchanged": COLORS["fg_dim"],
+    "list_bg": COLORS["log_bg"],
+    "list_fg": COLORS["log_fg"],
+    "waveform_bg": COLORS["log_bg"],
+    "waveform_axis": "#343647",
+    "waveform_playhead": "#ffffff",
+    "audio": "#10b981",
+    "midi": COLORS["accent"],
+    "group": "#a855f7",
+    "danger": COLORS["danger"],
+    "badge_fg": "#ffffff",
+    "btn": COLORS["panel2"],
+    "btn_hover": COLORS["border"],
+    "row_even": "",
+    "row_odd": "",
+    "category_colors": {},
+    # STEM aliases used by older panels
+    "fg": COLORS["log_fg"],
+    "fg_dim": COLORS["fg_dim"],
+    "panel2": COLORS["panel2"],
+    "accent_hov": COLORS["accent_hov"],
+    "log_bg": COLORS["log_bg"],
+    "log_fg": COLORS["log_fg"],
+    "status_trough": COLORS["status_trough"],
+}
+
+PREVIEW_LOG_FONT_FAMILY = "Consolas"
+PREVIEW_LOG_FONT_SIZE = 12
+PREVIEW_LOG_PCT_FONT_SIZE = 10  # confidence % in ANALYZE LOG — slightly smaller
+
+_CTK_READY = False
+
+# Matches Rename Files subtitle / Classify tab description.
+HEADER_DESC_FONT = ('Segoe UI', 12)
+HEADER_DESC_COLOR = DARK['text_dim']
+# Section titles (PATHS, OPTIONS, …) — smaller than body/description.
+SECTION_TITLE_SIZE = 10
+
+
+def ensure_ctk_dark():
+    """Import customtkinter once and force dark appearance (Renamer look)."""
+    global _CTK_READY
+    import customtkinter as ctk
+
+    if not _CTK_READY:
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("dark-blue")
+        # Default CTk theme is Roboto 13 — sync body widgets to description size.
+        from customtkinter.windows.widgets.theme import ThemeManager
+
+        font_theme = ThemeManager.theme.get("CTkFont")
+        if isinstance(font_theme, dict):
+            font_theme["family"] = HEADER_DESC_FONT[0]
+            font_theme["size"] = HEADER_DESC_FONT[1]
+        entry_theme = ThemeManager.theme.get("CTkEntry")
+        if isinstance(entry_theme, dict):
+            entry_theme["text_color"] = DARK["entry_text"]
+        for key in ("CTkLabel", "CTkButton", "CTkCheckBox", "CTkRadioButton", "CTkOptionMenu"):
+            widget_theme = ThemeManager.theme.get(key)
+            if isinstance(widget_theme, dict) and "text_color" in widget_theme:
+                widget_theme["text_color"] = DARK["text"]
+        _CTK_READY = True
+    return ctk
+
+
+def ctk_ui_font(*, weight: str = "normal"):
+    """Body / label font — same size as tab description line."""
+    ctk = ensure_ctk_dark()
+    return ctk.CTkFont(
+        family=HEADER_DESC_FONT[0],
+        size=HEADER_DESC_FONT[1],
+        weight=weight,
+    )
+
+
+def ttk_ui_font():
+    """Tk/ttk font matching ctk_ui_font() (CTk size is pixels → negative Tk size)."""
+    return (HEADER_DESC_FONT[0], -HEADER_DESC_FONT[1])
+
+
+def ctk_section_font():
+    """Section titles (PATHS, OPTIONS, …) — smaller than body."""
+    ctk = ensure_ctk_dark()
+    return ctk.CTkFont(
+        family=HEADER_DESC_FONT[0], size=SECTION_TITLE_SIZE, weight="bold",
+    )
+
+
+# Path-row button sizes (ctk_path_row Browse / Open).
+PATH_BTN_WIDTH_BROWSE = 72
+PATH_BTN_WIDTH_OPEN = 64
+PATH_BTN_HEIGHT = 30
+# Compact CTAs (Rename Apply / in-card compact buttons).
+COMPACT_BTN_HEIGHT = 24
+# Shared bottom action-bar gap between buttons.
+ACTION_BTN_GAP = 6
+
+
+def ctk_size_subtab_buttons(tabview, widths=None, height: int = PATH_BTN_HEIGHT):
+    """Size CTkTabview segments like Browse / Open (fixed width, height 30)."""
+    sb = tabview._segmented_button
+    names = list(sb._buttons_dict.keys())
+    if not names:
+        return
+    if widths is None:
+        widths = [PATH_BTN_WIDTH_BROWSE, PATH_BTN_WIDTH_OPEN]
+    while len(widths) < len(names):
+        widths = list(widths) + [PATH_BTN_WIDTH_BROWSE]
+    font = ctk_ui_font()
+    total = 0
+    for name, w in zip(names, widths):
+        sb._buttons_dict[name].configure(width=w, height=height, font=font)
+        total += w
+    sb.configure(height=height, width=total, dynamic_resizing=False)
+
+
+def ctk_action_button(
+    parent,
+    text: str,
+    command,
+    *,
+    accent: bool = False,
+    width: int | None = None,
+    height: int = PATH_BTN_HEIGHT,
+    text_color: str | None = None,
+    hover_color: str | None = None,
+    cursor: str = "hand2",
+):
+    """CTk button matching Browse / Classify action-bar style."""
+    ctk = ensure_ctk_dark()
+    t = DARK
+    if width is None:
+        width = max(72, int(len(text) * 7.6) + 28)
+    if accent:
+        return ctk.CTkButton(
+            parent,
+            text=text,
+            command=command,
+            font=ctk_ui_font(),
+            width=width,
+            height=height,
+            fg_color=t["accent"],
+            hover_color=hover_color or t["accent_hover"],
+            text_color=text_color or "#ffffff",
+            cursor=cursor,
+        )
+    return ctk.CTkButton(
+        parent,
+        text=text,
+        command=command,
+        font=ctk_ui_font(),
+        width=width,
+        height=height,
+        fg_color=t["btn"],
+        hover_color=hover_color or t["btn_hover"],
+        text_color=text_color or t["text"],
+        cursor=cursor,
+    )
+
+
+def ctk_pin_button_height(*buttons, height: int = PATH_BTN_HEIGHT) -> None:
+    """Re-apply fixed height after configure/pack (CTk can shrink on Windows)."""
+    for btn in buttons:
+        if btn is None:
+            continue
+        try:
+            # configure() alone is not always enough after parent pack_forget
+            # (Rename layout) — force CTk internal size + redraw.
+            if hasattr(btn, "_set_dimensions"):
+                btn._set_dimensions(height=height)
+            else:
+                btn.configure(height=height)
+            btn.configure(height=height)
+        except Exception:
+            pass
+
+
+def ctk_fixed_btn_slot(parent, *, width: int, height: int = PATH_BTN_HEIGHT):
+    """Fixed-size shell so pack overflow cannot shrink a CTkButton canvas."""
+    ctk = ensure_ctk_dark()
+    slot = ctk.CTkFrame(
+        parent, fg_color="transparent", width=width, height=height,
+    )
+    try:
+        slot.pack_propagate(False)
+    except Exception:
+        pass
+    return slot
+
+
+def ctk_section(
+    parent,
+    title: str,
+    *,
+    padx=None,
+    pady=None,
+    inner_padx=None,
+    inner_pady=None,
+    title_pady=(0, 3),
+):
+    """Labeled CTk section matching Renamer card/panel look."""
+    ctk = ensure_ctk_dark()
+    t = DARK
+    if padx is None:
+        padx = SECTION_PADX
+    if pady is None:
+        pady = (0, SECTION_GAP)
+    if inner_padx is None:
+        inner_padx = SECTION_INNER_PAD
+    if inner_pady is None:
+        inner_pady = SECTION_INNER_PAD
+    wrap = ctk.CTkFrame(parent, fg_color="transparent")
+    wrap.pack(fill="x", padx=padx, pady=pady)
+    ctk.CTkLabel(
+        wrap,
+        text=title.upper(),
+        font=ctk_section_font(),
+        text_color=t["text_dim"],
+        anchor="w",
+    ).pack(anchor="w", pady=title_pady)
+    body = ctk.CTkFrame(
+        wrap,
+        fg_color=t["panel"],
+        border_color=t["border"],
+        border_width=1,
+        corner_radius=8,
+    )
+    body.pack(fill="x")
+    inner = ctk.CTkFrame(body, fg_color="transparent")
+    inner.pack(fill="x", padx=inner_padx, pady=inner_pady)
+    return inner
+
+
+def ctk_path_row(
+    parent,
+    row: int,
+    label: str,
+    var: tk.Variable,
+    browse_cmd,
+    open_cmd,
+    *,
+    tip_text: str = "",
+    open_tip: str = "Open this folder in Explorer.",
+):
+    """Grid path row: label + entry + Browse + Open (CTk)."""
+    ctk = ensure_ctk_dark()
+    t = DARK
+    _font = ctk_ui_font()
+    lbl = ctk.CTkLabel(
+        parent, text=label, text_color=t["label"], font=_font,
+    )
+    lbl.grid(row=row, column=0, sticky="w", padx=(0, 10), pady=CTRL_ROW_PADY)
+    ent = ctk.CTkEntry(
+        parent,
+        textvariable=var,
+        fg_color=t["control_bg"],
+        border_color=t["border"],
+        text_color=t["entry_text"],
+        font=_font,
+        height=30,
+    )
+    ent.grid(row=row, column=1, sticky="ew", pady=CTRL_ROW_PADY)
+    browse = ctk.CTkButton(
+        parent,
+        text="Browse",
+        width=72,
+        height=30,
+        fg_color=t["btn"],
+        hover_color=t["btn_hover"],
+        text_color=t["text"],
+        font=_font,
+        command=browse_cmd,
+    )
+    browse.grid(row=row, column=2, padx=(4, 0), pady=CTRL_ROW_PADY)
+    open_btn = ctk.CTkButton(
+        parent,
+        text="Open",
+        width=64,
+        height=30,
+        fg_color=t["btn"],
+        hover_color=t["btn_hover"],
+        text_color=t["text"],
+        font=_font,
+        command=open_cmd,
+    )
+    open_btn.grid(row=row, column=3, padx=(4, 0), pady=CTRL_ROW_PADY)
+    if tip_text:
+        tip(lbl, ent, browse, text=tip_text)
+    tip(open_btn, text=open_tip)
+    return lbl, ent, browse, open_btn
+
+
+def apply_toplevel_icon(win: tk.Misc):
+    """Apply logo.ico to a Toplevel. Lazy-import avoids cycle with stem_organizer_ui."""
+    try:
+        from stem_organizer_ui import apply_window_icon
+        photo = apply_window_icon(win)
+        if photo is not None:
+            # Keep reference so Tk does not GC the PhotoImage.
+            win._app_icon_photo = photo  # type: ignore[attr-defined]
+        return photo
+    except Exception:
+        return None
+
+
+def apply_toplevel_rounded_corners(win: tk.Misc, *, maximized: bool = False):
+    """Round decorated Toplevels via DWM (Win11). Not SetWindowRgn — that whites out the frame."""
+    try:
+        from stem_organizer_ui import _win_apply_dwm_rounded_corners
+        _win_apply_dwm_rounded_corners(win, maximized=maximized)
+    except Exception:
+        pass
+
+
+def show_ctk_help_dialog(
+    parent: tk.Misc,
+    *,
+    title: str,
+    heading: str,
+    intro: str,
+    sections: list[tuple[str, str]],
+    footer_note: str = "Hover over individual controls for more detail.",
+) -> None:
+    """Shared dark help dialog (tk cards; Close = Browse/Open CTk style)."""
+    t = DARK
+    dialog = tk.Toplevel(parent)
+    dialog.title(title)
+    dialog.configure(bg=t["panel"])
+    dialog.resizable(False, False)
+    dialog.transient(parent.winfo_toplevel())
+    apply_toplevel_icon(dialog)
+
+    outer = tk.Frame(dialog, bg=t["panel"])
+    outer.pack(fill="both", expand=True, padx=22, pady=18)
+    tk.Label(
+        outer, text=heading, font=("Segoe UI Semibold", 18),
+        fg=t["text"], bg=t["panel"],
+    ).pack(anchor="w")
+    tk.Label(
+        outer, text=intro, font=("Segoe UI", 10),
+        fg=t["text_dim"], bg=t["panel"],
+    ).pack(anchor="w", pady=(2, 14))
+
+    for section_title, body in sections:
+        card = tk.Frame(
+            outer, bg=t["card"],
+            highlightbackground=t["border"], highlightthickness=1,
+        )
+        card.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            card, text=section_title.upper(), font=("Segoe UI Semibold", 9),
+            fg=t["accent_hover"], bg=t["card"],
+        ).pack(anchor="w", padx=14, pady=(10, 4))
+        tk.Label(
+            card, text=body, font=("Segoe UI", 10),
+            fg=t["text_dim"], bg=t["card"],
+            justify="left", anchor="w", wraplength=600,
+        ).pack(fill="x", padx=14, pady=(0, 11))
+
+    footer = tk.Frame(outer, bg=t["panel"])
+    footer.pack(fill="x", pady=(2, 0))
+    tk.Label(
+        footer, text=footer_note, font=("Segoe UI", 9),
+        fg=t["text_dim"], bg=t["panel"],
+    ).pack(side="left")
+    close = ctk_action_button(footer, "Close", dialog.destroy, width=72)
+    close.pack(side="right")
+
+    dialog.bind("<Escape>", lambda _event: dialog.destroy())
+    dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+    dialog.update_idletasks()
+    width = 680
+    height = max(520, outer.winfo_reqheight() + 36)
+    top = parent.winfo_toplevel()
+    x = top.winfo_rootx() + max(0, (top.winfo_width() - width) // 2)
+    y = top.winfo_rooty() + max(0, (top.winfo_height() - height) // 2)
+    dialog.geometry(f"{width}x{height}+{x}+{y}")
+    dialog.update_idletasks()
+    apply_toplevel_rounded_corners(dialog)
+    # DWM corner preference sticks more reliably after the window is mapped.
+    dialog.after(20, lambda: apply_toplevel_rounded_corners(dialog))
+    dialog.grab_set()
+    close.focus_set()
+
 
 def _blend_hex(fg: str, bg: str, t: float) -> str:
     t = max(0.0, min(1.0, t))
@@ -41,12 +451,11 @@ def _entry_select_colors() -> tuple[str, str]:
         _blend_hex(c['accent'], c['panel2'], 0.58),
     )
 
-HEADER_DESC_FONT = ('Segoe UI', 10)
 ACTION_BTN_FONT = ('Segoe UI Semibold', 10)
 ACTION_BTN_PADX = 14
 ACTION_BTN_PADY = 4
 CTRL_FIELD_PAD = 3
-CTRL_ROW_PADY = 4
+CTRL_ROW_PADY = 2
 PATH_BTN_FONT = ('Segoe UI', 10)
 PATH_BTN_PADX = 8
 PATH_BTN_PADY = 4
@@ -63,9 +472,9 @@ WIN_MIN_W = 860
 WIN_MIN_H = 620
 LEFT_PANEL_WIDTH = 540
 CONTENT_PAD = 18
-HEADER_TOP_PAD = 8
-SECTION_INNER_PAD = 16
-SECTION_GAP = 14
+HEADER_TOP_PAD = 4
+SECTION_INNER_PAD = 10
+SECTION_GAP = 8
 SECTION_SIDE_PAD_LEFT = 14
 SECTION_SIDE_PAD_RIGHT = 4
 SECTION_PADX = (SECTION_SIDE_PAD_LEFT, SECTION_SIDE_PAD_RIGHT)
@@ -205,17 +614,18 @@ def apply_theme(root: tk.Tk) -> None:
     root.option_add('*selectForeground', C['fg'])
     root.option_add('*inactiveSelectBackground', select_inactive)
 
-    style.configure('.', background=C['bg'], foreground=C['fg'],
+    ui_fg = C['log_fg']  # softer labels/buttons; entries keep brighter C['fg']
+    style.configure('.', background=C['bg'], foreground=ui_fg,
                     fieldbackground=C['panel2'], bordercolor=C['border'],
                     lightcolor=C['panel'], darkcolor=C['panel'],
                     troughcolor=C['panel'], focuscolor=C['accent'])
 
     cfgs = {
         'TFrame':                    {'background': C['bg']},
-        'TLabel':                    {'background': C['bg'], 'foreground': C['fg']},
+        'TLabel':                    {'background': C['bg'], 'foreground': ui_fg},
         'Dim.TLabel':                {'background': C['bg'], 'foreground': C['fg_dim']},
-        'Title.TLabel':              {'background': C['bg'], 'foreground': C['fg'], 'font': title},
-        'TLabelframe':               {'background': C['bg'], 'foreground': C['fg'],
+        'Title.TLabel':              {'background': C['bg'], 'foreground': ui_fg, 'font': title},
+        'TLabelframe':               {'background': C['bg'], 'foreground': ui_fg,
                                       'bordercolor': C['border'], 'relief': 'solid', 'borderwidth': 1},
         'TLabelframe.Label':         {'background': C['bg'], 'foreground': C['fg_dim'], 'font': section},
         'TEntry':                    {'fieldbackground': C['panel2'], 'foreground': C['fg'],
@@ -229,16 +639,16 @@ def apply_theme(root: tk.Tk) -> None:
                                       'selectbackground': select_active,
                                       'selectforeground': C['fg']},
         'TCheckbutton':              {
-            'background': C['bg'], 'foreground': C['fg'],
+            'background': C['bg'], 'foreground': ui_fg,
             'focuscolor': C['bg'], 'indicatorbackground': C['panel2'],
-            'indicatorforeground': C['fg'],
+            'indicatorforeground': ui_fg,
         },
         'TRadiobutton':              {
-            'background': C['bg'], 'foreground': C['fg'],
+            'background': C['bg'], 'foreground': ui_fg,
             'focuscolor': C['bg'], 'indicatorbackground': C['panel2'],
-            'indicatorforeground': C['fg'],
+            'indicatorforeground': ui_fg,
         },
-        'TButton':                   {'background': C['panel2'], 'foreground': C['fg'],
+        'TButton':                   {'background': C['panel2'], 'foreground': ui_fg,
                                       'bordercolor': C['border'], 'padding': (14, 8), 'borderwidth': 1},
         'Horizontal.TScale':         {'background': C['bg'], 'troughcolor': C['panel2'],
                                       'bordercolor': C['border'],
@@ -304,7 +714,7 @@ def apply_theme(root: tk.Tk) -> None:
                   ('selected', C['bg']), ('hover', C['bg']),
               ],
               foreground=[
-                  ('active', C['fg']), ('selected', C['fg']),
+                  ('active', ui_fg), ('selected', ui_fg),
                   ('disabled', C['fg_dim']),
               ],
               indicatorbackground=[
@@ -318,7 +728,7 @@ def apply_theme(root: tk.Tk) -> None:
                   ('selected', C['bg']), ('hover', C['bg']),
               ],
               foreground=[
-                  ('active', C['fg']), ('selected', C['fg']),
+                  ('active', ui_fg), ('selected', ui_fg),
                   ('disabled', C['fg_dim']),
               ],
               indicatorbackground=[
@@ -328,15 +738,15 @@ def apply_theme(root: tk.Tk) -> None:
               indicatorcolor=[('selected', C['accent']), ('pressed', C['accent'])])
     style.map('TButton',
               background=[('active', C['panel'])],
-              foreground=[('active', C['fg'])])
+              foreground=[('active', ui_fg)])
     style.map('Horizontal.TScale',
               background=[('active', C['bg'])])
     style.map('Class.TNotebook.Tab',
               background=[('selected', C['bg']), ('active', C['panel']), ('!selected', C['panel2'])],
-              foreground=[('selected', C['fg']), ('active', C['fg']), ('!selected', C['fg_dim'])],
+              foreground=[('selected', ui_fg), ('active', ui_fg), ('!selected', C['fg_dim'])],
               expand=[('selected', [1, 1, 1, 0])])
 
-    for k, v in (('background', C['panel2']), ('foreground', C['fg']),
+    for k, v in (('background', C['panel2']), ('foreground', ui_fg),
                  ('selectBackground', select_active), ('selectForeground', C['fg'])):
         root.option_add(f'*TCombobox*Listbox.{k}', v)
 

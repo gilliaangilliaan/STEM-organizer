@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -13,6 +14,7 @@ from track_renamer.category_palette import (
     applied_category_colors,
     normalize_rules_category_colors,
     sort_rule_category_keywords,
+    sync_category_names_from_affix,
 )
 from track_renamer.engine.defaults import make_default_rules, make_demo_tracks
 from track_renamer.engine.models import Rule, rule_from_dict, rule_to_dict
@@ -21,6 +23,12 @@ from track_renamer.folder_scanner import (
     move_files_to_prefix_folders,
     scan_folder,
 )
+from track_renamer.engine.processor import compute_preview_row, prepare_rules
+from track_renamer.instrument_enrich import (
+    classify_decision,
+    enrich_tracks,
+    rules_need_instrument_ml,
+)
 from track_renamer.gui.audio_player import AudioPlayerBar
 from track_renamer.gui.help_dialog import show_rename_help_dialog
 from track_renamer.gui.preview_panel import PreviewPanel
@@ -28,6 +36,7 @@ from track_renamer.gui.rules_panel import RulesPanel
 from track_renamer.gui.theme import DARK
 from track_renamer.gui.tips import TIPS
 from track_renamer.gui.tooltip import bind_tooltip
+from ui_theme import ACTION_BTN_GAP, ctk_action_button
 
 PRESETS_DIR = Path.home() / ".track_renamer" / "presets"
 class TrackRenamerApp(ctk.CTk):
@@ -50,6 +59,7 @@ class TrackRenamerApp(ctk.CTk):
 
         self._scan_generation = 0
         self._preview_generation = 0
+        self._enrich_generation = 0
         self._preview_stale = False
         self._busy = False
         self._applied_rules_fingerprint = self._rules_fingerprint(self.rules)
@@ -173,7 +183,7 @@ class TrackRenamerApp(ctk.CTk):
             variable=self.recursive_var,
             command=self._on_recursive_toggle,
             font=ctk.CTkFont(size=12),
-            text_color=t["text_dim"],
+            text_color=t["text"],
             fg_color=t["accent"],
             hover_color=t["accent_hover"],
         )
@@ -219,43 +229,31 @@ class TrackRenamerApp(ctk.CTk):
         self.file_count_label = ctk.CTkLabel(
             footer,
             text=f"{len(self.tracks)} files",
-            font=ctk.CTkFont(size=13),
+            font=ctk.CTkFont(size=12),
             text_color=t["text_dim"],
         )
         self.file_count_label.pack(side="left")
 
         self.audio_player = AudioPlayerBar(footer, theme=t)
+        # Right gap matches play→wavebar gap inside AudioPlayerBar (padx 10).
         self.audio_player.pack(
             side="left",
             fill="x",
             expand=True,
-            padx=(28, 24),
+            padx=(28, 10),
         )
 
         btn_row = ctk.CTkFrame(footer, fg_color="transparent")
         btn_row.pack(side="right")
 
-        self.cancel_btn = ctk.CTkButton(
-            btn_row,
-            text="Cancel",
-            width=100,
-            height=36,
-            fg_color=t["btn"],
-            hover_color=t["btn_hover"],
-            text_color=t["text"],
-            command=self._close,
+        self.cancel_btn = ctk_action_button(
+            btn_row, "Cancel", self._close, width=72,
         )
-        self.cancel_btn.pack(side="left", padx=(0, 8))
+        self.cancel_btn.pack(side="left", padx=(0, ACTION_BTN_GAP))
         self._tip(self.cancel_btn, "cancel")
 
-        self.rename_btn = ctk.CTkButton(
-            btn_row,
-            text="Rename 0",
-            width=120,
-            height=36,
-            fg_color=t["accent"],
-            hover_color=t["accent_hover"],
-            command=self._apply_renames,
+        self.rename_btn = ctk_action_button(
+            btn_row, "Rename 0", self._apply_renames, accent=True, width=100,
         )
         self.rename_btn.pack(side="left")
         self._tip(self.rename_btn, "rename")
@@ -266,7 +264,13 @@ class TrackRenamerApp(ctk.CTk):
             names.extend(sorted(p.stem for p in PRESETS_DIR.glob("*.json")))
         return names
 
-    def _set_busy(self, busy: bool, message: str = "") -> None:
+    def _set_busy(
+        self,
+        busy: bool,
+        message: str = "",
+        *,
+        progress: tuple[float, float | None] | None = None,
+    ) -> None:
         self._busy = busy
         state = "disabled" if busy else "normal"
         self.open_btn.configure(state=state)
@@ -275,7 +279,24 @@ class TrackRenamerApp(ctk.CTk):
         elif self.folder_path:
             self.source_label.configure(text=str(self.folder_path))
         elif self.demo_mode:
-            self.source_label.configure(text="Demo files (open a folder to scan real files)")
+            self.source_label.configure(
+                text="Demo files (open a folder to scan real files)"
+            )
+        host = getattr(self, "host", None)
+        if host is not None and hasattr(host, "_set_rename_busy"):
+            if busy:
+                pct: float | None = None
+                eta: float | None = None
+                if progress is not None:
+                    pct, eta = progress
+                host._set_rename_busy(
+                    True,
+                    message or "Working…",
+                    pct=pct,
+                    eta=eta,
+                )
+            else:
+                host._set_rename_busy(False)
         if hasattr(self, "preview_panel"):
             self._update_footer()
 
@@ -319,13 +340,176 @@ class TrackRenamerApp(ctk.CTk):
         self.preview_panel.set_preview_pending(pending)
 
     def _apply_preview(self) -> None:
+        """Refresh preview from current rules. No audio ML (that runs on Rename)."""
         self.rules = self.rules_panel.get_rules()
-        if sort_rule_category_keywords(self.rules):
+        changed = sort_rule_category_keywords(self.rules)
+        changed = sync_category_names_from_affix(self.rules) or changed
+        if changed:
             self.rules_panel.set_rules(self.rules)
         self._applied_rules_fingerprint = self._rules_fingerprint(self.rules)
         self._preview_stale = False
         self._set_preview_pending(False)
         self._refresh_preview()
+
+    def _compute_selected_renames(self) -> dict[str, str]:
+        """Sync rename map for selected tracks (used after instrument enrich)."""
+        prepared = prepare_rules(self.rules)
+        renames: dict[str, str] = {}
+        for index, track in enumerate(self.tracks, start=1):
+            if not track.selected:
+                continue
+            row = compute_preview_row(track, prepared, index=index)
+            if row.changed:
+                renames[track.id] = row.new_name
+        return renames
+
+    def _dialog_parent_widget(self):
+        getter = getattr(self, "_dialog_parent", None)
+        if callable(getter):
+            try:
+                return getter()
+            except Exception:
+                pass
+        return self
+
+    def _enrich_then_rename(self) -> None:
+        """Analyze selected files with PaSST OpenMIC, then confirm + rename."""
+        selected = [track for track in self.tracks if track.selected]
+        if not selected:
+            messagebox.showinfo(
+                "Nothing to rename",
+                "No selected files.",
+                parent=self._dialog_parent_widget(),
+            )
+            return
+
+        self._enrich_generation += 1
+        generation = self._enrich_generation
+        self.preview_panel.cancel_preview_work()
+        total_selected = len(selected)
+        started_at = time.monotonic()
+        self.preview_panel.begin_analyze_log(total_selected)
+        self._set_busy(
+            True,
+            f"Analyzing instruments (0/{total_selected:,})…",
+            progress=(0.0, None),
+        )
+
+        def work() -> None:
+            def on_status(msg: str) -> None:
+                def apply(m=msg) -> None:
+                    if generation != self._enrich_generation:
+                        return
+                    self.preview_panel.append_analyze_status(m)
+
+                self.after(0, apply)
+
+            def on_progress(done: int, total: int) -> None:
+                pct = 100.0 * done / max(total, 1)
+                eta: float | None = None
+                if done > 0:
+                    elapsed = time.monotonic() - started_at
+                    eta = (elapsed / done) * max(total - done, 0)
+                msg = f"Analyzing instruments ({done:,}/{total:,})…"
+
+                def apply(_d=done, _t=total, p=pct, e=eta, m=msg) -> None:
+                    if generation != self._enrich_generation:
+                        return
+                    self._set_busy(True, m, progress=(p, e))
+
+                self.after(0, apply)
+
+            def on_result(row: dict) -> None:
+                if generation != self._enrich_generation:
+                    return
+                err = str(row.get("error") or "")
+                name = str(row.get("name") or Path(str(row.get("path") or "")).name)
+                label = str(row.get("label") or "")
+                try:
+                    score = float(row.get("score") or 0.0)
+                except (TypeError, ValueError):
+                    score = 0.0
+                try:
+                    second = float(row.get("second_score") or 0.0)
+                except (TypeError, ValueError):
+                    second = 0.0
+                if err:
+                    action, category = "error", ""
+                    label = err
+                else:
+                    action, category = classify_decision(
+                        label,
+                        score,
+                        second_score=second,
+                    )
+
+                def append(
+                    n=name,
+                    a=action,
+                    c=category,
+                    s=score,
+                    lab=label,
+                ) -> None:
+                    if generation != self._enrich_generation:
+                        return
+                    self.preview_panel.append_analyze_log(
+                        filename=n,
+                        action=a,
+                        category=c,
+                        score=s,
+                        label=lab,
+                        total=total_selected,
+                    )
+
+                self.after(0, append)
+
+            _classified, error = enrich_tracks(
+                selected,
+                status=on_status,
+                on_progress=on_progress,
+                on_result=on_result,
+            )
+
+            def finish() -> None:
+                if generation != self._enrich_generation:
+                    return
+                parent = self._dialog_parent_widget()
+                if error:
+                    self._set_busy(False)
+                    self.preview_panel.end_analyze_log()
+                    messagebox.showwarning(
+                        "Instrument model", error, parent=parent
+                    )
+                    self._refresh_preview()
+                    return
+                renames = self._compute_selected_renames()
+                self._set_busy(False)
+                if not renames:
+                    messagebox.showinfo(
+                        "Nothing to rename",
+                        "No selected files will change after instrument analysis.\n\n"
+                        "Check ANALYZE LOG: SKIP = unmapped label (or error).",
+                        parent=parent,
+                    )
+                    self.preview_panel.end_analyze_log()
+                    self._refresh_preview()
+                    return
+                if not messagebox.askyesno(
+                    "Confirm rename",
+                    f"Rename {len(renames):,} file(s) on disk?\n\n"
+                    "This cannot be undone automatically.",
+                    parent=parent,
+                ):
+                    self.preview_panel.end_analyze_log()
+                    self._refresh_preview()
+                    return
+                self.preview_panel.end_analyze_log()
+                self._refresh_preview()
+                self._start_rename_job(renames)
+
+            self.after(0, finish)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _on_recursive_toggle(self) -> None:
         self.recursive = self.recursive_var.get()
@@ -345,12 +529,28 @@ class TrackRenamerApp(ctk.CTk):
     def _update_footer(self) -> None:
         count = self.preview_panel.rename_count()
         complete = self.preview_panel.lazy_compute_complete()
+        selected_n = sum(1 for track in self.tracks if track.selected)
+        ml_on_rename = (
+            rules_need_instrument_ml(self.rules)
+            and not self.demo_mode
+            and selected_n > 0
+        )
         if complete:
-            self.rename_btn.configure(text=f"Rename {count:,}")
+            if ml_on_rename and count == 0:
+                self.rename_btn.configure(
+                    text=f"Analyze ({selected_n:,})"
+                )
+            else:
+                self.rename_btn.configure(text=f"Rename {count:,}")
         else:
             done, total = self.preview_panel.lazy_compute_progress()
             self.rename_btn.configure(text=f"Preparing {done:,}/{total:,}")
-        can_rename = complete and count > 0 and not self._busy and not self._preview_stale
+        can_rename = (
+            complete
+            and (count > 0 or ml_on_rename)
+            and not self._busy
+            and not self._preview_stale
+        )
         self.rename_btn.configure(state="normal" if can_rename else "disabled")
         self.file_count_label.configure(text=f"{len(self.tracks):,} files")
         if complete and not self._busy:
@@ -420,7 +620,7 @@ class TrackRenamerApp(ctk.CTk):
             text_color="#ffffff",
         )
         self.recursive_cb.configure(
-            text_color=t["text_dim"],
+            text_color=t["text"],
             fg_color=t["accent"],
             hover_color=t["accent_hover"],
         )
@@ -493,26 +693,48 @@ class TrackRenamerApp(ctk.CTk):
     def _apply_renames(self) -> None:
         if self._busy:
             return
-        renames = self.preview_panel.selected_renames()
-        if not renames:
-            messagebox.showinfo("Nothing to rename", "No selected files will change.")
-            return
+        parent = self._dialog_parent_widget()
 
         if self.demo_mode:
+            renames = self.preview_panel.selected_renames()
             messagebox.showinfo(
                 "Demo mode",
-                f"{len(renames)} files would be renamed.\n\nOpen a folder to rename real files on disk.",
+                f"{len(renames)} files would be renamed.\n\n"
+                "Open a folder to rename real files on disk.",
+                parent=parent,
+            )
+            return
+
+        self.rules = self.rules_panel.get_rules()
+        # Model/Combo: analyze selected audio on Rename only (not on Open folder).
+        if rules_need_instrument_ml(self.rules):
+            self._enrich_then_rename()
+            return
+
+        renames = self.preview_panel.selected_renames()
+        if not renames:
+            messagebox.showinfo(
+                "Nothing to rename",
+                "No selected files will change.",
+                parent=parent,
             )
             return
 
         if not messagebox.askyesno(
             "Confirm rename",
-            f"Rename {len(renames)} file(s) on disk?\n\nThis cannot be undone automatically.",
+            f"Rename {len(renames)} file(s) on disk?\n\n"
+            "This cannot be undone automatically.",
+            parent=parent,
         ):
             return
 
+        self._start_rename_job(renames)
+
+    def _start_rename_job(self, renames: dict[str, str]) -> None:
         self.preview_panel.clear_active()
         self.audio_player.reset()
+        if hasattr(self, "_destructive_busy"):
+            self._destructive_busy = True
         self._set_busy(True, "Renaming files…")
 
         def work() -> None:

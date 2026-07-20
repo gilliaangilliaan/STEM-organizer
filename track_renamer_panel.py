@@ -13,10 +13,7 @@ import customtkinter as ctk
 from track_renamer.category_palette import normalize_rules_category_colors
 from track_renamer.engine.defaults import make_default_rules, make_demo_tracks
 from track_renamer.engine.models import Rule, rule_from_dict, rule_to_dict
-from track_renamer.folder_scanner import (
-    apply_file_renames_detailed,
-    move_files_to_prefix_folders,
-)
+from track_renamer.folder_scanner import move_files_to_prefix_folders
 from track_renamer.gui.app import PRESETS_DIR, TrackRenamerApp
 from track_renamer.gui.help_dialog import show_rename_help_dialog
 from track_renamer.gui.theme import DARK
@@ -38,6 +35,7 @@ class TrackRenamerPanel(ctk.CTkFrame):
         self.demo_mode = True
         self._scan_generation = 0
         self._preview_generation = 0
+        self._enrich_generation = 0
         self._preview_stale = False
         self._busy = False
         self._applied_rules_fingerprint = self._rules_fingerprint(self.rules)
@@ -176,47 +174,8 @@ class TrackRenamerPanel(ctk.CTkFrame):
         if path:
             self._scan_folder(Path(path))
 
-    def _apply_renames(self) -> None:
-        if self._busy:
-            return
-        parent = self._dialog_parent()
-        renames = self.preview_panel.selected_renames()
-        if not renames:
-            messagebox.showinfo(
-                "Nothing to rename",
-                "No selected files will change.",
-                parent=parent,
-            )
-            return
-        if self.demo_mode:
-            messagebox.showinfo(
-                "Demo mode",
-                f"{len(renames)} files would be renamed.\n\n"
-                "Open a folder to rename real files on disk.",
-                parent=parent,
-            )
-            return
-        if not messagebox.askyesno(
-            "Confirm rename",
-            f"Rename {len(renames)} file(s) on disk?\n\n"
-            "This cannot be undone automatically.",
-            parent=parent,
-        ):
-            return
-
-        self.preview_panel.clear_active()
-        self.audio_player.reset()
-        self._destructive_busy = True
-        self._set_busy(True, "Renaming files…")
-
-        def work() -> None:
-            success, errors, renamed_paths = apply_file_renames_detailed(renames)
-            self.after(
-                0,
-                lambda: self._on_rename_done(success, errors, renamed_paths),
-            )
-
-        threading.Thread(target=work, daemon=True).start()
+    # _apply_renames / instrument enrich: use TrackRenamerApp methods
+    # (copied below). Panel keeps _on_rename_done for dialog parent + lifecycle.
 
     def _on_rename_done(
         self,

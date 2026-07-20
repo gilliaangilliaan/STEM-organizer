@@ -15,6 +15,7 @@ import customtkinter as ctk
 
 from track_renamer.category_palette import (
     CATEGORY_BADGE_TEXT,
+    DEFAULT_CATEGORY_COLORS,
     applied_category_colors,
     category_badge_label,
     default_category_color,
@@ -25,6 +26,7 @@ from track_renamer.engine.processor import PreparedRulePlan, compute_preview_row
 from track_renamer.gui.theme import PREVIEW_LOG_FONT_FAMILY, PREVIEW_LOG_FONT_SIZE
 from track_renamer.gui.tips import TIPS
 from track_renamer.gui.tooltip import bind_tooltip
+from ui_theme import PREVIEW_LOG_PCT_FONT_SIZE, ctk_section_font
 
 ROW_HEIGHT = 28
 RENDER_BUFFER = 10
@@ -191,7 +193,9 @@ class _PreviewRowWidget:
         font: ctk.CTkFont,
         color: str,
     ) -> None:
-        parsed = parse_category_prefix_display(value)
+        parsed = parse_category_prefix_display(
+            value, known=self.category_colors or None,
+        )
         badge = group["badge"]
         separator = group["separator"]
         label = group["text"]
@@ -411,12 +415,13 @@ class PreviewPanel(ctk.CTkFrame):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=16, pady=(14, 8))
 
-        ctk.CTkLabel(
+        self._preview_title = ctk.CTkLabel(
             header,
             text="PREVIEW",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=t["text_mute"],
-        ).pack(side="left")
+            font=ctk_section_font(),
+            text_color=t["text_dim"],
+        )
+        self._preview_title.pack(side="left")
 
         self.stats_label = ctk.CTkLabel(
             header,
@@ -481,7 +486,12 @@ class PreviewPanel(ctk.CTkFrame):
         self.canvas.bind("<Right>", lambda _event: self._keyboard_seek(3.0))
         self.canvas.bind("<space>", self._keyboard_play_pause)
 
-        self.scrollbar = ctk.CTkScrollbar(list_outer, command=self._on_scroll)
+        self.scrollbar = ctk.CTkScrollbar(
+            list_outer,
+            command=self._on_scroll,
+            button_color=t["scrollbar"],
+            button_hover_color=t["scrollbar_hover"],
+        )
         self.scrollbar.grid(row=0, column=1, sticky="ns")
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
 
@@ -524,6 +534,22 @@ class PreviewPanel(ctk.CTkFrame):
         self.spinner.place(relx=0.5, rely=0.56, anchor="center")
         self.spinner.lower()
         self.spinner.stop()
+
+        # Analyze log (replaces file list during Model/Combo instrument pass).
+        self._analyze_log_active = False
+        self._analyze_log_counts = {"apply": 0, "skip": 0, "error": 0}
+        self.analyze_log = ctk.CTkTextbox(
+            list_outer,
+            font=self._log_font,
+            fg_color=list_bg,
+            text_color=t["text"],
+            border_width=0,
+            wrap="none",
+            activate_scrollbars=True,
+            scrollbar_button_color=t["scrollbar"],
+            scrollbar_button_hover_color=t["scrollbar_hover"],
+        )
+        self._analyze_log_tags_ready = False
 
     def _bind_mousewheel(self, _event=None) -> None:
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
@@ -622,6 +648,10 @@ class PreviewPanel(ctk.CTkFrame):
         self.configure(fg_color=theme["panel"])
         self.list_outer.configure(fg_color=list_bg)
         self.canvas.configure(bg=list_bg)
+        self.scrollbar.configure(
+            button_color=theme.get("scrollbar", theme["border"]),
+            button_hover_color=theme.get("scrollbar_hover", theme["border"]),
+        )
         self.stats_label.configure(text_color=theme["text_dim"])
         self.status_label.configure(text_color=theme["text_mute"])
         self.status_label.configure(fg_color=theme.get("loading_bg", "transparent"))
@@ -1389,3 +1419,213 @@ class PreviewPanel(ctk.CTkFrame):
         if self._lazy_enabled:
             return self._lazy_selected_changed
         return sum(1 for row in self.rows if row.changed and row.track.selected)
+
+    # ------------------------------------------------------------------
+    # Instrument analyze log (Model / Combo)
+    # ------------------------------------------------------------------
+
+    def _ensure_analyze_log_tags(self) -> None:
+        if self._analyze_log_tags_ready:
+            return
+        box = self.analyze_log
+        try:
+            inner = box._textbox  # noqa: SLF001 — CTkTextbox wraps tk.Text
+        except Exception:
+            return
+        t = self.theme
+        inner.tag_configure("filename", foreground=t["text"])
+        # Same dim as Classify / GG === filename ===; slightly smaller than body.
+        dim = t.get("text_dim", "#9aa0b4")
+        pct_font = (PREVIEW_LOG_FONT_FAMILY, PREVIEW_LOG_PCT_FONT_SIZE)
+        inner.tag_configure("score", foreground=dim, font=pct_font)
+        inner.tag_configure("status", foreground=dim)
+        inner.tag_configure("score_hi", foreground=dim, font=pct_font)
+        inner.tag_configure("score_low", foreground=dim, font=pct_font)
+        inner.tag_configure("skip_badge", foreground=t["text_mute"])
+        inner.tag_configure("skip_reason", foreground=t["text_mute"])
+        inner.tag_configure("error_badge", foreground="#EF4444")
+        for name, color in DEFAULT_CATEGORY_COLORS.items():
+            tag = f"badge_{name}"
+            inner.tag_configure(tag, foreground=CATEGORY_BADGE_TEXT, background=color)
+        self._analyze_log_tags_ready = True
+
+    def begin_analyze_log(self, total: int) -> None:
+        """Swap preview list for a live instrument analyze log."""
+        self.cancel_preview_work()
+        self._analyze_log_active = True
+        self._analyze_log_counts = {"apply": 0, "skip": 0, "error": 0}
+        self._preview_title.configure(text="ANALYZE LOG")
+        self.stats_label.configure(text=f"0 / {total:,}")
+        for widget in (
+            self.select_all_btn,
+            self.deselect_btn,
+            self.only_changed_cb,
+        ):
+            try:
+                widget.configure(state="disabled")
+            except Exception:
+                pass
+        self.canvas.grid_remove()
+        self.scrollbar.grid_remove()
+        try:
+            self.sticky_folder_label.place_forget()
+        except Exception:
+            pass
+        self.status_label.place_forget()
+        self.spinner.place_forget()
+        self.analyze_log.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        self.analyze_log.configure(state="normal")
+        self.analyze_log.delete("1.0", "end")
+        self._ensure_analyze_log_tags()
+        # Re-apply dim + small score font (tags persist across runs once created).
+        try:
+            inner = self.analyze_log._textbox  # noqa: SLF001
+            dim = self.theme.get("text_dim", "#9aa0b4")
+            pct_font = (PREVIEW_LOG_FONT_FAMILY, PREVIEW_LOG_PCT_FONT_SIZE)
+            inner.tag_configure("status", foreground=dim)
+            for tag in ("score", "score_hi", "score_low"):
+                inner.tag_configure(tag, foreground=dim, font=pct_font)
+        except Exception:
+            pass
+        self.analyze_log.configure(state="disabled")
+        self.append_analyze_status("Starting Auto-detect (PaSST OpenMIC)…")
+        self.append_analyze_status(f"Selected {total:,} file(s).")
+        self.append_analyze_status("Checking cache / starting tagger…")
+
+    def append_analyze_status(self, message: str) -> None:
+        """Dim status line while Auto-detect warms up / runs."""
+        if not self._analyze_log_active:
+            return
+        text = (message or "").strip()
+        if not text:
+            return
+        self._ensure_analyze_log_tags()
+        box = self.analyze_log
+        box.configure(state="normal")
+        try:
+            inner = box._textbox  # noqa: SLF001
+        except Exception:
+            inner = None
+        if inner is not None:
+            inner.insert("end", text + "\n", "status")
+        else:
+            box.insert("end", text + "\n")
+        box.see("end")
+        box.configure(state="disabled")
+
+    @staticmethod
+    def _center_badge(text: str, width: int = 8) -> str:
+        """Pad badge text so it reads centered in a fixed-width tag."""
+        text = (text or "")[:width]
+        pad = width - len(text)
+        left = pad // 2
+        right = pad - left
+        return f"{' ' * left}{text}{' ' * right}"
+
+    @staticmethod
+    def _score_pct_parts(score: float) -> tuple[str, str]:
+        """Return (display like '72%', dim 'score' tag)."""
+        pct = int(round(max(0.0, float(score)) * 100.0))
+        return f"{pct}%", "score"
+
+    def append_analyze_log(
+        self,
+        *,
+        filename: str,
+        action: str,
+        category: str,
+        score: float,
+        label: str = "",
+        total: int = 0,
+    ) -> None:
+        if not self._analyze_log_active:
+            return
+        self._ensure_analyze_log_tags()
+        box = self.analyze_log
+        box.configure(state="normal")
+        try:
+            inner = box._textbox  # noqa: SLF001
+        except Exception:
+            inner = None
+
+        pct_text, score_tag = self._score_pct_parts(score)
+
+        if action == "apply":
+            self._analyze_log_counts["apply"] += 1
+            badge = self._center_badge(
+                category_badge_label(category) if category else "OK"
+            )
+            badge_tag = f"badge_{category}" if category else "score"
+            if inner is not None:
+                inner.insert("end", badge, badge_tag)
+                inner.insert("end", f"  {pct_text:<4}  ", score_tag)
+                inner.insert("end", f"{filename}\n", "filename")
+            else:
+                box.insert("end", f"{badge}  {pct_text:<4}  {filename}\n")
+        elif action == "error":
+            self._analyze_log_counts["error"] += 1
+            reason = label or "error"
+            badge = self._center_badge("SKIP")
+            if inner is not None:
+                inner.insert("end", badge, "error_badge")
+                inner.insert("end", f"  {'—':<4}  ", "score")
+                inner.insert("end", f"{filename}", "filename")
+                inner.insert("end", f"  ({reason})\n", "skip_reason")
+            else:
+                box.insert("end", f"{badge}  —     {filename}  ({reason})\n")
+        else:
+            self._analyze_log_counts["skip"] += 1
+            reason = {
+                "skip_unmap": "unmapped",
+            }.get(action, action)
+            badge = self._center_badge("SKIP")
+            if inner is not None:
+                inner.insert("end", badge, "skip_badge")
+                inner.insert("end", f"  {pct_text:<4}  ", score_tag)
+                inner.insert("end", f"{filename}", "filename")
+                inner.insert("end", f"  ({reason}", "skip_reason")
+                if label:
+                    inner.insert("end", f" · {label}", "skip_reason")
+                inner.insert("end", ")\n", "skip_reason")
+            else:
+                extra = f" · {label}" if label else ""
+                box.insert(
+                    "end",
+                    f"{badge}  {pct_text:<4}  {filename}  ({reason}{extra})\n",
+                )
+
+        done = sum(self._analyze_log_counts.values())
+        apply_n = self._analyze_log_counts["apply"]
+        skip_n = self._analyze_log_counts["skip"] + self._analyze_log_counts["error"]
+        if total > 0:
+            self.stats_label.configure(
+                text=f"{done:,} / {total:,}  ·  {apply_n:,} apply  ·  {skip_n:,} skip"
+            )
+        else:
+            self.stats_label.configure(
+                text=f"{apply_n:,} apply  ·  {skip_n:,} skip"
+            )
+        box.see("end")
+        box.configure(state="disabled")
+
+    def end_analyze_log(self) -> None:
+        """Restore normal preview list chrome after analyze."""
+        if not self._analyze_log_active:
+            return
+        self._analyze_log_active = False
+        self._preview_title.configure(text="PREVIEW")
+        try:
+            self.analyze_log.grid_remove()
+        except Exception:
+            pass
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.scrollbar.grid(row=0, column=1, sticky="ns")
+        for widget in (
+            self.select_all_btn,
+            self.deselect_btn,
+            self.only_changed_cb,
+        ):
+            try:
+                widget.configure(state="normal")
+            except Exception:
+                pass

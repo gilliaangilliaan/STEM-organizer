@@ -303,6 +303,37 @@ _CATEGORY_KEYWORDS: dict[str, list[str]] = {
 
 TITLE_CASE_ACRONYMS = "FX, KSHMR, DnB, EDM, ID, USA, UK, OG, BPM, DJ, LFO, MIDI, NYC, LA, DAW"
 
+# OpenMIC-2018 (PaSST) instrument label → Category Macro row.
+OPENMIC_TO_CATEGORY: dict[str, str] = {
+    "accordion": "Keys",
+    "banjo": "Guitar",
+    "bass": "Bass",
+    "cello": "Strings",
+    "clarinet": "Wind",
+    "cymbals": "Percussion",
+    "drums": "Drums",
+    "flute": "Wind",
+    "guitar": "Guitar",
+    "mallet_percussion": "Mallet",
+    "mandolin": "Guitar",
+    "organ": "Keys",
+    "piano": "Keys",
+    "saxophone": "Wind",
+    "synthesizer": "Synth",
+    "trombone": "Wind",
+    "trumpet": "Wind",
+    "ukulele": "Guitar",
+    "violin": "Strings",
+    "voice": "Vocals",
+}
+
+DEFAULT_CATEGORY_SOURCE = "filename"
+
+
+def map_instrument_to_category(label: str) -> str:
+    """OpenMIC class → Category Macro name, or ''."""
+    return OPENMIC_TO_CATEGORY.get((label or "").strip().lower(), "")
+
 
 def _merge_keywords(*groups: list[str]) -> str:
     seen: set[str] = set()
@@ -366,7 +397,10 @@ def make_category_rules() -> list[CategoryRule]:
 def make_category_bundle() -> OpRule:
     return OpRule(
         op="categoryBundle",
-        params={"categories": [c.to_dict() for c in make_category_rules()]},
+        params={
+            "source": DEFAULT_CATEGORY_SOURCE,
+            "categories": [c.to_dict() for c in make_category_rules()],
+        },
     )
 
 

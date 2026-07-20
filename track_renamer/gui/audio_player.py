@@ -14,6 +14,7 @@ from track_renamer.category_palette import (
     parse_category_prefix_display,
 )
 from track_renamer.engine.models import PreviewRow, Track
+from ui_theme import PATH_BTN_HEIGHT, ctk_action_button
 
 
 def preview_waveform_color(
@@ -23,7 +24,9 @@ def preview_waveform_color(
     category_colors: dict[str, str] | None = None,
 ) -> str:
     display = row.new_display if row is not None else track.display_name
-    parsed = parse_category_prefix_display(display)
+    parsed = parse_category_prefix_display(
+        display, known=category_colors or None,
+    )
     if parsed:
         if parsed[0] == "FX":
             return "#e6e8ef"
@@ -36,7 +39,9 @@ def preview_waveform_color(
 
 class AudioPlayerBar(ctk.CTkFrame):
     def __init__(self, master, theme: dict, **kwargs) -> None:
-        super().__init__(master, fg_color="transparent", height=36, **kwargs)
+        super().__init__(
+            master, fg_color="transparent", height=PATH_BTN_HEIGHT, **kwargs,
+        )
         self.theme = theme
         self.service = AudioPreviewService()
         self.active_track: Track | None = None
@@ -53,23 +58,16 @@ class AudioPlayerBar(ctk.CTkFrame):
 
     def _build(self) -> None:
         t = self.theme
-        self.play_btn = ctk.CTkButton(
-            self,
-            text="▶",
-            width=32,
-            height=36,
-            corner_radius=6,
-            fg_color=t["btn"],
-            hover_color=t["btn_hover"],
-            text_color=t["text"],
-            state="disabled",
-            command=self.toggle_playback,
+        # Action-bar height/style; keep compact icon width (was 32).
+        self.play_btn = ctk_action_button(
+            self, "▶", self.toggle_playback, width=32,
         )
+        self.play_btn.configure(state="disabled")
         self.play_btn.pack(side="left", padx=(0, 10))
 
         self.waveform = tk.Canvas(
             self,
-            height=36,
+            height=PATH_BTN_HEIGHT,
             highlightthickness=0,
             borderwidth=0,
             bg=t["waveform_bg"],

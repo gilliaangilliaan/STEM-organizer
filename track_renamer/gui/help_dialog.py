@@ -5,6 +5,12 @@ from __future__ import annotations
 import tkinter as tk
 import webbrowser
 
+from ui_theme import (
+    apply_toplevel_icon,
+    apply_toplevel_rounded_corners,
+    ctk_action_button,
+)
+
 
 DOCS_URL = "https://enableton-renamer-docs.vercel.app/"
 
@@ -16,6 +22,7 @@ def show_rename_help_dialog(parent: tk.Misc, theme: dict) -> None:
     dialog.configure(bg=t["panel"])
     dialog.resizable(False, False)
     dialog.transient(parent.winfo_toplevel())
+    apply_toplevel_icon(dialog)
 
     outer = tk.Frame(dialog, bg=t["panel"])
     outer.pack(fill="both", expand=True, padx=22, pady=18)
@@ -136,22 +143,7 @@ def show_rename_help_dialog(parent: tk.Misc, theme: dict) -> None:
     docs.bind("<Enter>", lambda _event: docs.configure(fg=t["accent_hover"]))
     docs.bind("<Leave>", lambda _event: docs.configure(fg=t["accent"]))
 
-    close = tk.Button(
-        footer,
-        text="Close",
-        command=dialog.destroy,
-        font=("Segoe UI Semibold", 10),
-        bg=t["accent"],
-        fg="#ffffff",
-        activebackground=t["accent_hover"],
-        activeforeground="#ffffff",
-        relief="flat",
-        borderwidth=0,
-        highlightthickness=0,
-        padx=18,
-        pady=5,
-        cursor="hand2",
-    )
+    close = ctk_action_button(footer, "Close", dialog.destroy, width=72)
     close.pack(side="right")
 
     dialog.bind("<Escape>", lambda _event: dialog.destroy())
@@ -163,5 +155,8 @@ def show_rename_help_dialog(parent: tk.Misc, theme: dict) -> None:
     x = top.winfo_rootx() + max(0, (top.winfo_width() - width) // 2)
     y = top.winfo_rooty() + max(0, (top.winfo_height() - height) // 2)
     dialog.geometry(f"{width}x{height}+{x}+{y}")
+    dialog.update_idletasks()
+    apply_toplevel_rounded_corners(dialog)
+    dialog.after(20, lambda: apply_toplevel_rounded_corners(dialog))
     dialog.grab_set()
     close.focus_set()

@@ -33,8 +33,10 @@ class Track:
     bpm: str = ""
     key: str = ""
     group: str = ""
-    instrument: str = ""
-    category: str = ""
+    instrument: str = ""  # OpenMIC / instrument label (e.g. guitar)
+    instrument_score: float = 0.0
+    instrument_second: float = 0.0  # runner-up score (ambiguity check)
+    category: str = ""  # mapped Category Macro name (e.g. Guitar)
 
     @property
     def display_name(self) -> str:

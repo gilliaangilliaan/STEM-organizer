@@ -10,7 +10,11 @@ from track_renamer.category_palette import (
     category_badge_label,
     category_color,
 )
-from track_renamer.engine.defaults import RULE_CATALOG, make_category_rules
+from track_renamer.engine.defaults import (
+    DEFAULT_CATEGORY_SOURCE,
+    RULE_CATALOG,
+    make_category_rules,
+)
 from track_renamer.engine.models import (
     CategoryRule,
     Condition,
@@ -20,6 +24,7 @@ from track_renamer.engine.models import (
 )
 from track_renamer.gui.tips import TIPS
 from track_renamer.gui.tooltip import bind_tooltip
+from ui_theme import ctk_section_font
 
 
 OP_LABELS = {
@@ -45,6 +50,7 @@ class RulesPanel(ctk.CTkFrame):
         self.on_apply = on_apply
         self.rules: list[Rule] = []
         self._apply_pending = False
+        self._focus_category_prefix_rule_id: str | None = None
         self._build()
 
     def _tip(self, widget, key: str) -> None:
@@ -58,8 +64,8 @@ class RulesPanel(ctk.CTkFrame):
         ctk.CTkLabel(
             header,
             text="RULES",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=t["text_mute"],
+            font=ctk_section_font(),
+            text_color=t["text_dim"],
         ).pack(side="left")
 
         self.apply_btn = ctk.CTkButton(
@@ -107,13 +113,23 @@ class RulesPanel(ctk.CTkFrame):
         self.add_menu.pack(side="left")
         self._tip(self.add_menu, "add_rule")
 
-        self.stack = ctk.CTkScrollableFrame(self, fg_color=t["card"], corner_radius=8)
+        self.stack = ctk.CTkScrollableFrame(
+            self,
+            fg_color=t["card"],
+            corner_radius=8,
+            scrollbar_button_color=t["scrollbar"],
+            scrollbar_button_hover_color=t["scrollbar_hover"],
+        )
         self.stack.pack(fill="both", expand=True, padx=16, pady=(0, 16))
 
     def set_theme(self, theme: dict) -> None:
         self.theme = theme
         self.configure(fg_color=theme["panel"])
-        self.stack.configure(fg_color=theme["card"])
+        self.stack.configure(
+            fg_color=theme["card"],
+            scrollbar_button_color=theme["scrollbar"],
+            scrollbar_button_hover_color=theme["scrollbar_hover"],
+        )
         self.add_menu.configure(
             fg_color=theme["control_bg"],
             button_color=theme["border"],
@@ -175,7 +191,10 @@ class RulesPanel(ctk.CTkFrame):
             self.rules.append(
                 OpRule(
                     op="categoryBundle",
-                    params={"categories": [c.to_dict() for c in make_category_rules()]},
+                    params={
+                        "source": DEFAULT_CATEGORY_SOURCE,
+                        "categories": [c.to_dict() for c in make_category_rules()],
+                    },
                 )
             )
         else:
@@ -221,7 +240,7 @@ class RulesPanel(ctk.CTkFrame):
         ctk.CTkLabel(
             title_row,
             text=self._card_title(group, index),
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             text_color=t["text"],
         ).pack(side="left")
 
@@ -270,7 +289,7 @@ class RulesPanel(ctk.CTkFrame):
             width=140,
             fg_color=t["input"],
             border_color=t["border"],
-            text_color=t["text"],
+            text_color=t["entry_text"],
         )
         value_entry.pack(side="left", padx=4)
         value_entry.bind("<KeyRelease>", lambda e, g=group, v=value_var: self._update_condition_value(g, v))
@@ -348,7 +367,7 @@ class RulesPanel(ctk.CTkFrame):
             text_var = ctk.StringVar(value=rule.params.get("text", ""))
             entry = ctk.CTkEntry(
                 row, textvariable=text_var, width=100, fg_color=t["input"],
-                border_color=t["border"], text_color=t["text"],
+                border_color=t["border"], text_color=t["entry_text"],
             )
             entry.pack(side="right", padx=8, pady=4)
             entry.bind(
@@ -382,21 +401,85 @@ class RulesPanel(ctk.CTkFrame):
         table = ctk.CTkFrame(parent, fg_color=t["panel_2"], corner_radius=8)
         table.pack(fill="x", padx=24, pady=(4, 8))
 
+        # Same right inset as category rows so + lines up with ✕.
+        _table_padx = 4
+
+        source_row = ctk.CTkFrame(table, fg_color="transparent")
+        source_row.pack(fill="x", padx=_table_padx, pady=(8, 2))
+        source_lbl = ctk.CTkLabel(
+            source_row,
+            text="INSTRUMENT SOURCE",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=t["text_mute"],
+        )
+        source_lbl.pack(side="left", padx=(4, 10))
+        self._tip(source_lbl, "instrument_source")
+
+        source_key = str(rule.params.get("source", DEFAULT_CATEGORY_SOURCE)).lower()
+        if source_key not in ("filename", "model", "combo"):
+            source_key = DEFAULT_CATEGORY_SOURCE
+        source_labels = {
+            "filename": "Filename",
+            "model": "Auto-detect",
+            "combo": "Combo",
+        }
+        source_seg = ctk.CTkSegmentedButton(
+            source_row,
+            values=["Filename", "Auto-detect", "Combo"],
+            width=280,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color=t["input"],
+            selected_color=t["accent"],
+            selected_hover_color=t.get("accent_hover", t["accent"]),
+            unselected_color=t["input"],
+            unselected_hover_color=t["border"],
+            text_color=t["text"],
+            command=lambda value, r=rule: self._set_category_source(r, value),
+        )
+        source_seg.pack(side="left")
+        source_seg.set(source_labels[source_key])
+        # Per-segment tips (CTkSegmentedButton.bind is NotImplemented).
+        segment_tips = {
+            "Filename": "instrument_source_filename",
+            "Auto-detect": "instrument_source_auto",
+            "Combo": "instrument_source_combo",
+        }
+        for value, tip_key in segment_tips.items():
+            btn = source_seg._buttons_dict.get(value)  # noqa: SLF001
+            if btn is not None:
+                self._tip(btn, tip_key)
+        # Drop legacy threshold param if present (calibrated scores ≥ 0.5).
+        rule.params.pop("mlConfidence", None)
+
         head = ctk.CTkFrame(table, fg_color="transparent")
-        head.pack(fill="x", padx=8, pady=(8, 4))
+        head.pack(fill="x", padx=_table_padx, pady=(8, 4))
         ctk.CTkLabel(head, text="PREFIX", font=ctk.CTkFont(size=10, weight="bold"), text_color=t["text_mute"]).pack(
             side="left", padx=(88, 80)
         )
         ctk.CTkLabel(
             head, text="KEYWORDS (COMMA-SEPARATED)", font=ctk.CTkFont(size=10, weight="bold"), text_color=t["text_mute"]
         ).pack(side="left")
+        add_btn = ctk.CTkButton(
+            head,
+            text="+",
+            width=24,
+            height=24,
+            fg_color=t["accent"],
+            hover_color=t.get("accent_hover", t["accent"]),
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=lambda r=rule: self._add_category_row(r),
+        )
+        add_btn.pack(side="right")
+        self._tip(add_btn, "add_category_row")
 
         for idx, cat in enumerate(categories):
             row_bg = t["card"]
             if t.get("row_odd"):
                 row_bg = t["row_even"] if idx % 2 == 0 else t["row_odd"]
             row = ctk.CTkFrame(table, fg_color=row_bg, corner_radius=4)
-            row.pack(fill="x", padx=4, pady=1)
+            row.pack(fill="x", padx=_table_padx, pady=1)
 
             prefix_bg = category_color(cat.name, cat.color, override=cat.color_override)
 
@@ -424,13 +507,13 @@ class RulesPanel(ctk.CTkFrame):
 
             prefix_entry = ctk.CTkEntry(
                 row, textvariable=prefix_var, width=100, fg_color=t["input"],
-                border_color=t["border"], text_color=t["text"],
+                border_color=t["border"], text_color=t["entry_text"],
             )
             prefix_entry.pack(side="left", padx=(0, 8))
             self._tip(prefix_entry, "prefix_field")
             kw_entry = ctk.CTkEntry(
                 row, textvariable=kw_var, fg_color=t["input"],
-                border_color=t["border"], text_color=t["text"],
+                border_color=t["border"], text_color=t["entry_text"],
             )
             kw_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
             self._tip(kw_entry, "keywords_field")
@@ -459,6 +542,59 @@ class RulesPanel(ctk.CTkFrame):
             )
             del_cat_btn.pack(side="right")
             self._tip(del_cat_btn, "remove_category_row")
+
+            if self._focus_category_prefix_rule_id == rule.id and idx == 0:
+                self._focus_category_prefix_rule_id = None
+                self.after_idle(lambda e=prefix_entry: self._focus_category_prefix(e))
+
+    def _focus_category_prefix(self, entry: ctk.CTkEntry) -> None:
+        try:
+            if not entry.winfo_exists():
+                return
+            entry.focus_set()
+            entry.select_range(0, "end")
+            entry.icursor("end")
+        except Exception:
+            return
+        self._scroll_stack_to_widget(entry)
+
+    def _scroll_stack_to_widget(self, widget) -> None:
+        """Keep focused PREFIX field visible inside the rules scroll area."""
+        try:
+            canvas = getattr(self.stack, "_parent_canvas", None)
+            inner = getattr(self.stack, "_scrollable_frame", None)
+            if canvas is None or inner is None:
+                return
+            self.update_idletasks()
+            y = 0
+            node = widget
+            while node is not None and node is not inner:
+                y += int(node.winfo_y())
+                node = getattr(node, "master", None)
+            if node is not inner:
+                return
+            view_h = max(1, int(canvas.winfo_height()))
+            total_h = max(1, int(inner.winfo_height()))
+            top = float(canvas.canvasy(0))
+            bottom = top + view_h
+            widget_h = max(1, int(widget.winfo_height()))
+            if y < top:
+                canvas.yview_moveto(max(0.0, y / total_h))
+            elif y + widget_h > bottom:
+                canvas.yview_moveto(max(0.0, (y + widget_h - view_h) / total_h))
+        except Exception:
+            pass
+
+    def _set_category_source(self, rule: OpRule, label: str) -> None:
+        mapping = {
+            "Filename": "filename",
+            "Auto-detect": "model",
+            "Combo": "combo",
+        }
+        rule.params["source"] = mapping.get(label, DEFAULT_CATEGORY_SOURCE)
+        rule.params.pop("mlConfidence", None)
+        self._render()
+        self._notify()
 
     def _open_color_picker(self, rule: OpRule, index: int) -> None:
         t = self.theme
@@ -516,6 +652,40 @@ class RulesPanel(ctk.CTkFrame):
             rule.params["categories"] = cats
             self._render()
             self._notify()
+
+    @staticmethod
+    def _unique_category_name(cats: list) -> str:
+        existing = {
+            str((c.get("name") if isinstance(c, dict) else getattr(c, "name", "")) or "")
+            .strip()
+            .casefold()
+            for c in cats
+        }
+        base = "New"
+        if base.casefold() not in existing:
+            return base
+        n = 2
+        while f"{base} {n}".casefold() in existing:
+            n += 1
+        return f"{base} {n}"
+
+    def _add_category_row(self, rule: OpRule) -> None:
+        cats = rule.params.setdefault("categories", [])
+        name = self._unique_category_name(cats)
+        color = CATEGORY_PALETTE_COLORS[len(cats) % len(CATEGORY_PALETTE_COLORS)]
+        cats.insert(
+            0,
+            CategoryRule(
+                name=name,
+                keywords="",
+                affix=f"{name.upper()} - ",
+                color=color,
+                color_override=True,
+            ).to_dict(),
+        )
+        self._focus_category_prefix_rule_id = rule.id
+        self._render()
+        self._notify()
 
     def _update_condition_op(self, group: ConditionGroup, op: str) -> None:
         mapped = "notContains" if op == "not contains" else op

@@ -1,18 +1,22 @@
 # Non-torch dependencies for genre_gender_tagger.py
 #
-# PyTorch + torchaudio are NOT listed here. They are installed
-# separately with the correct CUDA / CPU index URL. See readme.md
-# or run install-deps.bat, which handles both for you.
+# PyTorch is NOT listed here. It is installed separately with the correct
+# CUDA / CPU index URL. See readme.md or run install-deps.bat.
+# torchaudio is not required (librosa resample). TensorFlow is not required
+# (gender uses onnxruntime-directml).
 
 soundfile
-pandas
 tqdm
 mutagen
 transformers
 
-# Acapella / voice-gender path (Essentia gender-discogs-effnet via TF).
-# Essentia itself has no Windows wheels; we run the official .pb
-# models with TensorFlow + a MusiCNN-style mel front-end.
-tensorflow>=2.15,<2.17
+# Acapella / voice-gender path (Essentia gender-discogs-effnet).
+# ONNX Runtime + DirectML = GPU on Windows (no TensorFlow needed).
+# Optional TF CPU fallback if you ever need it:
+#   pip install "tensorflow>=2.15,<2.17"
+onnxruntime-directml
 librosa
 soxr
+
+# Instrument Auto-detect (PaSST) shares this venv — install via
+# instrument_tagger\install-deps.bat (adds hear21passt).
