@@ -289,13 +289,38 @@ def enrich_tracks(
                 log_tail.append(stripped)
                 if len(log_tail) > 40:
                     log_tail = log_tail[-40:]
-                # Forward warmup lines; skip per-file "[n/total] name" spam.
-                if not (
+                # Forward warmup lines; skip per-file "[n/total] name" spam
+                # and hear21passt / torch noise (model dump, shapes, warnings).
+                if (
                     stripped.startswith("[")
                     and "/" in stripped[:12]
                     and "]" in stripped[:16]
                 ):
-                    status(stripped.lstrip())
+                    continue
+                low = stripped.lower()
+                if (
+                    "torch.size" in low
+                    or "userwarning" in low
+                    or "warnings.warn" in low
+                    or "input image size" in low
+                    or stripped.startswith(
+                        (
+                            "X flattened",
+                            "forward_features",
+                            "head ",
+                            " self.",
+                            "patch_embed",
+                            "Loading PASST",
+                            "Loading PaSST",
+                            "(1): Linear",
+                            "(head_dist):",
+                            "Sequential(",
+                            "  (",
+                        )
+                    )
+                ):
+                    continue
+                status(stripped.lstrip())
                 continue
 
             done += 1
@@ -333,7 +358,23 @@ def enrich_tracks(
 
         returncode = proc.wait()
         if returncode != 0 and classified == 0:
-            err = "\n".join(log_tail).strip() or "tagger failed"
+            # Prefer real traceback / ERROR lines over model-dump noise.
+            useful = [
+                ln
+                for ln in log_tail
+                if any(
+                    k in ln
+                    for k in (
+                        "Error",
+                        "ERROR",
+                        "Traceback",
+                        "Exception",
+                        "UnicodeEncode",
+                        "not installed",
+                    )
+                )
+            ]
+            err = "\n".join(useful or log_tail[-8:]).strip() or "tagger failed"
             return cached_n, err[:500]
     except OSError as exc:
         return cached_n, str(exc)

@@ -10,12 +10,22 @@ Phase-1 CLI: classify files / folder → JSON lines on stdout.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+
+# Avoid Windows cp1252 crashes on non-ASCII paths / names in print().
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # ----------------------------------------------------------
 # Constants (PaSST OpenMIC — 32 kHz, ~10 s clips)
@@ -23,8 +33,9 @@ import soundfile as sf
 
 SAMPLE_RATE = 32000
 MAX_AUDIO_SECONDS = 10.0
-# PaSST OpenMIC checkpoint expects 998 mel frames @ hop=320 (not raw 10.0 s).
-CLIP_SAMPLES = 997 * 320  # → 998 frames with center=True STFT
+# PaSST OpenMIC expects 998 mel frames @ hop=320.
+# Preemphasis conv1d (k=2, no pad) drops 1 sample → add +1 so STFT still yields 998.
+CLIP_SAMPLES = 997 * 320 + 1
 
 # If synthesizer is #1, demote to runner-up when raw sigmoid gap ≤ this.
 # Larger = fewer Synth prefixes (more aggressive demote).
@@ -71,6 +82,14 @@ AUDIO_EXTENSIONS = {
 
 def _status(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
+
+
+def _print_json(obj: dict) -> None:
+    """Emit one JSON line on stdout; survive Windows console encoding."""
+    try:
+        print(json.dumps(obj, ensure_ascii=False), flush=True)
+    except UnicodeEncodeError:
+        print(json.dumps(obj, ensure_ascii=True), flush=True)
 
 
 def load_mono_32k(filename: str | Path) -> np.ndarray:
@@ -146,6 +165,10 @@ def load_backend(status=_status) -> _PasstOpenmicBackend:
     try:
         from hear21passt.models.passt import get_model as get_model_passt
         from hear21passt.wrapper import PasstBasicWrapper
+        # hear21passt prints tensor shapes on first forward — silence that spam.
+        import hear21passt.models.passt as _passt_mod
+
+        _passt_mod.first_RUN = False
     except ImportError as exc:
         raise SystemExit(
             "\nERROR: hear21passt not installed.\n"
@@ -167,8 +190,10 @@ def load_backend(status=_status) -> _PasstOpenmicBackend:
         fmax=None,
     )
     # hear21passt openmic2008.py used arch="openmic2008" (broken);
-    # correct arch key is "openmic".
-    net = get_model_passt(arch="openmic", n_classes=20)
+    # correct arch key is "openmic". Silence get_model's print(model) spam.
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        net = get_model_passt(arch="openmic", n_classes=20)
     model = PasstBasicWrapper(
         mel=mel,
         net=net,
@@ -346,18 +371,14 @@ def main(argv: list[str] | None = None) -> int:
                 top_k=args.top,
                 threshold=args.threshold,
             )
-            print(json.dumps(result, ensure_ascii=False), flush=True)
+            _print_json(result)
         except Exception as exc:
             errors += 1
-            print(
-                json.dumps(
-                    {
-                        "path": str(path.resolve()),
-                        "error": str(exc),
-                    },
-                    ensure_ascii=False,
-                ),
-                flush=True,
+            _print_json(
+                {
+                    "path": str(path.resolve()),
+                    "error": str(exc),
+                }
             )
 
     _status(f"done. ok={len(files) - errors} err={errors}")
