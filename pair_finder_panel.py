@@ -1290,8 +1290,11 @@ class PairFinderPanel(ctk.CTkFrame):
                 self._finish_worker('Nothing to organize')
                 return
             self._log(f'Created {len(moved):,} folder(s)', 'ok')
-            for dest_dir, _files in moved:
+            show = min(25, len(moved))
+            for dest_dir, _files in moved[:show]:
                 self._log(f'✓ {dest_dir.name}/', 'ok')
+            if len(moved) > show:
+                self._log(f'… and {len(moved) - show:,} more folder(s)', 'info')
             self._log_feature_summary(
                 'Organize folder',
                 lines=[(f'Folders created: {len(moved):,}', 'ok')],
