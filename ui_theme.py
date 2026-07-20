@@ -361,12 +361,33 @@ def apply_toplevel_rounded_corners(win: tk.Misc, *, maximized: bool = False):
 
 
 def _center_toplevel(win: tk.Misc, parent: tk.Misc) -> None:
-    win.update_idletasks()
+    """Center dialog over the host app window (not the screen)."""
     try:
         pw = parent.winfo_toplevel()
-        x = pw.winfo_rootx() + (pw.winfo_width() - win.winfo_reqwidth()) // 2
-        y = pw.winfo_rooty() + (pw.winfo_height() - win.winfo_reqheight()) // 2
-        win.geometry(f'+{max(0, x)}+{max(0, y)}')
+    except tk.TclError:
+        return
+
+    def _place() -> None:
+        try:
+            win.update_idletasks()
+            pw.update_idletasks()
+            ww = max(win.winfo_reqwidth(), win.winfo_width(), 1)
+            wh = max(win.winfo_reqheight(), win.winfo_height(), 1)
+            pw_w = max(pw.winfo_width(), pw.winfo_reqwidth(), 1)
+            pw_h = max(pw.winfo_height(), pw.winfo_reqheight(), 1)
+            px = pw.winfo_rootx()
+            py = pw.winfo_rooty()
+            x = px + max(0, (pw_w - ww) // 2)
+            y = py + max(0, (pw_h - wh) // 2)
+            win.geometry(f'+{x}+{y}')
+        except tk.TclError:
+            pass
+
+    _place()
+    # CTkToplevel often reports wrong size until mapped — re-center once drawn.
+    try:
+        win.after(1, _place)
+        win.after(50, _place)
     except tk.TclError:
         pass
 
@@ -377,11 +398,11 @@ def show_info_dark(parent: tk.Misc, title: str, message: str) -> None:
 
     root = parent.winfo_toplevel()
     win = ctk.CTkToplevel(root)
+    win.withdraw()
     win.title(title)
     win.transient(root)
     win.resizable(False, False)
     apply_toplevel_icon(win)
-    win.grab_set()
 
     frame = ctk.CTkFrame(win, fg_color='transparent')
     frame.pack(fill='both', expand=True, padx=20, pady=16)
@@ -402,10 +423,21 @@ def show_info_dark(parent: tk.Misc, title: str, message: str) -> None:
             pass
         win.destroy()
 
-    ctk.CTkButton(btn_row, text='OK', width=88, command=_close).pack(side='right')
+    ctk.CTkButton(
+        btn_row,
+        text='OK',
+        width=88,
+        fg_color=DARK['accent'],
+        hover_color=DARK['accent_hover'],
+        text_color='#ffffff',
+        command=_close,
+    ).pack(side='right')
     win.protocol('WM_DELETE_WINDOW', _close)
     win.after(10, lambda: apply_toplevel_icon(win))
     _center_toplevel(win, parent)
+    win.deiconify()
+    win.lift()
+    win.grab_set()
     win.focus_force()
     win.wait_window()
 
@@ -424,11 +456,11 @@ def ask_yes_no_dark(
     root = parent.winfo_toplevel()
     result = {'ok': False}
     win = ctk.CTkToplevel(root)
+    win.withdraw()
     win.title(title)
     win.transient(root)
     win.resizable(False, False)
     apply_toplevel_icon(win)
-    win.grab_set()
 
     frame = ctk.CTkFrame(win, fg_color='transparent')
     frame.pack(fill='both', expand=True, padx=20, pady=16)
@@ -451,15 +483,29 @@ def ask_yes_no_dark(
         win.destroy()
 
     ctk.CTkButton(
-        btn_row, text=no_text, width=88, fg_color=DARK['panel_2'],
-        hover_color=DARK['border'], command=lambda: _finish(False),
+        btn_row,
+        text=no_text,
+        width=88,
+        fg_color=DARK['panel_2'],
+        hover_color=DARK['border'],
+        text_color=DARK['text'],
+        command=lambda: _finish(False),
     ).pack(side='right', padx=(8, 0))
     ctk.CTkButton(
-        btn_row, text=yes_text, width=88, command=lambda: _finish(True),
+        btn_row,
+        text=yes_text,
+        width=88,
+        fg_color=DARK['accent'],
+        hover_color=DARK['accent_hover'],
+        text_color='#ffffff',
+        command=lambda: _finish(True),
     ).pack(side='right')
     win.protocol('WM_DELETE_WINDOW', lambda: _finish(False))
     win.after(10, lambda: apply_toplevel_icon(win))
     _center_toplevel(win, parent)
+    win.deiconify()
+    win.lift()
+    win.grab_set()
     win.focus_force()
     win.wait_window()
     return bool(result['ok'])

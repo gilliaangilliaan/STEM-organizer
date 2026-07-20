@@ -17,6 +17,7 @@ from track_renamer.folder_scanner import move_files_to_prefix_folders
 from track_renamer.gui.app import PRESETS_DIR, TrackRenamerApp
 from track_renamer.gui.help_dialog import show_rename_help_dialog
 from track_renamer.gui.theme import DARK
+from ui_theme import ask_yes_no_dark, show_info_dark
 
 
 class TrackRenamerPanel(ctk.CTkFrame):
@@ -197,14 +198,14 @@ class TrackRenamerPanel(ctk.CTkFrame):
         error_note = (
             f"\n{len(errors)} file(s) could not be renamed." if errors else ""
         )
-        organize = messagebox.askyesno(
+        organize = ask_yes_no_dark(
+            self._dialog_parent(),
             "Organize by prefix",
             f"Renamed {success} file(s).{error_note}\n\n"
             "Move the renamed files into folders based on their prefix?\n\n"
             "After selecting Yes, choose the parent destination folder.\n"
             "BASS, DRUMS, VOCALS, and other prefix folders will be created inside it.\n\n"
             "Existing filename conflicts will receive _1, _2, and so on.",
-            parent=self._dialog_parent(),
         )
         if not organize:
             if errors:
@@ -258,13 +259,9 @@ class TrackRenamerPanel(ctk.CTkFrame):
             details = "\n".join(errors[:10])
             if len(errors) > 10:
                 details += f"\n…and {len(errors) - 10} more."
-            messagebox.showwarning(
-                title,
-                f"{summary}\n\n{details}",
-                parent=parent,
-            )
+            show_info_dark(parent, title, f"{summary}\n\n{details}")
         else:
-            messagebox.showinfo(title, summary, parent=parent)
+            show_info_dark(parent, title, summary)
 
     def _finish_file_operation(self) -> None:
         self._destructive_busy = False

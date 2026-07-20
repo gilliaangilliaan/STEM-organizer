@@ -906,7 +906,11 @@ class GenreGenderPanel(_ctk.CTkFrame):
 
     @staticmethod
     def _iter_tagger_lines(stream):
-        """Yield stdout lines; treat tqdm \\r updates as separate lines."""
+        """Yield stdout lines; treat tqdm \\r updates as separate lines.
+
+        Keep leading spaces (=== Summary === body indent) and blank lines
+        (gap before DONE), matching Classify LOG layout.
+        """
         buf = ""
         while True:
             chunk = stream.read(1024)
@@ -915,17 +919,19 @@ class GenreGenderPanel(_ctk.CTkFrame):
             buf += chunk.replace("\r\n", "\n").replace("\r", "\n")
             while "\n" in buf:
                 line, buf = buf.split("\n", 1)
-                line = line.strip()
-                if line:
-                    yield line
-        rem = buf.strip()
+                # Trailing CR only; do not strip leading spaces.
+                line = line.rstrip("\r")
+                yield line
+        rem = buf.rstrip("\r")
         if rem:
             yield rem
 
     def _handle_tagger_line(self, line: str) -> None:
         """Forward log lines; drive host progress bar from tagger updates."""
-        if line.startswith("__gg_processed__\t") or line.startswith("__gg_processed__ "):
-            parts = line.split("\t") if "\t" in line else line.split()
+        bare = (line or "").strip()
+
+        if bare.startswith("__gg_processed__\t") or bare.startswith("__gg_processed__ "):
+            parts = bare.split("\t") if "\t" in bare else bare.split()
             try:
                 n = int(float(parts[1]))
                 total = int(float(parts[2]))
@@ -934,8 +940,8 @@ class GenreGenderPanel(_ctk.CTkFrame):
             self._host.log_queue.put((GG_PROCESSED_TAG, n, total))
             return
 
-        if line.startswith("__progress__\t") or line.startswith("__progress__ "):
-            parts = line.split("\t") if "\t" in line else line.split()
+        if bare.startswith("__progress__\t") or bare.startswith("__progress__ "):
+            parts = bare.split("\t") if "\t" in bare else bare.split()
             try:
                 pct = float(parts[1])
             except (IndexError, ValueError):
@@ -959,6 +965,11 @@ class GenreGenderPanel(_ctk.CTkFrame):
             self._host.log_queue.put(
                 (PROGRESS_TAG, pct, eta, n, total, phase)
             )
+            return
+
+        # Blank line — keep for summary spacing (before DONE), like Classify.
+        if not bare:
+            self._host.log_queue.put((PAIR_LOG_TAG, "", "info"))
             return
 
         parsed = _TQDM_PCT_RE.search(line)

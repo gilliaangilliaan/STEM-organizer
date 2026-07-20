@@ -1871,7 +1871,6 @@ class Worker(threading.Thread):
             stems = find_duplicates(stems, sr=sr, log_fn=self.log, device=device)
             dedup_dt = time.monotonic() - t0
             self._phase_timer.add('dedup', dedup_dt)
-            self.log(f'  [dedup] finished in {format_duration_log(dedup_dt)}')
             if len(stems) < before:
                 self.log(f"  [dedup] {before} -> {len(stems)} stems after deduplication")
 
@@ -1886,7 +1885,6 @@ class Worker(threading.Thread):
         prescan_issues, stems = prescan_stems(stems)
         prescan_dt = time.monotonic() - t0
         self._phase_timer.add('prescan', prescan_dt)
-        self.log(f'  [prescan] finished in {format_duration_log(prescan_dt)}')
         for path, reason in prescan_issues:
             tag = '[empty]' if reason.startswith('empty') else '[skip]'
             self.log(f"  {tag} {path.name} — {reason}")
@@ -1929,7 +1927,6 @@ class Worker(threading.Thread):
                 buckets[label].append(path)
         class_dt = time.monotonic() - t0
         self._phase_timer.add('classification', class_dt)
-        self.log(f'  [classification] finished in {format_duration_log(class_dt)}')
 
         if had_ambig and self.p['ambig_mode'] == 'skip_song':
             self.log('  [skip song] ambiguous stem(s) detected; skipping entire song')
@@ -1950,7 +1947,6 @@ class Worker(threading.Thread):
         mix_dt = time.monotonic() - t0
         if mixes:
             self._phase_timer.add('mixing', mix_dt)
-            self.log(f'  [mixing] finished in {format_duration_log(mix_dt)}')
 
         cut = min((m.shape[1] for m in mixes.values()), default=0)
         if cut == 0:
@@ -1985,7 +1981,6 @@ class Worker(threading.Thread):
                 self.log(f"  [export error] mixture: {e}")
         export_dt = time.monotonic() - t0
         self._phase_timer.add('export', export_dt)
-        self.log(f'  [export] finished in {format_duration_log(export_dt)}')
 
         manifest, delete_outcome = self._maybe_cleanup_output_folder(
             target_dir, duration_sec, written_cats, mode_cfg, manifest, out_dir,
@@ -2032,7 +2027,6 @@ class Worker(threading.Thread):
             model = load_demucs_model(p['model_id']).eval().to(device)
             model_load_dt = time.monotonic() - t0
             self._phase_timer.add('model_load', model_load_dt)
-            self.log(f'  [model load] finished in {format_duration_log(model_load_dt)}')
             self.log(f"  Model sources: {list(model.sources)}  (sr={model.samplerate})")
 
             in_dir, out_dir = Path(p['input_dir']), Path(p['output_dir'])
@@ -2045,7 +2039,6 @@ class Worker(threading.Thread):
             groups = collect_song_groups(in_dir, p['scan_mode'])
             input_scan_dt = time.monotonic() - t0
             self._phase_timer.add('input_scan', input_scan_dt)
-            self.log(f'  [input scan] finished in {format_duration_log(input_scan_dt)}')
 
             if not groups:
                 self.log(f"[skip] no audio files found under {in_dir}")
@@ -2384,7 +2377,6 @@ class SdrWorker(threading.Thread):
             model = load_demucs_model(p['model_id']).eval().to(device)
             model_load_dt = time.monotonic() - t0
             self._phase_timer.add('model_load', model_load_dt)
-            self.log(f'  [model load] finished in {format_duration_log(model_load_dt)}')
             sources = list(model.sources)
             sr = model.samplerate
             self.log(f'  Model sources: {sources}  (sr={sr})')
@@ -2460,7 +2452,6 @@ class SdrWorker(threading.Thread):
                 return
 
             self._phase_timer.add('target_scan', time.monotonic() - t0)
-            self.log(f'  [target scan] finished in {format_duration_log(self._phase_timer.get("target_scan"))}')
 
             self._total_folders = len(targets)
             self._completed_folders = 0

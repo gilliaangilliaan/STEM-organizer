@@ -498,6 +498,21 @@ class PreviewPanel(ctk.CTkFrame):
         self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.canvas.bind("<Enter>", self._bind_mousewheel)
         self.canvas.bind("<Leave>", self._unbind_mousewheel)
+        self.canvas.bind("<FocusIn>", self._arm_keyboard_nav)
+        self._keyboard_nav_armed = False
+        self._preview_destroyed = False
+        self._global_key_bindings = (
+            ("<Up>", self._on_global_up),
+            ("<Down>", self._on_global_down),
+            ("<Prior>", self._on_global_page_up),
+            ("<Next>", self._on_global_page_down),
+            ("<Left>", self._on_global_seek_back),
+            ("<Right>", self._on_global_seek_fwd),
+            ("<space>", self._on_global_space),
+        )
+        for seq, handler in self._global_key_bindings:
+            self.bind_all(seq, handler, add="+")
+        self.bind("<Destroy>", self._on_preview_destroy, add="+")
 
         self.sticky_folder_label = ctk.CTkLabel(
             list_outer,
@@ -1087,13 +1102,112 @@ class PreviewPanel(ctk.CTkFrame):
     ) -> None:
         if not track.is_audio or not track.is_file:
             return
-        self.canvas.focus_set()
+        self._arm_keyboard_nav()
+        self.after_idle(self._focus_preview_canvas)
         if self._active_track_id == track.id:
             self.on_active(track, row)
             return
         self._active_track_id = track.id
         self._schedule_render(immediate=True)
         self.on_active(track, row)
+
+    def _arm_keyboard_nav(self, _event=None) -> None:
+        self._keyboard_nav_armed = True
+
+    def _focus_preview_canvas(self) -> None:
+        if not self.winfo_ismapped() or self._analyze_log_active:
+            return
+        if not self.canvas.winfo_ismapped():
+            return
+        try:
+            self.canvas.focus_set()
+        except tk.TclError:
+            pass
+
+    def _on_preview_destroy(self, event) -> None:
+        if event.widget is not self:
+            return
+        self._preview_destroyed = True
+        self._keyboard_nav_armed = False
+
+    @staticmethod
+    def _focus_is_text_input(widget) -> bool:
+        if widget is None:
+            return False
+        try:
+            cls = widget.winfo_class()
+        except tk.TclError:
+            return False
+        if cls in {"Entry", "Text", "TEntry", "TCombobox", "Listbox"}:
+            return True
+        name = type(widget).__name__
+        return name in {"CTkEntry", "CTkTextbox"}
+
+    def _widget_in_preview(self, widget) -> bool:
+        w = widget
+        while w is not None:
+            if w is self:
+                return True
+            try:
+                w = w.master
+            except Exception:
+                break
+        return False
+
+    def _should_handle_preview_keys(self) -> bool:
+        if getattr(self, "_preview_destroyed", False):
+            return False
+        try:
+            if not self.winfo_exists() or not self.winfo_ismapped():
+                return False
+        except tk.TclError:
+            return False
+        if self._analyze_log_active:
+            return False
+        try:
+            focused = self.focus_get()
+        except tk.TclError:
+            focused = None
+        if self._focus_is_text_input(focused):
+            return False
+        if focused is not None and self._widget_in_preview(focused):
+            return True
+        return bool(self._keyboard_nav_armed and self._active_track_id)
+
+    def _on_global_up(self, _event=None):
+        if not self._should_handle_preview_keys():
+            return
+        return self._keyboard_move(-1)
+
+    def _on_global_down(self, _event=None):
+        if not self._should_handle_preview_keys():
+            return
+        return self._keyboard_move(1)
+
+    def _on_global_page_up(self, _event=None):
+        if not self._should_handle_preview_keys():
+            return
+        return self._keyboard_page(-1)
+
+    def _on_global_page_down(self, _event=None):
+        if not self._should_handle_preview_keys():
+            return
+        return self._keyboard_page(1)
+
+    def _on_global_seek_back(self, _event=None):
+        if not self._should_handle_preview_keys():
+            return
+        return self._keyboard_seek(-3.0)
+
+    def _on_global_seek_fwd(self, _event=None):
+        if not self._should_handle_preview_keys():
+            return
+        return self._keyboard_seek(3.0)
+
+    def _on_global_space(self, _event=None):
+        if not self._should_handle_preview_keys():
+            return
+        return self._keyboard_play_pause()
 
     def _display_source_indices(self):
         if self._lazy_enabled:
@@ -1151,9 +1265,11 @@ class PreviewPanel(ctk.CTkFrame):
             track = tracks[source_index]
             if track.is_audio and track.is_file:
                 row = rows[source_index]
+                self._arm_keyboard_nav()
                 self._active_track_id = track.id
                 self._ensure_display_visible(target, total)
                 self._schedule_render(immediate=True)
+                self.after_idle(self._focus_preview_canvas)
                 self.on_active(track, row)
                 return
             target += direction
@@ -1184,6 +1300,7 @@ class PreviewPanel(ctk.CTkFrame):
         if self._active_track_id is None:
             return
         self._active_track_id = None
+        self._keyboard_nav_armed = False
         self._schedule_render(immediate=True)
         self.on_active(None, None)
 
@@ -1304,15 +1421,15 @@ class PreviewPanel(ctk.CTkFrame):
         self._render_job = None
         if self._lazy_enabled:
             self._render_visible_lazy()
-            return
-
-        rows = self._filtered_rows()
-        if not rows:
-            self._clear_row_widgets()
-            return
-
-        first, last = self._visible_bounds(len(rows))
-        self._render_pool(first, last, [row.track for row in rows], list(rows))
+        else:
+            rows = self._filtered_rows()
+            if not rows:
+                self._clear_row_widgets()
+            else:
+                first, last = self._visible_bounds(len(rows))
+                self._render_pool(first, last, [row.track for row in rows], list(rows))
+        if self._keyboard_nav_armed and self._active_track_id:
+            self.after_idle(self._focus_preview_canvas)
 
     def _render_visible_lazy(self) -> None:
         view_entries = self._lazy_view_entries
@@ -1455,6 +1572,7 @@ class PreviewPanel(ctk.CTkFrame):
     def begin_analyze_log(self, total: int) -> None:
         """Swap preview list for a live instrument analyze log."""
         self.cancel_preview_work()
+        self._keyboard_nav_armed = False
         self._analyze_log_active = True
         self._analyze_log_counts = {"apply": 0, "skip": 0, "error": 0}
         self._preview_title.configure(text="ANALYZE LOG")

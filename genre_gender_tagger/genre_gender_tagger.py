@@ -1928,7 +1928,6 @@ if CONTENT_TYPE == "acapella":
         # Parallel mel/patch extract in bounded waves. Never submit the
         # whole library — Future objects cache patch arrays until GC.
 
-        print("Processing gender (batch)...")
         print(
             f"  workers={AUDIO_WORKERS}  "
             f"file_chunk={GENDER_FILE_CHUNK}  "
@@ -1940,7 +1939,8 @@ if CONTENT_TYPE == "acapella":
             f"gpu_batch={REVERB_GPU_BATCH}  "
             f"device={getattr(reverb_router, 'device', '?')}"
         )
-        print()
+        print("Processing gender (batch)...")
+        emit_gg_processed(0, len(files), force=True)
 
         def _extract_worker(args):
 

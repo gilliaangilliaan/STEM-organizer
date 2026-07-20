@@ -327,13 +327,21 @@ class TrackRenamerApp(ctk.CTk):
             self._rules_fingerprint(self.rules)
             != self._applied_rules_fingerprint
         )
-        if pending == self._preview_stale:
-            return
-        self._preview_stale = pending
-        if pending:
-            self.preview_panel.cancel_preview_work()
-        self._set_preview_pending(pending)
+        if pending != self._preview_stale:
+            self._preview_stale = pending
+            if pending:
+                self.preview_panel.cancel_preview_work()
+            self._set_preview_pending(pending)
         self._update_footer()
+
+    def _selected_need_instrument_ml(self) -> bool:
+        """True when Auto-detect/Combo is on and selected tracks lack ML labels."""
+        if not rules_need_instrument_ml(self.rules):
+            return False
+        for track in self.tracks:
+            if track.selected and not str(getattr(track, "instrument", "") or "").strip():
+                return True
+        return False
 
     def _set_preview_pending(self, pending: bool) -> None:
         self.rules_panel.set_apply_pending(pending)
@@ -540,8 +548,9 @@ class TrackRenamerApp(ctk.CTk):
             and not self.demo_mode
             and selected_n > 0
         )
+        need_analyze = ml_on_rename and self._selected_need_instrument_ml()
         if complete:
-            if ml_on_rename and count == 0:
+            if need_analyze:
                 self.rename_btn.configure(
                     text=f"Analyze ({selected_n:,})"
                 )
@@ -702,11 +711,11 @@ class TrackRenamerApp(ctk.CTk):
 
         if self.demo_mode:
             renames = self.preview_panel.selected_renames()
-            messagebox.showinfo(
+            show_info_dark(
+                parent,
                 "Demo mode",
                 f"{len(renames)} files would be renamed.\n\n"
                 "Open a folder to rename real files on disk.",
-                parent=parent,
             )
             return
 
@@ -718,18 +727,18 @@ class TrackRenamerApp(ctk.CTk):
 
         renames = self.preview_panel.selected_renames()
         if not renames:
-            messagebox.showinfo(
+            show_info_dark(
+                parent,
                 "Nothing to rename",
                 "No selected files will change.",
-                parent=parent,
             )
             return
 
-        if not messagebox.askyesno(
+        if not ask_yes_no_dark(
+            parent,
             "Confirm rename",
             f"Rename {len(renames)} file(s) on disk?\n\n"
             "This cannot be undone automatically.",
-            parent=parent,
         ):
             return
 
@@ -772,7 +781,9 @@ class TrackRenamerApp(ctk.CTk):
             if errors
             else ""
         )
-        organize = messagebox.askyesno(
+        parent = self._dialog_parent_widget()
+        organize = ask_yes_no_dark(
+            parent,
             "Organize by prefix",
             f"Renamed {success} file(s).{error_note}\n\n"
             "Move the renamed files into folders based on their prefix?\n\n"
@@ -844,13 +855,14 @@ class TrackRenamerApp(ctk.CTk):
         summary: str,
         errors: list[str],
     ) -> None:
+        parent = self._dialog_parent_widget()
         if errors:
             details = "\n".join(errors[:10])
             if len(errors) > 10:
                 details += f"\n…and {len(errors) - 10} more."
-            messagebox.showwarning(title, f"{summary}\n\n{details}")
+            show_info_dark(parent, title, f"{summary}\n\n{details}")
         else:
-            messagebox.showinfo(title, summary)
+            show_info_dark(parent, title, summary)
 
     def _finish_file_operation(self) -> None:
         if self.folder_path:
