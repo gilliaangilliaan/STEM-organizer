@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -11,7 +12,15 @@ from typing import Any, Callable
 from track_renamer.engine.defaults import map_instrument_to_category
 from track_renamer.engine.models import OpRule, Rule, Track
 
-TAGGER_DIR = Path(__file__).resolve().parent.parent / "instrument_tagger"
+
+def _app_root() -> Path:
+    """Folder that holds instrument_tagger\\ + genre_gender_tagger\\ (exe dir when frozen)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+TAGGER_DIR = _app_root() / "instrument_tagger"
 TAGGER_SCRIPT = TAGGER_DIR / "instrument_tagger.py"
 
 # Bump when model/label set / primary-pick policy changes so stale cache dies.
@@ -26,7 +35,7 @@ ProgressCallback = Callable[[int, int], None]
 
 def resolve_tagger_python() -> Path | None:
     """Prefer shared genre_gender_tagger venv (one torch for both taggers)."""
-    root = TAGGER_DIR.parent
+    root = _app_root()
     candidates = (
         root / "genre_gender_tagger" / "venv" / "Scripts" / "python.exe",
         root / "genre_gender_tagger" / "venv" / "bin" / "python",
@@ -222,8 +231,8 @@ def enrich_tracks(
     if py is None or not TAGGER_SCRIPT.is_file():
         return cached_n, (
             "Instrument tagger not installed.\n"
-            "Run instrument_tagger\\install-deps.bat\n"
-            "(installs into shared genre_gender_tagger\\venv)."
+            "Run dist\\install-deps.bat and answer Yes to Rename Auto-detect\n"
+            "(shared venv: genre_gender_tagger\\venv — not under instrument_tagger\\)."
         )
 
     total = cached_n + len(pending)

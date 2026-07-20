@@ -44,6 +44,7 @@ APP_DIR = (
 SETTINGS_PATH = APP_DIR / "settings.json"
 PAIR_LOG_TAG = "__pair_log__"
 PROGRESS_TAG = "__progress__"
+GG_PROCESSED_TAG = "__gg_processed__"
 PANEL_TITLE = "Genre & Gender"
 _TQDM_PCT_RE = re.compile(
     r"(?P<pct>\d+(?:\.\d+)?)%\|.*?\|?\s*(?P<cur>\d+)/(?P<total>\d+)",
@@ -79,18 +80,42 @@ def _gg_log_tag(line: str) -> str:
     low = s.lower()
     if low.startswith("error") or low.startswith("[tagger exited"):
         return "err"
+    if s == "DONE":
+        return "ok"
     if low.startswith("[tagger") or low.startswith("stop requested"):
         return "warn"
+    if re.match(r"^=== .+ Summary ===$", s):
+        return "info"
     if s.startswith("===") and s.endswith("==="):
-        return "detail"
+        return "info"
     if _GG_BADGE_LINE_RE.match(s) or low.startswith("(confidence"):
         return "gg_result"
     if _GG_RESULT_KEY_RE.match(s):
         return "gg_result"
     if _GG_AUDIO_NAME_RE.search(s) and ":" not in s.split()[0]:
         return "gg_file"
-    if s.startswith("Processing") or s.startswith("Tagged:"):
-        return "detail"
+    if s.startswith("Tagged:") or s.startswith("  Tagged:"):
+        return "ok"
+    if s.startswith("  Passed:"):
+        return "ok"
+    if s.startswith(("  Skipped", "Skipped:")):
+        return "warn"
+    if s.startswith(
+        (
+            "  Total time:",
+            "  Files:",
+            "  Sec/file:",
+            "  Files/min:",
+            "  Peak VRAM:",
+            "  Results:",
+            "  Phase timing:",
+        )
+    ):
+        return "info"
+    if s.startswith("    ") and ":" in s:
+        return "warn"
+    if s.startswith("Processing"):
+        return "info"
     return "info"
 # Bundled beside the app (source tree or next to STEM-organizer.exe).
 TAGGER_DIR = APP_DIR / "genre_gender_tagger"
@@ -102,16 +127,16 @@ TIPS = {
     "gender_input": "Folder containing acapella FLAC/MP3/WAV files to tag with voice gender.",
     "include_subfolders": "Scan audio files in subfolders too, not just the selected folder itself.",
     "batch_mode": (
-        "Batch: fastest — many files share GPU batches; status bar shows "
-        "live n/total; LOG uses === file === plus genre/style badges "
-        "(dry/wet chip colors). "
-        "Per-file: same LOG shape, slower (no multi-file GPU packing)."
+        "Batch: fastest — many files share GPU batches. LOG shows one updating "
+        "Processed: n/total line (no per-file dump). Status bar tracks phase."
+    ),
+    "per_file_mode": (
+        "Per-file: slower — each file logs genre/style (or gender/reverb) live "
+        "as it finishes."
     ),
     "gender_batch_mode": (
-        "Batch: fastest — patches from many files share GPU batches "
-        "(ONNX DirectML EffNet + PyTorch reverb); status bar stays live "
-        "through extract/reverb/write. LOG uses Classify-style badges "
-        "(female/male, wet/dry). Per-file: same LOG, slower (still GPU)."
+        "Batch: fastest — patches from many files share GPU batches. LOG shows "
+        "one updating Processed: n/total line. Status bar tracks phase."
     ),
     "tag_style": (
         "Combined writes a single GENRE tag as 'Genre/Style'. "
@@ -709,7 +734,8 @@ class GenreGenderPanel(_ctk.CTkFrame):
             messagebox.showerror(PANEL_TITLE, "Input folder is missing or invalid.")
             return
         self._clear_log()
-        self._log(f"Starting genre tagger on: {input_dir}", "info")
+        self._log("Starting genre tagger:", "info")
+        self._log(input_dir, "info")
         self._stop_requested = False
         self._set_busy(True, "Tagging genre…")
         self._worker = threading.Thread(
@@ -737,7 +763,8 @@ class GenreGenderPanel(_ctk.CTkFrame):
             messagebox.showerror(PANEL_TITLE, "Input folder is missing or invalid.")
             return
         self._clear_log()
-        self._log(f"Starting gender tagger on: {input_dir}", "info")
+        self._log("Starting gender tagger:", "info")
+        self._log(input_dir, "info")
         self._stop_requested = False
         self._set_busy(True, "Tagging gender…")
         self._worker = threading.Thread(
@@ -897,6 +924,16 @@ class GenreGenderPanel(_ctk.CTkFrame):
 
     def _handle_tagger_line(self, line: str) -> None:
         """Forward log lines; drive host progress bar from tagger updates."""
+        if line.startswith("__gg_processed__\t") or line.startswith("__gg_processed__ "):
+            parts = line.split("\t") if "\t" in line else line.split()
+            try:
+                n = int(float(parts[1]))
+                total = int(float(parts[2]))
+            except (IndexError, ValueError):
+                return
+            self._host.log_queue.put((GG_PROCESSED_TAG, n, total))
+            return
+
         if line.startswith("__progress__\t") or line.startswith("__progress__ "):
             parts = line.split("\t") if "\t" in line else line.split()
             try:

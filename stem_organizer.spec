@@ -60,6 +60,7 @@ hiddenimports = [
     'single_instance',
     'track_renamer_panel',
     'genre_gender_panel',
+    'done_sound',
 ] + collect_submodules('track_renamer') + collect_submodules('customtkinter') + _ml_stdlib_imports
 
 a = Analysis(

@@ -482,6 +482,11 @@ class TrackRenamerApp(ctk.CTk):
                     )
                     self._refresh_preview()
                     return
+                elapsed = time.monotonic() - started_at
+                self.preview_panel.append_analyze_summary(
+                    elapsed_sec=elapsed,
+                    total=total_selected,
+                )
                 renames = self._compute_selected_renames()
                 self._set_busy(False)
                 if not renames:

@@ -1597,16 +1597,13 @@ DONE_SENTINEL = object()
 PROGRESS_TAG = '__progress__'
 PAIR_LOG_TAG = '__pair_log__'
 SDR_LOG_TAG = '__sdr_line__'
+GG_PROCESSED_TAG = '__gg_processed__'
 
 
 def _play_done_sound() -> None:
-    if sys.platform != 'win32':
-        return
-    try:
-        import winsound
-        winsound.PlaySound('SystemAsterisk', winsound.SND_ALIAS | winsound.SND_ASYNC)
-    except Exception:
-        pass
+    from done_sound import play_done_sound
+
+    play_done_sound()
 
 
 class Worker(threading.Thread):
@@ -1667,7 +1664,7 @@ class Worker(threading.Thread):
         folders_total = self._stats['folders_total']
         processed = sum(oc.values())
         self.log('')
-        self.log('=== Summary ===')
+        self.log('=== RMS Summary ===')
         self.log(f'  Total time: {format_elapsed(elapsed)}')
         if folders_total:
             self.log(
@@ -1709,7 +1706,7 @@ class Worker(threading.Thread):
                         self.log(f'      {label}')
         self._phase_timer.log_summary(self.log, ORGANIZE_PHASE_LABELS)
         self.log('')
-        self.log('Done.')
+        self.log('DONE')
 
     def stop(self):
         self._stop.set()
@@ -2207,7 +2204,7 @@ class SdrWorker(threading.Thread):
                 self.log(f'    {name}')
         self._phase_timer.log_summary(self.log, SDR_PHASE_LABELS)
         self.log('')
-        self.log('SI-SDR Done.')
+        self.log('DONE')
 
     def _process_song(
         self, stem_paths: dict[str, Path], display: str,
@@ -2901,7 +2898,7 @@ def _tint_hex(fg: str, base: str, amount: float) -> str:
 SDR_PASS_COLOR = '#7ee0a0'
 SDR_FAIL_COLOR = '#ff7a7a'
 SDR_LABEL_COLOR = '#d6dae8'
-SDR_DONE_LINE = 'SI-SDR Done.'
+SDR_DONE_LINE = 'DONE'
 
 INFO_ICON_SIZE = 16
 INFO_ICON_FONT = ('Segoe UI Semibold', 10)
@@ -7169,7 +7166,7 @@ class App(tk.Tk):
             self.log_text.insert('end', '\u200b\n', LOG_FOLDER_STEM_GAP_TAG)
         elif GG_HEADER_RE.match(line.strip()):
             self._gg_flush_pending_genre()
-            # Same dim as "Starting genre tagger on:" (info / fg_dim).
+            # Same dim as "Starting genre tagger:" (info / fg_dim).
             self.log_text.insert('end', line.strip() + '\n', 'info')
             # Air before first badge — match gap after bottom badge.
             self.log_text.insert('end', '\u200b\n', LOG_FOLDER_STEM_GAP_TAG)
@@ -7238,7 +7235,11 @@ class App(tk.Tk):
                         'gg_result',
                     }
                     use = tag if tag in allowed else 'info'
+                    if line.strip() == 'DONE':
+                        use = 'ok'
                     self.log_text.insert('end', line + '\n', use)
+                    if line.strip() == 'DONE':
+                        _play_done_sound()
         # Huge batch runs: trim oldest lines so the widget stays responsive.
         try:
             end_line = int(float(str(self.log_text.index('end-1c')).split('.')[0]))
@@ -7280,6 +7281,29 @@ class App(tk.Tk):
         self.log_text.yview_moveto(0)
         self.log_text.configure(state='disabled')
         self._pending_stem_block_gap = False
+        try:
+            self.log_text.mark_unset('_gg_processed')
+        except tk.TclError:
+            pass
+
+    def _gg_update_processed_line(self, n: int, total: int) -> None:
+        """Update single Batch progress line in LOG (Processed: n/total)."""
+        line = f'Processed: {int(n):,}/{int(total):,}'
+        self.log_text.configure(state='normal')
+        try:
+            start = self.log_text.index('_gg_processed')
+        except tk.TclError:
+            start = None
+        if start is not None:
+            self.log_text.delete(start, f'{start} lineend')
+            self.log_text.insert(start, line, 'info')
+        else:
+            self.log_text.insert('end', line, 'info')
+            self.log_text.mark_set('_gg_processed', 'end-1c linestart')
+            self.log_text.mark_gravity('_gg_processed', 'left')
+            self.log_text.insert('end', '\n')
+        self.log_text.see('end')
+        self.log_text.configure(state='disabled')
 
     def _save_sdr_log(self) -> None:
         path = filedialog.asksaveasfilename(
@@ -7301,11 +7325,56 @@ class App(tk.Tk):
     def _offer_sdr_after_rms(self) -> None:
         self._sdr_use_output_dir = True
         self.cls_notebook.set('SI-SDR')
-        messagebox.showinfo(
+        # CTkTabview.set() does not fire command= — sync StringVar + bottom bar.
+        self._class_tab.set('sdr')
+        self._update_action_buttons_for_tab()
+        self._refresh_cls_frame()
+        # Quiet dialog — MessageBox.showinfo also plays SystemAsterisk and
+        # would double the DONE sound from _append_log.
+        self._show_info_quiet(
             'Calculate SI-SDR?',
             'RMS classification is complete.\n\n'
             'Check the SI-SDR thresholds and settings before you hit Start SI-SDR calc.',
         )
+
+    def _show_info_quiet(self, title: str, message: str) -> None:
+        """Modal info without Windows MessageBox system sound."""
+        import customtkinter as ctk
+
+        win = ctk.CTkToplevel(self)
+        win.title(title)
+        win.transient(self)
+        win.resizable(False, False)
+        win.grab_set()
+        frame = ctk.CTkFrame(win, fg_color='transparent')
+        frame.pack(fill='both', expand=True, padx=20, pady=16)
+        ctk.CTkLabel(
+            frame,
+            text=message,
+            justify='left',
+            wraplength=420,
+            font=ctk.CTkFont(family='Segoe UI', size=13),
+        ).pack(anchor='w')
+        btn_row = ctk.CTkFrame(frame, fg_color='transparent')
+        btn_row.pack(fill='x', pady=(16, 0))
+
+        def _close() -> None:
+            try:
+                win.grab_release()
+            except tk.TclError:
+                pass
+            win.destroy()
+
+        ctk.CTkButton(btn_row, text='OK', width=88, command=_close).pack(side='right')
+        win.protocol('WM_DELETE_WINDOW', _close)
+        win.update_idletasks()
+        try:
+            x = self.winfo_rootx() + (self.winfo_width() - win.winfo_reqwidth()) // 2
+            y = self.winfo_rooty() + (self.winfo_height() - win.winfo_reqheight()) // 2
+            win.geometry(f'+{max(0, x)}+{max(0, y)}')
+        except tk.TclError:
+            pass
+        win.focus_force()
 
     def _job_finished(self):
         kind = self._worker_kind
@@ -7345,6 +7414,8 @@ class App(tk.Tk):
                         )
                     elif isinstance(msg, tuple) and len(msg) == 3 and msg[0] == PAIR_LOG_TAG:
                         self._append_pair_log(msg[1], msg[2])
+                    elif isinstance(msg, tuple) and len(msg) == 3 and msg[0] == GG_PROCESSED_TAG:
+                        self._gg_update_processed_line(msg[1], msg[2])
                     elif isinstance(msg, tuple) and len(msg) == 4 and msg[0] == SDR_LOG_TAG:
                         self._append_sdr_log_line(msg[1], msg[2], msg[3])
                     else:
@@ -7401,6 +7472,8 @@ class App(tk.Tk):
             low = line.lower()
             if '[error]' in low:
                 tag = 'err'
+            elif s == 'DONE':
+                tag = 'ok'
             elif '[warn]' in low or 'cuda oom' in low:
                 tag = 'warn'
             elif s.startswith('Done') or '    wrote ' in line or line.lstrip().startswith('wrote '):
@@ -7411,9 +7484,11 @@ class App(tk.Tk):
                 tag = 'deleted'
             elif line.startswith(('  Skipped', '  Not processed')):
                 tag = 'warn'
-            elif line.startswith(('  Total time:', '  Avg per folder:', '  Stems skipped')):
+            elif line.startswith(('  Total time:', '  Avg per folder:', '  Stems skipped', '  Files:', '  Sec/file:', '  Files/min:', '  Peak VRAM:', '  Results:', '  Tagged:')):
                 tag = 'info'
-            elif line.startswith('=== SI-SDR Summary'):
+            elif re.match(r'^=== .+ Summary ===\s*$', s):
+                tag = 'info'
+            elif line.startswith('=== SI-SDR Summary') or line.startswith('=== RMS Summary'):
                 tag = 'info'
             elif line.startswith('  Passed:'):
                 tag = 'ok'
@@ -7441,11 +7516,12 @@ class App(tk.Tk):
                 self.log_text.insert('end', '\u200b\n', LOG_FOLDER_STEM_GAP_TAG)
         self.log_text.see('end')
         self.log_text.configure(state='disabled')
-        if line.strip() == 'Done.':
-            self._rms_saw_done = True
-            _play_done_sound()
-        elif line.strip() == SDR_DONE_LINE:
-            _play_done_sound()
+        if s := line.strip():
+            if s in ('DONE', 'Done.'):
+                self._rms_saw_done = True
+                _play_done_sound()
+            elif s == SDR_DONE_LINE and SDR_DONE_LINE != 'DONE':
+                _play_done_sound()
 
 
 def _startup_tasks(set_status) -> None:

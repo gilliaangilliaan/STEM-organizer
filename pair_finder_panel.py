@@ -63,8 +63,10 @@ TIPS = {
     'instrumental': 'Folder containing instrumental FLAC or MP3 files.',
     'reference': 'Matching starts from the reference folder; each file looks for a partner in the other folder.',
     'include_subfolders': 'Scan FLAC/MP3 files in subfolders too, not just the selected folder itself.',
-    'pairs_output': 'Matched pairs are moved here (flat folder).',
-    'organize': 'Folder of matched FLAC/MP3 files to group into Artist - Title subfolders.',
+    'pairs_output': (
+        'Matched pairs are moved here (flat). Organize folder then groups them '
+        'into Artist - Title subfolders inside this same folder.'
+    ),
     'strictness': 'Higher = stricter tag matching. Compares artist and title separately; both must meet the threshold.',
     'filename_fallback': (
         'Parse artist/title from the filename only (e.g. Artist - Title (Acapella).mp3), '
@@ -125,7 +127,6 @@ class PairFinderPanel(ctk.CTkFrame):
         self.acapella_dir = tk.StringVar()
         self.instrumental_dir = tk.StringVar()
         self.pairs_output_dir = tk.StringVar()
-        self.organize_dir = tk.StringVar()
         self.reference_side = tk.StringVar(value='acapella')
         self.strictness = tk.DoubleVar(value=75.0)
         self.use_filename_fallback = tk.BooleanVar(value=True)
@@ -205,7 +206,7 @@ class PairFinderPanel(ctk.CTkFrame):
                     '1. Choose the Acapella and Instrumental source folders.\n'
                     '2. Choose where matched files should be moved.\n'
                     '3. Set the reference side and matching strictness.\n'
-                    '4. Click Find pairs, review the log, then organize the matched folder.',
+                    '4. Click Find pairs, review the log, then Organize folder.',
                 ),
                 (
                     'How matching works',
@@ -221,8 +222,9 @@ class PairFinderPanel(ctk.CTkFrame):
                 ),
                 (
                     'File safety',
-                    'Find pairs moves only confirmed matches into the output folder. Organize folder then groups '
-                    'those matched files into Artist - Title subfolders. Unmatched files remain in their source folder.',
+                    'Find pairs moves only confirmed matches into Pairs output. Organize folder then groups '
+                    'those files into Artist - Title subfolders inside Pairs output. '
+                    'Unmatched files remain in their source folder.',
                 ),
             ),
         )
@@ -326,10 +328,9 @@ class PairFinderPanel(ctk.CTkFrame):
         self._path_row(paths, 0, 'Acapella', self.acapella_dir, self._pick_acapella, self._open_acapella, TIPS['acapella'])
         self._path_row(paths, 1, 'Instrumental', self.instrumental_dir, self._pick_instrumental, self._open_instrumental, TIPS['instrumental'])
         self._path_row(paths, 2, 'Pairs output', self.pairs_output_dir, self._pick_pairs_output, self._open_pairs_output, TIPS['pairs_output'])
-        self._path_row(paths, 3, 'Organize in', self.organize_dir, self._pick_organize, self._open_organize, TIPS['organize'])
 
         ref_frame = ctk.CTkFrame(paths, fg_color='transparent')
-        ref_frame.grid(row=4, column=0, columnspan=4, sticky='w', pady=(8, 0))
+        ref_frame.grid(row=3, column=0, columnspan=4, sticky='w', pady=(8, 0))
         _ui = ctk_ui_font()
         ctk.CTkLabel(
             ref_frame, text='Reference folder', text_color=t['label'], font=_ui,
@@ -850,9 +851,6 @@ class PairFinderPanel(ctk.CTkFrame):
     def _pick_pairs_output(self) -> None:
         self._pick_dir(self.pairs_output_dir, 'Select pairs output folder')
 
-    def _pick_organize(self) -> None:
-        self._pick_dir(self.organize_dir, 'Select folder to organize')
-
     def _open_folder(self, var: tk.StringVar) -> None:
         path = Path(var.get().strip())
         if path.is_file():
@@ -875,9 +873,6 @@ class PairFinderPanel(ctk.CTkFrame):
 
     def _open_pairs_output(self) -> None:
         self._open_folder(self.pairs_output_dir)
-
-    def _open_organize(self) -> None:
-        self._open_folder(self.organize_dir)
 
     def _pick_align_stems_root(self) -> None:
         self._pick_dir(self.align_stems_root, 'Select stems root folder')
@@ -947,7 +942,13 @@ class PairFinderPanel(ctk.CTkFrame):
     def _run_export_list(self, root: Path, export_path: Path) -> None:
         try:
             count = export_song_list(root, export_path)
-            self._log(f'Exported {count:,} song folder name(s) to {export_path}', 'ok')
+            self._log_feature_summary(
+                'Export list',
+                lines=[
+                    (f'Names: {count:,}', 'ok'),
+                    (f'File: {export_path}', 'info'),
+                ],
+            )
             self._finish_worker(f'Done · {count:,} name(s) exported')
         except Exception:
             self._log(traceback.format_exc(), 'err')
@@ -989,10 +990,14 @@ class PairFinderPanel(ctk.CTkFrame):
                 with_original_dir=with_dir,
                 without_original_dir=without_dir,
             )
-            self._log(
-                f'Done · moved {moved:,} · skipped {skipped:,} · unmatched {unmatched:,} · '
-                f'rejected {rejected:,}',
-                'info',
+            self._log_feature_summary(
+                'Distribute originals',
+                lines=[
+                    (f'Moved: {moved:,}', 'ok'),
+                    (f'Skipped: {skipped:,}', 'warn' if skipped else 'info'),
+                    (f'Unmatched: {unmatched:,}', 'warn' if unmatched else 'info'),
+                    (f'Rejected: {rejected:,}', 'warn' if rejected else 'info'),
+                ],
             )
             self._finish_worker(f'Done · {moved:,} moved')
         except Exception:
@@ -1030,9 +1035,13 @@ class PairFinderPanel(ctk.CTkFrame):
                 on_log=self._report_log,
                 on_progress=self._report_progress,
             )
-            self._log(
-                f'Done · with original {moved_with:,} · without {moved_without:,} · skipped {skipped:,}',
-                'info',
+            self._log_feature_summary(
+                'Sort folders',
+                lines=[
+                    (f'With original: {moved_with:,}', 'ok'),
+                    (f'Without original: {moved_without:,}', 'info'),
+                    (f'Skipped: {skipped:,}', 'warn' if skipped else 'info'),
+                ],
             )
             self._finish_worker(f'Done · {moved_with + moved_without:,} sorted')
         except Exception:
@@ -1079,9 +1088,13 @@ class PairFinderPanel(ctk.CTkFrame):
                 on_log=self._report_log,
                 on_progress=self._report_progress,
             )
-            self._log(f'Aligned {len(results):,} folder(s)', 'ok')
-            if skipped:
-                self._log(f'Skipped {skipped:,} folder(s) (already aligned)', 'warn')
+            self._log_feature_summary(
+                'Align stems',
+                lines=[
+                    (f'Aligned: {len(results):,}', 'ok'),
+                    (f'Skipped (already aligned): {skipped:,}', 'warn' if skipped else 'info'),
+                ],
+            )
             self._finish_worker(f'Done · {len(results):,} aligned')
         except Exception:
             self._log(traceback.format_exc(), 'err')
@@ -1185,13 +1198,6 @@ class PairFinderPanel(ctk.CTkFrame):
             )
             threshold = strictness_to_threshold(strictness)
             fallback_note = 'filename only' if use_filename_fallback else 'tags only'
-            self._log(
-                f'Done · {ref_label} reference · {fallback_note} · threshold {threshold:.0%} · '
-                f'{len(result.pairs):,} pair(s) · '
-                f'{len(result.unmatched_reference):,} unmatched reference · '
-                f'{len(result.unmatched_partner):,} unmatched partner',
-                'info',
-            )
             if result.pairs:
                 show = min(25, len(result.pairs))
                 for match in result.pairs[:show]:
@@ -1216,6 +1222,16 @@ class PairFinderPanel(ctk.CTkFrame):
                 if len(result.unmatched_partner) > 20:
                     self._log(f'  … and {len(result.unmatched_partner) - 20} more', 'warn')
 
+            self._log_feature_summary(
+                'Find pairs',
+                lines=[
+                    (f'Reference: {ref_label} · {fallback_note}', 'info'),
+                    (f'Threshold: {threshold:.0%}', 'info'),
+                    (f'Pairs: {len(result.pairs):,}', 'ok'),
+                    (f'Unmatched reference: {len(result.unmatched_reference):,}', 'warn' if result.unmatched_reference else 'info'),
+                    (f'Unmatched partner: {len(result.unmatched_partner):,}', 'warn' if result.unmatched_partner else 'info'),
+                ],
+            )
             self._finish_worker(f'Done · {len(result.pairs)} pair(s) moved')
         except Exception:
             self._log(traceback.format_exc(), 'err')
@@ -1224,16 +1240,20 @@ class PairFinderPanel(ctk.CTkFrame):
     def _start_organize(self) -> None:
         if self._busy or self._host._organize_worker_active():
             return
-        folder = Path(self.organize_dir.get().strip())
+        folder = Path(self.pairs_output_dir.get().strip())
         if not folder.is_dir():
-            messagebox.showerror(PANEL_TITLE, 'Organize folder is missing or invalid.')
+            messagebox.showerror(
+                PANEL_TITLE,
+                'Pairs output folder is missing or invalid.\n'
+                'Find pairs writes there; Organize folder groups files inside it.',
+            )
             return
         strictness = float(self.strictness.get())
         use_filename_fallback = bool(self.use_filename_fallback.get())
         include_subfolders = bool(self.include_subfolders.get())
         ignore_rules = self._get_ignore_rules()
         self._clear_log()
-        self._log('Organizing matched files…', 'info')
+        self._log(f'Organizing matched files in:\n  {folder}', 'info')
         self._set_busy(True, 'Organizing…')
         self._worker = threading.Thread(
             target=self._run_organize,
@@ -1271,10 +1291,27 @@ class PairFinderPanel(ctk.CTkFrame):
                 self._log(f'✓ {dest_dir.name}/  →  {names}', 'ok')
             if len(moved) > show:
                 self._log(f'… and {len(moved) - show:,} more folder(s)', 'info')
+            self._log_feature_summary(
+                'Organize folder',
+                lines=[(f'Folders created: {len(moved):,}', 'ok')],
+            )
             self._finish_worker(f'Done · {len(moved)} folder(s) created')
         except Exception:
             self._log(traceback.format_exc(), 'err')
             self._finish_worker('Failed')
+
+    def _log_feature_summary(
+        self,
+        feature: str,
+        *,
+        lines: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """Unified Match & Align footer: === Feature Summary === … DONE."""
+        self._log(f'=== {feature} Summary ===', 'info')
+        for text, tag in (lines or ()):
+            self._log(text if text.startswith('  ') else f'  {text}', tag)
+        self._log('', 'info')
+        self._log('DONE', 'ok')
 
     def _finish_worker(self, status: str) -> None:
         self.after(0, lambda: self._set_busy(False, status))
@@ -1305,7 +1342,6 @@ class PairFinderPanel(ctk.CTkFrame):
             'acapella_dir': self.acapella_dir.get(),
             'instrumental_dir': self.instrumental_dir.get(),
             'pairs_output_dir': self.pairs_output_dir.get(),
-            'organize_dir': self.organize_dir.get(),
             'reference_side': self.reference_side.get(),
             'strictness': float(self.strictness.get()),
             'use_filename_fallback': bool(self.use_filename_fallback.get()),
@@ -1326,7 +1362,11 @@ class PairFinderPanel(ctk.CTkFrame):
         self.acapella_dir.set(display_path(str(data.get('acapella_dir', ''))))
         self.instrumental_dir.set(display_path(str(data.get('instrumental_dir', ''))))
         self.pairs_output_dir.set(display_path(str(data.get('pairs_output_dir', ''))))
-        self.organize_dir.set(display_path(str(data.get('organize_dir', ''))))
+        # Legacy: older builds had a separate organize_dir; prefer pairs_output.
+        if not self.pairs_output_dir.get().strip():
+            legacy = str(data.get('organize_dir', '') or '').strip()
+            if legacy:
+                self.pairs_output_dir.set(display_path(legacy))
         ref = data.get('reference_side', 'acapella')
         if ref in ('acapella', 'instrumental'):
             self.reference_side.set(ref)
@@ -1364,7 +1404,7 @@ class PairFinderPanel(ctk.CTkFrame):
         self.align_stems_root.trace_add('write', self._sync_align_sort_dirs)
         for var in (
             self.acapella_dir, self.instrumental_dir, self.pairs_output_dir,
-            self.organize_dir, self.reference_side, self.strictness,
+            self.reference_side, self.strictness,
             self.use_filename_fallback, self.include_subfolders,
             self.ignore_parentheses,
             self.ignore_square_brackets,

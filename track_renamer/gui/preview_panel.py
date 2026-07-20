@@ -1444,6 +1444,9 @@ class PreviewPanel(ctk.CTkFrame):
         inner.tag_configure("skip_badge", foreground=t["text_mute"])
         inner.tag_configure("skip_reason", foreground=t["text_mute"])
         inner.tag_configure("error_badge", foreground="#EF4444")
+        inner.tag_configure("ok", foreground="#22C55E")
+        inner.tag_configure("skip", foreground="#F59E0B")
+        inner.tag_configure("err", foreground="#EF4444")
         for name, color in DEFAULT_CATEGORY_COLORS.items():
             tag = f"badge_{name}"
             inner.tag_configure(tag, foreground=CATEGORY_BADGE_TEXT, background=color)
@@ -1608,8 +1611,39 @@ class PreviewPanel(ctk.CTkFrame):
         box.see("end")
         box.configure(state="disabled")
 
-    def end_analyze_log(self) -> None:
-        """Restore normal preview list chrome after analyze."""
+    def append_analyze_summary(self, *, elapsed_sec: float, total: int) -> None:
+        """Unified Auto-detect footer while ANALYZE LOG is still visible."""
+        if not self._analyze_log_active:
+            return
+        self._ensure_analyze_log_tags()
+        box = self.analyze_log
+        box.configure(state="normal")
+        counts = self._analyze_log_counts
+        apply_n = counts.get("apply", 0)
+        skip_n = counts.get("skip", 0)
+        err_n = counts.get("error", 0)
+        total_s = max(0, int(round(float(elapsed_sec or 0))))
+        m, s = divmod(total_s, 60)
+        elapsed = f"{m}:{s:02d}"
+        box.insert("end", "\n")
+        box.insert("end", "=== Instrument Summary ===\n", "status")
+        box.insert("end", f"  Total time: {elapsed}\n", "status")
+        box.insert("end", f"  Files: {total:,}\n", "status")
+        box.insert("end", f"  Apply: {apply_n:,}\n", "ok")
+        if skip_n:
+            box.insert("end", f"  Skip: {skip_n:,}\n", "skip")
+        if err_n:
+            box.insert("end", f"  Error: {err_n:,}\n", "err")
+        box.insert("end", "\n")
+        box.insert("end", "DONE\n", "ok")
+        box.see("end")
+        box.configure(state="disabled")
+        try:
+            from done_sound import play_done_sound
+
+            play_done_sound()
+        except Exception:
+            pass
         if not self._analyze_log_active:
             return
         self._analyze_log_active = False

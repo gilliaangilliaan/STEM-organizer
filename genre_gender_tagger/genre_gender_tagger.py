@@ -29,9 +29,53 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 
-def _status(msg):
-    """Immediate console feedback during slow startup imports."""
-    print(msg, flush=True)
+def _fmt_summary_elapsed(seconds: float) -> str:
+    """SI-SDR-style elapsed for unified summaries (m:ss or h:mm:ss)."""
+    total = max(0, int(round(float(seconds or 0))))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def print_feature_summary(
+    feature: str,
+    *,
+    elapsed: float,
+    files: int,
+    tagged: int | None = None,
+    skipped: int | None = None,
+    peak_vram_gb: float | None = None,
+    results_path=None,
+    extra_lines: list | None = None,
+) -> None:
+    """Unified LOG footer: === Feature Summary === … DONE."""
+    n = max(0, int(files or 0))
+    minutes = max(float(elapsed or 0) / 60.0, 1e-9)
+    print(flush=True)
+    print(f"=== {feature} Summary ===", flush=True)
+    print(f"  Total time: {_fmt_summary_elapsed(elapsed)}", flush=True)
+    print(f"  Files: {n}", flush=True)
+    if n > 0:
+        print(f"  Sec/file: {float(elapsed) / n:.3f}", flush=True)
+        print(f"  Files/min: {n / minutes:.2f}", flush=True)
+    if tagged is not None:
+        if skipped is not None:
+            print(f"  Tagged: {tagged} | Skipped: {skipped}", flush=True)
+        else:
+            print(f"  Tagged: {tagged}", flush=True)
+    if peak_vram_gb is not None:
+        print(f"  Peak VRAM: {float(peak_vram_gb):.2f} GB", flush=True)
+    if extra_lines:
+        for line in extra_lines:
+            text = str(line).strip()
+            if text:
+                print(f"  {text}", flush=True)
+    if results_path:
+        print(f"  Results: {results_path}", flush=True)
+    print(flush=True)
+    print("DONE", flush=True)
 
 
 _status(f"{APP_NAME} v{APP_VERSION}")
@@ -79,6 +123,33 @@ def _write_results_csv(path, rows) -> None:
 
 _STEM_PROGRESS_INTERVAL = 0.1
 _last_stem_progress_emit = 0.0
+_last_gg_processed_emit = 0.0
+_last_gg_processed_n = -1
+
+
+def emit_gg_processed(n, total, *, force: bool = False) -> None:
+    """One-line batch progress for STEM LOG: __gg_processed__ n total."""
+    global _last_gg_processed_emit, _last_gg_processed_n
+    total_i = int(total or 0)
+    if total_i <= 0:
+        return
+    n_i = int(max(0, min(total_i, int(n or 0))))
+    now = time.monotonic()
+    if (
+        not force
+        and n_i != total_i
+        and n_i == _last_gg_processed_n
+    ):
+        return
+    if (
+        not force
+        and n_i != total_i
+        and (now - _last_gg_processed_emit) < _STEM_PROGRESS_INTERVAL
+    ):
+        return
+    _last_gg_processed_emit = now
+    _last_gg_processed_n = n_i
+    print(f"__gg_processed__\t{n_i}\t{total_i}", flush=True)
 
 
 def emit_stem_progress(
@@ -2092,6 +2163,7 @@ if CONTENT_TYPE == "acapella":
                         force=True,
                         display_n=done_n,
                     )
+                    emit_gg_processed(done_n, files_total)
                     pbar.n = done_n
                     # Piped: host already got emit_stem_progress — avoid
                     # refresh overwriting soft pct with integer n/total.
@@ -2126,9 +2198,6 @@ if CONTENT_TYPE == "acapella":
                             else:
                                 skipped += 1
 
-                    if row and row.get("gender"):
-                        _log_gender_result(row)
-
                     _advance_finalize(
                         "writing" if WRITE_METADATA else "tagging"
                     )
@@ -2136,13 +2205,7 @@ if CONTENT_TYPE == "acapella":
                 del score_storage, errors, pending_patches, pending_map
                 gc.collect()
 
-        if WRITE_METADATA:
-
-            print("Tagged:", written, "| Skipped:", skipped)
-
-        else:
-
-            print("Metadata writing OFF")
+        emit_gg_processed(files_total, files_total, force=True)
 
         print()
 
@@ -2212,43 +2275,33 @@ if CONTENT_TYPE == "acapella":
 
         print()
 
-        if WRITE_METADATA:
-
-            print("Tagged:", written, "| Skipped:", skipped)
-
-        else:
-
-            print("Metadata writing OFF")
-
     elapsed = time.perf_counter() - start_time
-    minutes = max(elapsed / 60, 1e-9)
-
-    print()
-    print("==============================")
-    print("PERFORMANCE")
-    print("==============================")
-    print("Time:", round(elapsed, 2), "sec")
-    print("Files:", len(files))
-    print("Sec/file:", round(elapsed / len(files), 3))
-    print("Files/min:", round(len(files) / minutes, 2))
-
     out_csv = OUTPUT_CSV_GENDER
-
     _write_results_csv(out_csv, results)
 
-    print()
-    print("==============================")
-    print("DONE")
-    print("==============================")
-    print(out_csv)
+    peak = None
+    if device == "cuda":
+        try:
+            peak = round(torch.cuda.max_memory_allocated() / 1024**3, 2)
+        except Exception:
+            peak = None
 
+    extras = []
     if WRITE_METADATA:
-
-        print(f"{reverb_mode_label} tags written:", written)
-
+        extras.append(f"{reverb_mode_label} tags written: {written}")
     else:
+        extras.append("METADATA UNTOUCHED (WRITE_METADATA=False)")
 
-        print("METADATA UNTOUCHED (WRITE_METADATA=False)")
+    print_feature_summary(
+        "Gender",
+        elapsed=elapsed,
+        files=len(files),
+        tagged=written if WRITE_METADATA else None,
+        skipped=skipped if WRITE_METADATA else None,
+        peak_vram_gb=peak,
+        results_path=out_csv,
+        extra_lines=extras,
+    )
 
     sys.exit(0)
 
@@ -2835,18 +2888,12 @@ def _log_genre_from_scores(index, scores_tensor):
 
 
 def _store_gpu_scores(scores, mapping):
-    """Accumulate clip scores; LOG each file once its batch lands."""
+    """Accumulate clip scores (batch mode: no per-file LOG spam)."""
     global total_clips
     total_clips += len(mapping)
-    by_idx = {}
     for score, idx in zip(scores, mapping):
         score_storage.setdefault(idx, []).append(score)
-        by_idx.setdefault(idx, True)
-    for idx in by_idx:
-        _log_genre_from_scores(
-            idx,
-            torch.stack(score_storage[idx]),
-        )
+    emit_gg_processed(len(score_storage), len(files))
 
 
 if BATCH_MODE:
@@ -2924,7 +2971,7 @@ if BATCH_MODE:
         )
         _store_gpu_scores(scores, mapping)
 
-
+    emit_gg_processed(len(files), len(files), force=True)
 
     print()
 
@@ -3150,14 +3197,6 @@ if WRITE_METADATA:
             skipped += 1
 
 
-    print(
-        "Tagged:",
-        written,
-        "| Skipped:",
-        skipped
-    )
-
-
 else:
 
     print()
@@ -3169,101 +3208,33 @@ else:
 
 
 # ==========================================================
-# PERFORMANCE
+# SUMMARY
 # ==========================================================
 
-elapsed = (
-    time.perf_counter()
-    -
-    start_time
-)
+elapsed = time.perf_counter() - start_time
 
-minutes = elapsed / 60
-
-
-print()
-
-print("==============================")
-print("PERFORMANCE")
-print("==============================")
-
-print(
-    "Time:",
-    round(
-        elapsed,
-        2
-    ),
-    "sec"
-)
-
-
-print(
-    "Files:",
-    len(files)
-)
-
-
-print(
-    "Sec/file:",
-    round(
-        elapsed / len(files),
-        3
-    )
-)
-
-
-print(
-    "Files/min:",
-    round(
-        len(files) / minutes,
-        2
-    )
-)
-
-
+peak = None
 if device == "cuda":
-
-    print(
-        "Peak VRAM:",
-        round(
-            torch.cuda.max_memory_allocated()
-            /
-            1024**3,
-            2
-        ),
-        "GB"
-    )
-
-
-
-
-# ==========================================================
-# SAVE
-# ==========================================================
+    try:
+        peak = round(torch.cuda.max_memory_allocated() / 1024**3, 2)
+    except Exception:
+        peak = None
 
 _write_results_csv(OUTPUT_CSV, results)
 
-
-print()
-
-print("==============================")
-print("DONE")
-print("==============================")
-
-print(
-    OUTPUT_CSV
-)
-
-
+extras = []
 if DRY_RUN:
-
-    print(
-        "DRY RUN flag set (banner only)"
-    )
-
-
+    extras.append("DRY RUN flag set (banner only)")
 if not WRITE_METADATA:
+    extras.append("METADATA UNTOUCHED (WRITE_METADATA=False)")
 
-    print(
-        "METADATA UNTOUCHED (WRITE_METADATA=False)"
-    )
+print_feature_summary(
+    "Genre",
+    elapsed=elapsed,
+    files=len(files),
+    tagged=written if WRITE_METADATA else None,
+    skipped=skipped if WRITE_METADATA else None,
+    peak_vram_gb=peak,
+    results_path=OUTPUT_CSV,
+    extra_lines=extras,
+)
