@@ -5163,6 +5163,10 @@ class App(tk.Tk):
             panel = TrackRenamerPanel(holder, host=self)
             panel.pack(fill='both', expand=True)
             self.renamer_panel = panel
+        except Exception:
+            traceback.print_exc()
+            self._show_rename_veil('Rename failed to load — see console.')
+            return
         finally:
             self._renamer_building = False
         self._poll_renamer_compute()

@@ -510,8 +510,9 @@ class PreviewPanel(ctk.CTkFrame):
             ("<Right>", self._on_global_seek_fwd),
             ("<space>", self._on_global_space),
         )
+        # CTkFrame.bind_all raises — use plain tk.Canvas (same Tk interpreter).
         for seq, handler in self._global_key_bindings:
-            self.bind_all(seq, handler, add="+")
+            self.canvas.bind_all(seq, handler, add="+")
         self.bind("<Destroy>", self._on_preview_destroy, add="+")
 
         self.sticky_folder_label = ctk.CTkLabel(
