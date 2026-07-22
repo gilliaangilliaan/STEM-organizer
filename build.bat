@@ -119,7 +119,7 @@ copy /Y "instrument_tagger\instrument_tagger.py" "%OUT%\instrument_tagger\" >nul
 if exist "instrument_tagger\passt_mel.py" copy /Y "instrument_tagger\passt_mel.py" "%OUT%\instrument_tagger\" >nul
 if exist "instrument_tagger\install-deps.bat" copy /Y "instrument_tagger\install-deps.bat" "%OUT%\instrument_tagger\" >nul
 
-REM ffmpeg is NOT bundled by the .spec — install-deps.bat downloads it next to the exe after build.
+REM ffmpeg is NOT bundled by the .spec - install-deps.bat downloads it next to the exe after build.
 REM If a local ffmpeg\ already exists (dev machine), copy it for convenience:
 if exist "ffmpeg\ffmpeg.exe" if not exist "%OUT%\ffmpeg\ffmpeg.exe" (
     echo   Copying ffmpeg\ ...
