@@ -10,7 +10,7 @@ REM Spec:  stem_organizer_py6.spec  (onedir under dist\STEM-organizer\)
 REM
 REM After a successful build:
 REM   1. Open dist\STEM-organizer\
-REM   2. Double-click install-deps.bat  (picks CUDA 12.4 / CPU / CUDA 12.8)
+REM   2. Double-click install-deps.bat  (Demucs + ffmpeg; optional taggers)
 REM   3. Run STEM-organizer.exe
 REM =============================================================================
 
@@ -119,7 +119,8 @@ copy /Y "instrument_tagger\instrument_tagger.py" "%OUT%\instrument_tagger\" >nul
 if exist "instrument_tagger\passt_mel.py" copy /Y "instrument_tagger\passt_mel.py" "%OUT%\instrument_tagger\" >nul
 if exist "instrument_tagger\install-deps.bat" copy /Y "instrument_tagger\install-deps.bat" "%OUT%\instrument_tagger\" >nul
 
-REM ffmpeg is already collected by the .spec when present; ensure copy if missed
+REM ffmpeg is NOT bundled by the .spec — install-deps.bat downloads it next to the exe after build.
+REM If a local ffmpeg\ already exists (dev machine), copy it for convenience:
 if exist "ffmpeg\ffmpeg.exe" if not exist "%OUT%\ffmpeg\ffmpeg.exe" (
     echo   Copying ffmpeg\ ...
     xcopy /E /I /Y "ffmpeg" "%OUT%\ffmpeg" >nul

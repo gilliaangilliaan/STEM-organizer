@@ -10,11 +10,11 @@ datas = []
 datas += collect_data_files('PySide6', include_py_files=False)
 binaries = []
 
-# Bundle the logo + bundled ffmpeg + tagger scripts (not the venvs/models).
+# Bundle the logo + tagger scripts (not the venvs/models).
 datas += [('logo.png', '.')]
 datas += [('logo.ico', '.')]
 # settings.json is user-local (created at runtime by SettingsStore); do not bundle.
-datas += [('ffmpeg', 'ffmpeg')]
+# ffmpeg is installed next to the exe by install-deps.bat; do not bundle.
 datas += [('genre_gender_tagger/genre_gender_tagger.py', 'genre_gender_tagger')]
 datas += [('genre_gender_tagger/vocal_reverb.py', 'genre_gender_tagger')]
 datas += [('genre_gender_tagger/requirements.txt', 'genre_gender_tagger')]
