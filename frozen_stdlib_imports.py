@@ -26,7 +26,23 @@ _ML_STDLIB_SKIP = frozenset({
     'venv',
     'tkinter',
     '__pycache__',
+    # CPython frozen/demo stubs — not real packaging targets (PyInstaller
+    # hard-fails on missing hiddenimports like __phello__.foo).
+    '__phello__',
+    '__hello__',
+    'antigravity',
+    'this',
 })
+
+
+def _skip_stdlib_part(name: str) -> bool:
+    """True if this path segment should be omitted from hiddenimports."""
+    if name in _ML_STDLIB_SKIP or name.startswith('test'):
+        return True
+    # Other __dunder__ demo/frozen packages (keep __future__).
+    if name.startswith('__') and name.endswith('__') and name != '__future__':
+        return True
+    return False
 
 # Generous curated set for runtime ensure_* (and Analysis when traced from entry).
 _ML_STDLIB_MODULES = (
@@ -239,7 +255,8 @@ _ML_STDLIB_MODULES = (
 def iter_ml_stdlib_module_names(lib_root: Path | None = None) -> list[str]:
     """Nearly all stdlib module names under Lib/ for PyInstaller hiddenimports.
 
-    Skips test suites, idle, venv, tkinter. Call from the .spec at build time.
+    Skips test suites, idle, venv, tkinter, and CPython demo/frozen stubs
+    (``__phello__``, ``__hello__``, etc.). Call from the .spec at build time.
     """
     root = lib_root if lib_root is not None else Path(sys.base_prefix) / 'Lib'
     if not root.is_dir():
@@ -247,7 +264,7 @@ def iter_ml_stdlib_module_names(lib_root: Path | None = None) -> list[str]:
 
     names: list[str] = []
     for entry in sorted(root.iterdir()):
-        if entry.name in _ML_STDLIB_SKIP or entry.name.startswith('test'):
+        if _skip_stdlib_part(entry.name):
             continue
         if entry.is_dir():
             if not (entry / '__init__.py').is_file():
@@ -256,13 +273,14 @@ def iter_ml_stdlib_module_names(lib_root: Path | None = None) -> list[str]:
             for py in sorted(entry.rglob('*.py')):
                 if py.name == '__init__.py':
                     continue
-                if any(part in _ML_STDLIB_SKIP or part.startswith('test')
+                if any(_skip_stdlib_part(part)
                        for part in py.relative_to(root).parts):
                     continue
                 rel = py.relative_to(root).with_suffix('')
                 names.append('.'.join(rel.parts))
         elif entry.suffix == '.py' and entry.name != '__init__.py':
-            names.append(entry.stem)
+            if not _skip_stdlib_part(entry.stem):
+                names.append(entry.stem)
     return names
 
 
