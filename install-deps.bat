@@ -38,30 +38,58 @@ if errorlevel 1 (
     exit /b 1
 )
 
-python -c "import sys; raise SystemExit(0 if sys.version_info[:2] in ((3,10),(3,11)) else 1)"
-if errorlevel 1 (
-    echo ERROR: need Python 3.10 or 3.11. Got:
-    python --version
-    echo Tip: py -3.11 "%~f0"
+REM Resolve host Python once (full path). Frozen + source installs use this.
+set "HOST_PY="
+for /f "delims=" %%P in ('where python 2^>nul') do (
+    set "HOST_PY=%%P"
+    goto host_py_found
+)
+:host_py_found
+if not defined HOST_PY (
+    echo ERROR: python not on PATH.
+    pause
+    exit /b 1
+)
+REM Avoid nested quotes around "%HOST_PY%" inside for /f (breaks cmd parsing).
+for /f "tokens=1,2" %%A in ('python -c "import sys; print(sys.version_info[0], sys.version_info[1])"') do set "HOST_VER=%%A.%%B"
+if not defined HOST_VER (
+    echo ERROR: could not read Python version from:
+    echo   %HOST_PY%
     pause
     exit /b 1
 )
 
+"%HOST_PY%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] in ((3,10),(3,11)) else 1)"
+if errorlevel 1 (
+    echo ERROR: need Python 3.10 or 3.11. Got:
+    "%HOST_PY%" --version
+    echo Install from https://www.python.org/downloads/ - tick Add to PATH.
+    echo Then re-run with that interpreter, e.g. py -3.10 "%~f0"
+    pause
+    exit /b 1
+)
+
+set "REQ_VER="
 if exist "%~dp0python-version.txt" (
-    python -c "import sys; from pathlib import Path; req=Path(r'%~dp0python-version.txt').read_text(encoding='utf-8').strip(); cur=f'{sys.version_info[0]}.{sys.version_info[1]}'; sys.exit(0 if cur==req else 1)"
-    if errorlevel 1 (
-        echo ERROR: Python mismatch. This folder expects:
-        type "%~dp0python-version.txt"
-        echo You have:
-        python --version
-        echo Tip: py -3.11 "%~f0"
+    for /f "usebackq delims=" %%R in ("%~dp0python-version.txt") do set "REQ_VER=%%R"
+)
+if defined REQ_VER (
+    if /I not "%HOST_VER%"=="%REQ_VER%" (
+        echo ERROR: Python mismatch. This folder expects Python %REQ_VER%.
+        echo You have: %HOST_VER%  ^(%HOST_PY%^)
+        echo Install Python %REQ_VER% from https://www.python.org/downloads/ - tick Add to PATH.
+        echo Then re-run: py -%REQ_VER% "%~f0"
         pause
         exit /b 1
     )
 ) else if exist "%~dp0STEM-organizer.exe" (
-    python -c "import sys; raise SystemExit(0 if sys.version_info[:2]==(3,11) else 1)"
-    if errorlevel 1 (
-        echo ERROR: this .exe needs Python 3.11. Tip: py -3.11 "%~f0"
+    REM Legacy unmarked builds default to 3.11 ABI (see deps_bootstrap.LEGACY_PREBUILT_PYTHON).
+    if /I not "%HOST_VER%"=="3.11" (
+        echo ERROR: this .exe needs Python 3.11 ^(no python-version.txt; legacy default^).
+        echo You have: %HOST_VER%  ^(%HOST_PY%^)
+        echo Install Python 3.11 from https://www.python.org/downloads/ - tick Add to PATH.
+        echo Then re-run: py -3.11 "%~f0"
+        echo Do not point at a missing Python311 path - install 3.11 first.
         pause
         exit /b 1
     )
@@ -113,11 +141,18 @@ if exist "%~dp0STEM-organizer.exe" set "USE_SITE=1"
 
 if "%USE_SITE%"=="1" (
     set "DEST=%~dp0site-packages"
-    set "PY=python"
+    set "PY=%HOST_PY%"
 ) else (
+    if exist "%~dp0.venv\Scripts\python.exe" (
+        "%~dp0.venv\Scripts\python.exe" -c "import sys; v='%HOST_VER%'.split('.'); raise SystemExit(0 if sys.version_info[:2]==(int(v[0]),int(v[1])) else 1)" 1>nul 2>nul
+        if errorlevel 1 (
+            echo Existing .venv is broken or wrong Python - recreating with %HOST_VER% ...
+            rmdir /S /Q "%~dp0.venv" 2>nul
+        )
+    )
     if not exist "%~dp0.venv\Scripts\python.exe" (
         echo Creating .venv ...
-        python -m venv "%~dp0.venv"
+        "%HOST_PY%" -m venv "%~dp0.venv"
         if errorlevel 1 (
             echo ERROR: failed to create .venv
             pause
@@ -150,18 +185,8 @@ if "%USE_SITE%"=="1" (
     echo Mode: source - install into .venv
 )
 echo Install into: %DEST%
-if "%USE_SITE%"=="1" (
-    for /f "delims=" %%P in ('where python 2^>nul') do (
-        echo Python: %%P
-        goto python_shown
-    )
-    echo Python: ^(python on PATH^)
-) else (
-    echo Python: %PY%
-)
-:python_shown
-echo.
-python --version
+echo Python: %HOST_PY%  ^(%HOST_VER% detected^)
+if /I not "%USE_SITE%"=="1" echo Venv: %PY%
 echo.
 goto dest_ok
 
@@ -261,13 +286,8 @@ REM Clean pip helper - system Python often has leftover ML pkgs that make
 REM pip print fake conflicts on `pip install -t`.
 if not defined DEST goto bad_dest
 if "%DEST%"=="" goto bad_dest
-set "PIP_VENV=%TEMP%\stem-organizer-pip-venv"
-if not exist "%PIP_VENV%\Scripts\python.exe" (
-    echo Preparing clean pip helper ...
-    python -m venv "%PIP_VENV%"
-    if errorlevel 1 goto failed
-)
-set "PIP_PY=%PIP_VENV%\Scripts\python.exe"
+call :ensure_pip_helper
+if errorlevel 1 goto failed
 "%PIP_PY%" -m pip install -q -U pip
 if errorlevel 1 goto failed
 
@@ -294,7 +314,7 @@ if errorlevel 1 goto failed
 "%PIP_PY%" -m pip install demucs -t "%DEST%" --upgrade --no-cache-dir --no-deps
 if errorlevel 1 goto failed
 
-python -c "import sys; sys.path.insert(0, r'%DEST%'); import demucs" 2>nul
+"%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import demucs" 2>nul
 if errorlevel 1 (
     echo demucs needs torchaudio - installing ...
     "%PIP_PY%" -m pip install torchaudio --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-cache-dir --no-deps
@@ -309,14 +329,14 @@ if /I "%TORCH_LABEL%"=="CPU" (
 
 echo [4/4] verify ...
 if /I "%TORCH_LABEL%"=="CPU" (
-    python -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import soundfile; import demucs; v=torch.__version__; assert '+cpu' in v, f'expected CPU torch, got {v}'; print('OK torch', v)"
+    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import soundfile; import demucs; v=torch.__version__; assert '+cpu' in v, f'expected CPU torch, got {v}'; print('OK torch', v)"
 ) else (
-    python -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import soundfile; import demucs; print('OK torch', torch.__version__)"
+    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import soundfile; import demucs; print('OK torch', torch.__version__)"
 )
 if errorlevel 1 goto failed
 
 if /I not "%TORCH_LABEL%"=="CPU" (
-    python "%~dp0verify_torch_install.py"
+    "%HOST_PY%" "%~dp0verify_torch_install.py"
     if errorlevel 1 (
         echo WARNING: PyTorch may not match this GPU. App can still run on CPU.
         if /I "%TORCH_LABEL%"=="CUDA 12.4" echo For RTX 50-series: delete site-packages\ and re-run, pick 3.
@@ -333,7 +353,7 @@ for %%F in ("%DEST%\_soundfile_data\libsndfile*.dll") do (
     if not exist "%DEST%\_soundfile_data\libsndfile.dll" copy /Y "%%F" "%DEST%\_soundfile_data\libsndfile.dll" >nul
 )
 
-python -c "import sys; v=f'{sys.version_info[0]}.{sys.version_info[1]}\n'; open(r'%DEST%\.python-version-used','w',encoding='utf-8').write(v); open(r'%~dp0python-version.txt','w',encoding='utf-8').write(v)"
+"%HOST_PY%" -c "import sys; v=f'{sys.version_info[0]}.{sys.version_info[1]}\n'; open(r'%DEST%\.python-version-used','w',encoding='utf-8').write(v); open(r'%~dp0python-version.txt','w',encoding='utf-8').write(v)"
 
 :ffmpeg_section
 set "FFMPEG_DIR=%~dp0ffmpeg"
@@ -428,16 +448,11 @@ goto after_inst
 :install_tagger_site
 echo === Genre ^& Gender + Rename deps into site-packages ===
 if not defined PIP_PY (
-    set "PIP_VENV=%TEMP%\stem-organizer-pip-venv"
-    if not exist "%PIP_VENV%\Scripts\python.exe" (
-        echo Preparing clean pip helper ...
-        python -m venv "%PIP_VENV%"
-        if errorlevel 1 (
-            echo WARNING: could not create pip helper - skipping tagger extras.
-            goto after_inst
-        )
+    call :ensure_pip_helper
+    if errorlevel 1 (
+        echo WARNING: could not create pip helper - skipping tagger extras.
+        goto after_inst
     )
-    set "PIP_PY=%PIP_VENV%\Scripts\python.exe"
 )
 if not defined PIP_PY goto after_inst
 if "%PIP_PY%"=="" goto after_inst
@@ -474,3 +489,33 @@ echo.
 echo ERROR: install failed. Check messages above.
 pause
 exit /b 1
+
+REM --- Ensure %TEMP%\stem-organizer-pip-venv matches HOST_PY (major.minor) ---
+REM Stale helper from another Python (e.g. 3.11 home while PATH is 3.10) makes
+REM the Windows venv launcher print: No Python at '"C:\...\Python311\python.exe"'
+:ensure_pip_helper
+set "PIP_VENV=%TEMP%\stem-organizer-pip-venv"
+set "PIP_PY=%PIP_VENV%\Scripts\python.exe"
+if not exist "%PIP_PY%" goto pip_helper_create
+"%PIP_PY%" -c "import sys; v='%HOST_VER%'.split('.'); raise SystemExit(0 if sys.version_info[:2]==(int(v[0]),int(v[1])) else 1)" 1>nul 2>nul
+if not errorlevel 1 exit /b 0
+echo Pip helper venv is broken or wrong Python - recreating with %HOST_VER% ...
+rmdir /S /Q "%PIP_VENV%" 2>nul
+
+:pip_helper_create
+echo Preparing clean pip helper ...
+"%HOST_PY%" -m venv "%PIP_VENV%"
+if errorlevel 1 (
+    echo ERROR: could not create pip helper with:
+    echo   %HOST_PY%
+    exit /b 1
+)
+set "PIP_PY=%PIP_VENV%\Scripts\python.exe"
+"%PIP_PY%" -c "import sys; v='%HOST_VER%'.split('.'); raise SystemExit(0 if sys.version_info[:2]==(int(v[0]),int(v[1])) else 1)" 1>nul 2>nul
+if errorlevel 1 (
+    echo ERROR: pip helper still does not run under Python %HOST_VER%.
+    echo No Python at %HOST_PY% - install that version, or delete:
+    echo   %PIP_VENV%
+    exit /b 1
+)
+exit /b 0
