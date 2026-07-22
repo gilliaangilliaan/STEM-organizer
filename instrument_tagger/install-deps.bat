@@ -12,6 +12,9 @@ echo.
 echo Installs into shared genre_gender_tagger\venv
 echo ^(run Genre ^& Gender install first if that venv is empty^).
 echo.
+echo Frozen STEM-organizer.exe: use root install-deps.bat beside the .exe
+echo instead ^(puts hear21passt into site-packages\^).
+echo.
 
 where python >nul 2>&1
 if errorlevel 1 (

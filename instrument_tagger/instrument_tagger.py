@@ -172,7 +172,10 @@ def load_backend(status=_status) -> _PasstOpenmicBackend:
     except ImportError as exc:
         raise SystemExit(
             "\nERROR: hear21passt not installed.\n"
-            "  Run instrument_tagger\\install-deps.bat\n"
+            "  Frozen build: run install-deps.bat beside STEM-organizer.exe\n"
+            "    (installs hear21passt into site-packages\\).\n"
+            "  From source: run instrument_tagger\\install-deps.bat\n"
+            "    (or root install-deps.bat).\n"
             f"  detail: {exc}\n"
         ) from exc
 

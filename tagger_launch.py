@@ -39,7 +39,18 @@ def tagger_app_root() -> Path:
 
 
 def genre_gender_dir() -> Path:
-    return tagger_app_root() / "genre_gender_tagger"
+    """``genre_gender_tagger`` beside the exe, or under ``_internal`` when frozen."""
+    root = tagger_app_root()
+    candidates = [root / "genre_gender_tagger"]
+    if is_frozen():
+        candidates.append(root / "_internal" / "genre_gender_tagger")
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "genre_gender_tagger")
+    for path in candidates:
+        if (path / "genre_gender_tagger.py").is_file():
+            return path
+    return candidates[0]
 
 
 def genre_gender_script() -> Path:
@@ -47,7 +58,17 @@ def genre_gender_script() -> Path:
 
 
 def instrument_tagger_dir() -> Path:
-    return tagger_app_root() / "instrument_tagger"
+    root = tagger_app_root()
+    candidates = [root / "instrument_tagger"]
+    if is_frozen():
+        candidates.append(root / "_internal" / "instrument_tagger")
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "instrument_tagger")
+    for path in candidates:
+        if (path / "instrument_tagger.py").is_file():
+            return path
+    return candidates[0]
 
 
 def instrument_tagger_script() -> Path:
@@ -171,7 +192,11 @@ def resolve_tagger_python() -> Path | None:
 
 
 def tagger_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
-    """Env for tagger spawn; sets PYTHONPATH to site-packages when frozen."""
+    """Env for tagger spawn; sets PYTHONPATH to site-packages when frozen.
+
+    Host Python (not the .exe) must see hear21passt / onnxruntime wheels
+    installed by root install-deps.bat into ``site-packages\\``.
+    """
     env = dict(base if base is not None else os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -180,11 +205,15 @@ def tagger_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
     site = _site_packages()
     if site is None:
         return env
-    entry = str(site)
+    try:
+        entry = str(site.resolve())
+    except OSError:
+        entry = str(site)
     existing = env.get("PYTHONPATH", "")
     parts = [p for p in existing.split(os.pathsep) if p]
-    if entry not in parts:
-        env["PYTHONPATH"] = entry + (os.pathsep + existing if existing else "")
+    # Always put site-packages first so Auto-detect finds hear21passt.
+    parts = [p for p in parts if os.path.normcase(p) != os.path.normcase(entry)]
+    env["PYTHONPATH"] = entry + (os.pathsep + os.pathsep.join(parts) if parts else "")
     return env
 
 

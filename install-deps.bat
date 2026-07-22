@@ -200,9 +200,11 @@ exit /b 1
 if "%USE_SITE%"=="1" if exist "%DEST%\torch\__init__.py" (
     choice /C YN /N /M "site-packages already has PyTorch. Reinstall? [Y/N]: "
     if errorlevel 2 (
-        echo Cancelled.
-        pause
-        exit /b 0
+        echo Keeping existing PyTorch / core packages.
+        echo Still installing Genre ^& Gender + Rename Auto-detect extras...
+        set "TORCH_LABEL=existing"
+        set "STEM_GG_TORCH=2"
+        goto ffmpeg_section
     )
     echo.
 )
@@ -470,12 +472,18 @@ if errorlevel 1 echo WARNING: hear21passt install reported errors - continuing.
 if errorlevel 1 echo WARNING: timm install reported errors - continuing.
 "%PIP_PY%" -m pip install pyyaml huggingface_hub safetensors packaging -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 echo WARNING: PaSST helper deps reported errors - continuing.
+"%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import hear21passt; print('OK hear21passt')"
+if errorlevel 1 (
+    echo WARNING: hear21passt not importable from site-packages - Rename Auto-detect will fail.
+    echo Fix: re-run this install-deps.bat beside STEM-organizer.exe ^(same folder as the .exe^).
+)
 
 :after_inst
 echo.
 echo All done (%TORCH_LABEL%).
 if "%USE_SITE%"=="1" (
     echo Start STEM-organizer.exe in this folder.
+    echo Rename Auto-detect needs hear21passt in site-packages\ ^(installed above^).
 ) else (
     echo Run from source:
     echo     .venv\Scripts\python.exe run_stem_organizer.py
