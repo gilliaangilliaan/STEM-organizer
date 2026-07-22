@@ -13,9 +13,25 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import sys
 import warnings
 from pathlib import Path
+
+
+def _bootstrap_sibling_site_packages() -> None:
+    """Frozen dist: prefer ``../site-packages`` even if PYTHONPATH was dropped."""
+    here = Path(__file__).resolve().parent
+    for site in (here.parent / "site-packages", here.parent.parent / "site-packages"):
+        if not site.is_dir():
+            continue
+        entry = str(site)
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+        break
+
+
+_bootstrap_sibling_site_packages()
 
 import numpy as np
 import soundfile as sf
@@ -170,12 +186,17 @@ def load_backend(status=_status) -> _PasstOpenmicBackend:
 
         _passt_mod.first_RUN = False
     except ImportError as exc:
+        site_hint = Path(__file__).resolve().parent.parent / "site-packages"
+        missing_dir = not (site_hint / "hear21passt").is_dir()
         raise SystemExit(
             "\nERROR: hear21passt not installed.\n"
             "  Frozen build: run install-deps.bat beside STEM-organizer.exe\n"
-            "    (installs hear21passt into site-packages\\).\n"
+            "    (must create site-packages\\hear21passt\\).\n"
             "  From source: run instrument_tagger\\install-deps.bat\n"
             "    (or root install-deps.bat).\n"
+            f"  looked for: {site_hint / 'hear21passt'}"
+            f" ({'MISSING' if missing_dir else 'present but import failed'})\n"
+            f"  PYTHONPATH: {os.environ.get('PYTHONPATH', '') or '(empty)'}\n"
             f"  detail: {exc}\n"
         ) from exc
 

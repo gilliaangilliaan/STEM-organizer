@@ -459,23 +459,42 @@ if not defined PIP_PY (
 if not defined PIP_PY goto after_inst
 if "%PIP_PY%"=="" goto after_inst
 "%PIP_PY%" -m pip install -q -U pip
-if exist "%~dp0genre_gender_tagger\requirements.txt" (
-    "%PIP_PY%" -m pip install -r "%~dp0genre_gender_tagger\requirements.txt" -t "%DEST%" --upgrade --no-cache-dir
-    if errorlevel 1 echo WARNING: Genre ^& Gender extras reported errors - continuing.
-) else (
-    echo WARNING: genre_gender_tagger\requirements.txt missing - skipping.
-)
-echo Rename Auto-detect ^(hear21passt^) ...
+REM PaSST FIRST: heavy Genre^&Gender wheels (transformers/onnx) often fail or
+REM get cancelled on VMs — previously that left Auto-detect without hear21passt.
+set "PASST_INSTALLED=0"
+echo Rename Auto-detect ^(hear21passt + helpers^) ...
 "%PIP_PY%" -m pip install hear21passt --no-deps -t "%DEST%" --upgrade --no-cache-dir
-if errorlevel 1 echo WARNING: hear21passt install reported errors - continuing.
+if errorlevel 1 (
+    echo ERROR: hear21passt pip install failed.
+    echo Fix: check network / re-run install-deps.bat beside STEM-organizer.exe.
+    goto after_inst
+)
 "%PIP_PY%" -m pip install timm --no-deps -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 echo WARNING: timm install reported errors - continuing.
 "%PIP_PY%" -m pip install pyyaml huggingface_hub safetensors packaging -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 echo WARNING: PaSST helper deps reported errors - continuing.
-"%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import hear21passt; print('OK hear21passt')"
+REM Same env shape as tagger_launch (PYTHONPATH=site-packages, host Python).
+set "STEM_OLD_PP=%PYTHONPATH%"
+set "PYTHONPATH=%DEST%"
+"%HOST_PY%" -c "import hear21passt; print('OK hear21passt', hear21passt.__file__)"
 if errorlevel 1 (
-    echo WARNING: hear21passt not importable from site-packages - Rename Auto-detect will fail.
-    echo Fix: re-run this install-deps.bat beside STEM-organizer.exe ^(same folder as the .exe^).
+    if defined STEM_OLD_PP (set "PYTHONPATH=%STEM_OLD_PP%") else (set "PYTHONPATH=")
+    set "STEM_OLD_PP="
+    echo ERROR: hear21passt not importable from:
+    echo   %DEST%
+    echo Expected folder: %DEST%\hear21passt\
+    echo Fix: re-run this install-deps.bat beside STEM-organizer.exe.
+    goto after_inst
+)
+if defined STEM_OLD_PP (set "PYTHONPATH=%STEM_OLD_PP%") else (set "PYTHONPATH=")
+set "STEM_OLD_PP="
+set "PASST_INSTALLED=1"
+if exist "%~dp0genre_gender_tagger\requirements.txt" (
+    echo Genre ^& Gender extras ^(transformers / onnxruntime^) ...
+    "%PIP_PY%" -m pip install -r "%~dp0genre_gender_tagger\requirements.txt" -t "%DEST%" --upgrade --no-cache-dir
+    if errorlevel 1 echo WARNING: Genre ^& Gender extras reported errors - continuing.
+) else (
+    echo WARNING: genre_gender_tagger\requirements.txt missing - skipping.
 )
 
 :after_inst
@@ -483,7 +502,12 @@ echo.
 echo All done (%TORCH_LABEL%).
 if "%USE_SITE%"=="1" (
     echo Start STEM-organizer.exe in this folder.
-    echo Rename Auto-detect needs hear21passt in site-packages\ ^(installed above^).
+    if "%PASST_INSTALLED%"=="1" (
+        echo Rename Auto-detect: OK ^(site-packages\hear21passt^).
+    ) else (
+        echo Rename Auto-detect: NOT READY - site-packages\hear21passt missing.
+        echo Re-run install-deps.bat and confirm "OK hear21passt" appears.
+    )
 ) else (
     echo Run from source:
     echo     .venv\Scripts\python.exe run_stem_organizer.py

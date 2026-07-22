@@ -15,6 +15,18 @@ echo.
 echo Frozen STEM-organizer.exe: use root install-deps.bat beside the .exe
 echo instead ^(puts hear21passt into site-packages\^).
 echo.
+REM Refuse accidental double-click next to a frozen build (wrong target venv).
+if /I not "%STEM_INST_BUNDLED%"=="1" if /I not "%STEM_GG_BUNDLED%"=="1" (
+    if exist "%~dp0..\STEM-organizer.exe" (
+        echo ERROR: STEM-organizer.exe detected in parent folder.
+        echo Do NOT run this nested bat for a frozen build.
+        echo Run instead:
+        echo   %~dp0..\install-deps.bat
+        echo ^(installs hear21passt into site-packages next to the .exe^).
+        pause
+        exit /b 1
+    )
+)
 
 where python >nul 2>&1
 if errorlevel 1 (

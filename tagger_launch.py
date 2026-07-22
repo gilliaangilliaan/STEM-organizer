@@ -172,6 +172,10 @@ def _venv_python_candidates(root: Path) -> tuple[Path, ...]:
     )
 
 
+def _site_has_hear21passt(site: Path) -> bool:
+    return (site / "hear21passt").is_dir()
+
+
 def resolve_tagger_python() -> Path | None:
     """Interpreter for tagger subprocesses (venv or host python)."""
     root = tagger_app_root()
@@ -179,11 +183,14 @@ def resolve_tagger_python() -> Path | None:
         # Prefer site-packages + real Python (no nested venv in dist).
         site = _site_packages()
         host = resolve_host_python()
-        if host is not None and site is not None:
+        if host is not None and site is not None and _site_has_hear21passt(site):
             return host
+        # Legacy / mistaken nested venv that actually has hear21passt.
         for path in _venv_python_candidates(root):
             if path.is_file():
                 return path
+        if host is not None and site is not None:
+            return host
         return None
     for path in _venv_python_candidates(root):
         if path.is_file():
