@@ -1,6 +1,8 @@
 import gc
 import json
 import logging
+import shutil
+import ssl
 import time
 import os
 import sys
@@ -525,7 +527,44 @@ REVERB_FILE_CHUNK = 64
 REVERB_GPU_BATCH = 32
 GENDER_LABELS = ("female", "male")
 
-GENDER_MODEL_DIR = Path(__file__).resolve().parent / "models"
+def _tagger_package_dir() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _gender_model_dir_candidates() -> list[Path]:
+    """Models next to this script, beside the exe, and under ``_internal``."""
+    script_dir = _tagger_package_dir()
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: Path) -> None:
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    add(script_dir / "models")
+    parent = script_dir.parent
+    if parent.name == "_internal":
+        add(parent.parent / "genre_gender_tagger" / "models")
+    else:
+        add(parent / "_internal" / "genre_gender_tagger" / "models")
+    return candidates
+
+
+def _writable_gender_model_dir() -> Path:
+    """Prefer a non-_internal folder so downloads work in frozen builds."""
+    for path in _gender_model_dir_candidates():
+        if "_internal" not in path.parts:
+            return path
+    return _gender_model_dir_candidates()[0]
+
+
+GENDER_MODEL_DIR = _writable_gender_model_dir()
 
 GENDER_EFFNET_URL = (
     "https://essentia.upf.edu/models/feature-extractors/"
@@ -557,7 +596,7 @@ GENDER_EFFNET_PB_MIN_BYTES = 15_000_000
 GENDER_HEAD_PB_MIN_BYTES = 100_000
 GENDER_ORT_BATCH = 128
 _INSTRUMENT_MODELS = (
-    Path(__file__).resolve().parent.parent / "instrument_tagger" / "models"
+    _tagger_package_dir().parent / "instrument_tagger" / "models"
 )
 
 _TF_SILENCED = False
@@ -1074,9 +1113,36 @@ def _model_file_ready(path, min_bytes: int = 1000) -> bool:
         return False
 
 
+def _find_ready_model(name: str, min_bytes: int, model_dir=None) -> Path | None:
+    """Return an existing complete model path, or None."""
+    search = (
+        [Path(model_dir)]
+        if model_dir is not None
+        else list(_gender_model_dir_candidates())
+    )
+    if model_dir is None:
+        search.append(_INSTRUMENT_MODELS)
+    for folder in search:
+        path = Path(folder) / name
+        if _model_file_ready(path, min_bytes):
+            return path
+    return None
+
+
+def _ssl_download_context():
+    """Prefer certifi CA bundle (fixes Win11/VM CERTIFICATE_VERIFY_FAILED)."""
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
 def _download_model_file(path, url, status=print, min_bytes: int = 1000):
     """Download to a .part file, verify size, then replace the destination."""
     status(f"  downloading {path.name} ...")
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".part")
     try:
         if tmp.exists():
@@ -1084,7 +1150,11 @@ def _download_model_file(path, url, status=print, min_bytes: int = 1000):
                 tmp.unlink()
             except OSError:
                 pass
-        urllib.request.urlretrieve(url, tmp)
+        ctx = _ssl_download_context()
+        with urllib.request.urlopen(url, context=ctx, timeout=120) as resp, open(
+            tmp, "wb"
+        ) as out:
+            shutil.copyfileobj(resp, out)
         size = tmp.stat().st_size
         if size < int(min_bytes):
             try:
@@ -1119,18 +1189,21 @@ def _download_model_file(path, url, status=print, min_bytes: int = 1000):
 def ensure_gender_models(model_dir=None, status=print):
     """Download EffNet + gender .pb files if missing."""
 
-    model_dir = Path(model_dir or GENDER_MODEL_DIR)
-    model_dir.mkdir(parents=True, exist_ok=True)
+    download_dir = Path(model_dir or _writable_gender_model_dir())
+    download_dir.mkdir(parents=True, exist_ok=True)
 
-    effnet = model_dir / GENDER_EFFNET_NAME
-    gender = model_dir / GENDER_HEAD_NAME
-
-    for path, url, min_bytes in (
-        (effnet, GENDER_EFFNET_URL, GENDER_EFFNET_PB_MIN_BYTES),
-        (gender, GENDER_HEAD_URL, GENDER_HEAD_PB_MIN_BYTES),
+    found = []
+    for name, url, min_bytes in (
+        (GENDER_EFFNET_NAME, GENDER_EFFNET_URL, GENDER_EFFNET_PB_MIN_BYTES),
+        (GENDER_HEAD_NAME, GENDER_HEAD_URL, GENDER_HEAD_PB_MIN_BYTES),
     ):
-        if _model_file_ready(path, min_bytes):
+        ready = _find_ready_model(name, min_bytes, model_dir=model_dir)
+        if ready is not None:
+            if ready.parent != download_dir:
+                status(f"  using bundled {ready}")
+            found.append(ready)
             continue
+        path = download_dir / name
         if path.exists():
             status(f"  replacing incomplete {path.name} ({path.stat().st_size:,} bytes)")
             try:
@@ -1138,42 +1211,53 @@ def ensure_gender_models(model_dir=None, status=print):
             except OSError:
                 pass
         _download_model_file(path, url, status=status, min_bytes=min_bytes)
+        found.append(path)
 
-    return effnet, gender
+    return found[0], found[1]
 
 
 def ensure_gender_onnx_models(model_dir=None, status=print):
     """Download EffNet + gender .onnx files if missing or truncated."""
 
-    model_dir = Path(model_dir or GENDER_MODEL_DIR)
-    model_dir.mkdir(parents=True, exist_ok=True)
+    download_dir = Path(model_dir or _writable_gender_model_dir())
+    download_dir.mkdir(parents=True, exist_ok=True)
 
-    effnet = model_dir / GENDER_EFFNET_ONNX_NAME
-    gender = model_dir / GENDER_HEAD_ONNX_NAME
-
-    if not _model_file_ready(effnet, GENDER_EFFNET_ONNX_MIN_BYTES):
-        shared = _INSTRUMENT_MODELS / GENDER_EFFNET_ONNX_NAME
-        if _model_file_ready(shared, GENDER_EFFNET_ONNX_MIN_BYTES):
-            status(f"  using shared {shared}")
-            effnet = shared
-        else:
-            if effnet.exists():
-                status(
-                    f"  replacing incomplete {effnet.name} "
-                    f"({effnet.stat().st_size:,} bytes)"
-                )
-                try:
-                    effnet.unlink()
-                except OSError:
-                    pass
-            _download_model_file(
-                effnet,
-                GENDER_EFFNET_ONNX_URL,
-                status=status,
-                min_bytes=GENDER_EFFNET_ONNX_MIN_BYTES,
+    effnet = _find_ready_model(
+        GENDER_EFFNET_ONNX_NAME,
+        GENDER_EFFNET_ONNX_MIN_BYTES,
+        model_dir=model_dir,
+    )
+    if effnet is not None:
+        if model_dir is None and effnet.parent != download_dir:
+            status(f"  using bundled {effnet}")
+    else:
+        effnet = download_dir / GENDER_EFFNET_ONNX_NAME
+        if effnet.exists():
+            status(
+                f"  replacing incomplete {effnet.name} "
+                f"({effnet.stat().st_size:,} bytes)"
             )
+            try:
+                effnet.unlink()
+            except OSError:
+                pass
+        _download_model_file(
+            effnet,
+            GENDER_EFFNET_ONNX_URL,
+            status=status,
+            min_bytes=GENDER_EFFNET_ONNX_MIN_BYTES,
+        )
 
-    if not _model_file_ready(gender, GENDER_HEAD_ONNX_MIN_BYTES):
+    gender = _find_ready_model(
+        GENDER_HEAD_ONNX_NAME,
+        GENDER_HEAD_ONNX_MIN_BYTES,
+        model_dir=model_dir,
+    )
+    if gender is not None:
+        if model_dir is None and gender.parent != download_dir:
+            status(f"  using bundled {gender}")
+    else:
+        gender = download_dir / GENDER_HEAD_ONNX_NAME
         if gender.exists():
             status(
                 f"  replacing incomplete {gender.name} "
@@ -1271,6 +1355,12 @@ def _ort_providers():
     import onnxruntime as ort
 
     available = set(ort.get_available_providers())
+    # CPU-only / no NVIDIA: never list DirectML. The directml wheel still
+    # reports DmlExecutionProvider as available, but probing it dumps a raw
+    # "EP Error: ... No devices detected" to stderr before falling back to CPU.
+    if not IS_GPU:
+        return ["CPUExecutionProvider"]
+
     ordered = []
     for name in (
         "CUDAExecutionProvider",
@@ -1282,22 +1372,66 @@ def _ort_providers():
     return ordered or ["CPUExecutionProvider"]
 
 
+def _quiet_ort_session(model_path, sess_options, providers):
+    """Create InferenceSession; mute C-level EP Error spam if a GPU EP fails."""
+    import onnxruntime as ort
+
+    # ORT writes EP fallback diagnostics to fd 2 (not always Python sys.stderr).
+    try:
+        devnull = open(os.devnull, "w")
+        old_fd = os.dup(2)
+    except Exception:
+        return ort.InferenceSession(
+            str(model_path), sess_options=sess_options, providers=providers
+        )
+    try:
+        os.dup2(devnull.fileno(), 2)
+        return ort.InferenceSession(
+            str(model_path), sess_options=sess_options, providers=providers
+        )
+    finally:
+        try:
+            os.dup2(old_fd, 2)
+            os.close(old_fd)
+        except Exception:
+            pass
+        try:
+            devnull.close()
+        except Exception:
+            pass
+
+
 def load_gender_ort_backend(model_dir=None, status=print):
     import onnxruntime as ort
 
     effnet_path, head_path = ensure_gender_onnx_models(model_dir, status=status)
+    available = set(ort.get_available_providers())
     providers = _ort_providers()
-    status(f"  ONNX Runtime providers: {', '.join(providers)}")
+    if not IS_GPU and "DmlExecutionProvider" in available:
+        status("  DirectML unavailable - using CPU")
+    else:
+        status(f"  ONNX Runtime providers: {', '.join(providers)}")
     so = ort.SessionOptions()
     so.log_severity_level = 3
-    effnet = ort.InferenceSession(
-        str(effnet_path), sess_options=so, providers=providers
-    )
-    head = ort.InferenceSession(
-        str(head_path), sess_options=so, providers=providers
-    )
+    # Quiet create when a GPU EP is first — ORT may still probe-and-fallback.
+    if providers[0] != "CPUExecutionProvider":
+        effnet = _quiet_ort_session(effnet_path, so, providers)
+        head = _quiet_ort_session(head_path, so, providers)
+    else:
+        effnet = ort.InferenceSession(
+            str(effnet_path), sess_options=so, providers=providers
+        )
+        head = ort.InferenceSession(
+            str(head_path), sess_options=so, providers=providers
+        )
     active = effnet.get_providers()[0]
-    status(f"  using {active} for discogs-effnet + gender head")
+    if (
+        providers[0] != "CPUExecutionProvider"
+        and active == "CPUExecutionProvider"
+    ):
+        status("  DirectML unavailable - using CPU")
+    else:
+        status(f"  using {active} for discogs-effnet + gender head")
     return _GenderOrtBackend(effnet, head, active)
 
 
@@ -1965,7 +2099,12 @@ if CONTENT_TYPE == "acapella":
     print()
 
     _log_intro("Loading vocal reverb classifier...")
-    reverb_router = load_vocal_reverb(GENDER_MODEL_DIR, status=_status)
+    reverb_dir = GENDER_MODEL_DIR
+    for candidate in _gender_model_dir_candidates():
+        if (candidate / "vocal_reverb.pt").is_file():
+            reverb_dir = candidate
+            break
+    reverb_router = load_vocal_reverb(reverb_dir, status=_status)
     _log_intro("Reverb classifier loaded")
     print()
 
