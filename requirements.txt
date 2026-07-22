@@ -11,3 +11,5 @@ psutil
 requests
 # Optional tag writers / metadata
 mutagen
+# torchvision (hear21passt/timm) imports PIL
+Pillow

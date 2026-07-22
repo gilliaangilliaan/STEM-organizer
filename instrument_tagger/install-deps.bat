@@ -108,7 +108,7 @@ echo [2/3] hear21passt + timm ...
 if errorlevel 1 goto fail
 "%PY%" -m pip install timm --no-deps
 if errorlevel 1 goto fail
-"%PY%" -m pip install pyyaml huggingface_hub safetensors packaging
+"%PY%" -m pip install pyyaml huggingface_hub safetensors packaging Pillow
 if errorlevel 1 goto fail
 
 echo [3/3] torch + torchaudio + torchvision (%TORCH_LABEL%) ...
@@ -116,8 +116,10 @@ echo [3/3] torch + torchaudio + torchvision (%TORCH_LABEL%) ...
 if errorlevel 1 (
     echo WARNING: torch stack install failed - leaving existing packages.
 )
+"%PY%" -m pip install Pillow
+if errorlevel 1 goto fail
 
-"%PY%" -c "import torch, torchaudio, torchvision; print('OK torch', torch.__version__, 'torchaudio', torchaudio.__version__, 'torchvision', torchvision.__version__, 'cuda=', torch.cuda.is_available())"
+"%PY%" -c "import PIL, torch, torchaudio, torchvision; print('OK PIL', PIL.__version__, 'torch', torch.__version__, 'torchaudio', torchaudio.__version__, 'torchvision', torchvision.__version__, 'cuda=', torch.cuda.is_available())"
 "%PY%" -c "import hear21passt; print('OK hear21passt')"
 if errorlevel 1 goto fail
 

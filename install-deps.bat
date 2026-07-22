@@ -305,6 +305,9 @@ if errorlevel 1 goto failed
 REM torchvision (hear21passt/timm) + torchaudio (demucs) from same CUDA/CPU index
 "%PIP_PY%" -m pip install torchvision torchaudio --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-cache-dir --no-deps
 if errorlevel 1 goto failed
+REM Pillow: torchvision imports PIL; --no-deps above skips it
+"%PIP_PY%" -m pip install Pillow -t "%DEST%" --upgrade --no-cache-dir
+if errorlevel 1 goto failed
 "%PIP_PY%" -m pip install filelock "typing-extensions>=4.10" "setuptools>=77" "sympy>=1.13.3" "networkx>=2.5.1" jinja2 "fsspec>=0.8.5" -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 goto failed
 
@@ -332,9 +335,9 @@ if /I "%TORCH_LABEL%"=="CPU" (
 
 echo [4/4] verify ...
 if /I "%TORCH_LABEL%"=="CPU" (
-    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import torchvision; import torchaudio; import soundfile; import demucs; v=torch.__version__; assert '+cpu' in v, f'expected CPU torch, got {v}'; print('OK torch', v, 'torchvision', torchvision.__version__)"
+    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import PIL; import torch; import torchvision; import torchaudio; import soundfile; import demucs; v=torch.__version__; assert '+cpu' in v, f'expected CPU torch, got {v}'; print('OK torch', v, 'torchvision', torchvision.__version__, 'PIL', PIL.__version__)"
 ) else (
-    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import torchvision; import torchaudio; import soundfile; import demucs; print('OK torch', torch.__version__, 'torchvision', torchvision.__version__)"
+    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import PIL; import torch; import torchvision; import torchaudio; import soundfile; import demucs; print('OK torch', torch.__version__, 'torchvision', torchvision.__version__, 'PIL', PIL.__version__)"
 )
 if errorlevel 1 goto failed
 
@@ -472,7 +475,7 @@ if errorlevel 1 (
 )
 "%PIP_PY%" -m pip install timm --no-deps -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 echo WARNING: timm install reported errors - continuing.
-"%PIP_PY%" -m pip install pyyaml huggingface_hub safetensors packaging -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install pyyaml huggingface_hub safetensors packaging Pillow -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 echo WARNING: PaSST helper deps reported errors - continuing.
 REM hear21passt/timm need torchvision - fill gap if Keep=N left it out.
 if not defined TORCH_INDEX call :detect_torch_index
@@ -558,6 +561,12 @@ if not defined PIP_PY (
     exit /b 1
 )
 if not defined TORCH_INDEX set "TORCH_INDEX=https://download.pytorch.org/whl/cpu"
+REM Pillow required by torchvision (from PIL import Image); install before verify
+"%PIP_PY%" -m pip install Pillow -t "%DEST%" --upgrade --no-cache-dir
+if errorlevel 1 (
+    echo ERROR: Pillow install failed ^(needed by torchvision^).
+    exit /b 1
+)
 "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import torchvision" 1>nul 2>nul
 if errorlevel 1 (
     echo torchvision missing - installing from %TORCH_INDEX% ...
@@ -579,7 +588,7 @@ if errorlevel 1 (
 ) else (
     echo torchaudio already present.
 )
-"%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import torchvision; print('OK torchvision', torchvision.__version__)"
+"%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import PIL; import torchvision; print('OK PIL', PIL.__version__, 'torchvision', torchvision.__version__)"
 if errorlevel 1 (
     echo ERROR: torchvision still not importable from:
     echo   %DEST%
