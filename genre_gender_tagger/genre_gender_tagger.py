@@ -21,6 +21,9 @@ os.environ.setdefault("HF_HUB_DISABLE_EXPERIMENTAL_WARNING", "1")
 APP_NAME = "Genre / Gender Tagger"
 APP_VERSION = "1.0"
 
+# Classify-style startup/config indent; === file / Summary headers stay flush-left.
+LOG_INDENT = "  "
+
 # Avoid Windows cp1252 crashes on non-ASCII filenames in print/tqdm.
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -79,8 +82,25 @@ def print_feature_summary(
 
 
 def _status(msg):
-    """Immediate console feedback during slow startup imports."""
-    print(msg, flush=True)
+    """Immediate console feedback during slow startup imports.
+
+    Indents like Classify startup/config lines. Section headers (=== … ===)
+    and empty lines stay flush-left.
+    """
+    s = str(msg)
+    if not s.strip():
+        print(flush=True)
+        return
+    stripped = s.lstrip()
+    if stripped.startswith("===") or s.startswith("__"):
+        print(s, flush=True)
+        return
+    print(LOG_INDENT + s, flush=True)
+
+
+def _log_intro(msg: str) -> None:
+    """Startup/config line (Classify indent). Prefer over bare print()."""
+    print(f"{LOG_INDENT}{msg}", flush=True)
 
 
 _status(f"{APP_NAME} v{APP_VERSION}")
@@ -478,12 +498,12 @@ def iter_audio_files(folder):
 
 def list_audio_files(folder):
     """Collect audio paths with periodic scan feedback for large libraries."""
-    print("Scanning for audio files...", flush=True)
+    _log_intro("Scanning for audio files...")
     files = []
     for i, path in enumerate(iter_audio_files(folder), 1):
         files.append(str(path))
         if i % 5000 == 0:
-            print(f"  …found {i:,} audio files", flush=True)
+            print(f"{LOG_INDENT}  …found {i:,} audio files", flush=True)
     return files
 
 
@@ -529,6 +549,12 @@ GENDER_HEAD_ONNX_URL = (
     "https://essentia.upf.edu/models/classification-heads/"
     "gender/gender-discogs-effnet-1.onnx"
 )
+# Full bsdynamic ONNX is ~18 MB; truncated downloads (~4 MB) look "present"
+# but ORT fails with a vague system error and tagging appears stuck/dead.
+GENDER_EFFNET_ONNX_MIN_BYTES = 15_000_000
+GENDER_HEAD_ONNX_MIN_BYTES = 100_000
+GENDER_EFFNET_PB_MIN_BYTES = 15_000_000
+GENDER_HEAD_PB_MIN_BYTES = 100_000
 GENDER_ORT_BATCH = 128
 _INSTRUMENT_MODELS = (
     Path(__file__).resolve().parent.parent / "instrument_tagger" / "models"
@@ -1041,16 +1067,47 @@ def _silence_tensorflow():
     _TF_SILENCED = True
 
 
-def _download_model_file(path, url, status=print):
-    status(f"  downloading {path.name} ...")
+def _model_file_ready(path, min_bytes: int = 1000) -> bool:
     try:
-        urllib.request.urlretrieve(url, path)
-    except Exception as exc:
-        if path.exists():
+        return path.is_file() and path.stat().st_size >= int(min_bytes)
+    except OSError:
+        return False
+
+
+def _download_model_file(path, url, status=print, min_bytes: int = 1000):
+    """Download to a .part file, verify size, then replace the destination."""
+    status(f"  downloading {path.name} ...")
+    tmp = path.with_suffix(path.suffix + ".part")
+    try:
+        if tmp.exists():
             try:
-                path.unlink()
+                tmp.unlink()
             except OSError:
                 pass
+        urllib.request.urlretrieve(url, tmp)
+        size = tmp.stat().st_size
+        if size < int(min_bytes):
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise SystemExit(
+                f"\nERROR: download incomplete for {path.name}\n"
+                f"  got {size:,} bytes (need at least {int(min_bytes):,})\n"
+                f"  url: {url}\n\n"
+                f"Retry Tag gender, or place the full file in:\n  {path.parent}\n"
+            )
+        tmp.replace(path)
+        status(f"  downloaded {path.name} ({size:,} bytes)")
+    except SystemExit:
+        raise
+    except Exception as exc:
+        for victim in (tmp, path):
+            if victim.exists():
+                try:
+                    victim.unlink()
+                except OSError:
+                    pass
         raise SystemExit(
             f"\nERROR: could not download {path.name}\n"
             f"  reason: {exc}\n"
@@ -1068,16 +1125,25 @@ def ensure_gender_models(model_dir=None, status=print):
     effnet = model_dir / GENDER_EFFNET_NAME
     gender = model_dir / GENDER_HEAD_NAME
 
-    for path, url in ((effnet, GENDER_EFFNET_URL), (gender, GENDER_HEAD_URL)):
-        if path.exists() and path.stat().st_size > 1000:
+    for path, url, min_bytes in (
+        (effnet, GENDER_EFFNET_URL, GENDER_EFFNET_PB_MIN_BYTES),
+        (gender, GENDER_HEAD_URL, GENDER_HEAD_PB_MIN_BYTES),
+    ):
+        if _model_file_ready(path, min_bytes):
             continue
-        _download_model_file(path, url, status=status)
+        if path.exists():
+            status(f"  replacing incomplete {path.name} ({path.stat().st_size:,} bytes)")
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        _download_model_file(path, url, status=status, min_bytes=min_bytes)
 
     return effnet, gender
 
 
 def ensure_gender_onnx_models(model_dir=None, status=print):
-    """Download EffNet + gender .onnx files if missing."""
+    """Download EffNet + gender .onnx files if missing or truncated."""
 
     model_dir = Path(model_dir or GENDER_MODEL_DIR)
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -1085,16 +1151,44 @@ def ensure_gender_onnx_models(model_dir=None, status=print):
     effnet = model_dir / GENDER_EFFNET_ONNX_NAME
     gender = model_dir / GENDER_HEAD_ONNX_NAME
 
-    if not effnet.exists() or effnet.stat().st_size < 1000:
+    if not _model_file_ready(effnet, GENDER_EFFNET_ONNX_MIN_BYTES):
         shared = _INSTRUMENT_MODELS / GENDER_EFFNET_ONNX_NAME
-        if shared.exists() and shared.stat().st_size > 1000:
+        if _model_file_ready(shared, GENDER_EFFNET_ONNX_MIN_BYTES):
             status(f"  using shared {shared}")
             effnet = shared
         else:
-            _download_model_file(effnet, GENDER_EFFNET_ONNX_URL, status=status)
+            if effnet.exists():
+                status(
+                    f"  replacing incomplete {effnet.name} "
+                    f"({effnet.stat().st_size:,} bytes)"
+                )
+                try:
+                    effnet.unlink()
+                except OSError:
+                    pass
+            _download_model_file(
+                effnet,
+                GENDER_EFFNET_ONNX_URL,
+                status=status,
+                min_bytes=GENDER_EFFNET_ONNX_MIN_BYTES,
+            )
 
-    if not gender.exists() or gender.stat().st_size < 1000:
-        _download_model_file(gender, GENDER_HEAD_ONNX_URL, status=status)
+    if not _model_file_ready(gender, GENDER_HEAD_ONNX_MIN_BYTES):
+        if gender.exists():
+            status(
+                f"  replacing incomplete {gender.name} "
+                f"({gender.stat().st_size:,} bytes)"
+            )
+            try:
+                gender.unlink()
+            except OSError:
+                pass
+        _download_model_file(
+            gender,
+            GENDER_HEAD_ONNX_URL,
+            status=status,
+            min_bytes=GENDER_HEAD_ONNX_MIN_BYTES,
+        )
 
     return effnet, gender
 
@@ -1246,13 +1340,31 @@ def load_gender_models(model_dir=None, status=print):
     Returns a backend with .predict_batch(chunk) -> probs [N,2] and .name.
     """
 
+    ort_err: Exception | None = None
     try:
         import onnxruntime  # noqa: F401
 
         return load_gender_ort_backend(model_dir, status=status)
+    except SystemExit:
+        raise
     except Exception as exc:
-        status(f"  ONNX Runtime unavailable ({exc}); falling back to TensorFlow")
-        return load_gender_tf_backend(model_dir, status=status)
+        ort_err = exc
+        status(f"  ONNX Runtime unavailable ({exc})")
+
+    try:
+        import tensorflow as tf  # noqa: F401
+    except ImportError:
+        raise SystemExit(
+            "\nERROR: gender models could not load.\n"
+            f"  ONNX: {ort_err}\n"
+            "  TensorFlow is not installed (optional CPU fallback).\n\n"
+            "Fix: ensure models\\discogs-effnet-bsdynamic-1.onnx is complete "
+            f"(~18 MB, not a truncated download), then retry Tag gender.\n"
+            f"  Expected file: {GENDER_MODEL_DIR / GENDER_EFFNET_ONNX_NAME}\n"
+        ) from ort_err
+
+    status("  falling back to TensorFlow...")
+    return load_gender_tf_backend(model_dir, status=status)
 
 
 def load_mono_16k(filename):
@@ -1831,52 +1943,51 @@ if CONTENT_TYPE == "acapella":
 
     print()
     print("==============================")
-    print(f"{APP_NAME} v{APP_VERSION}")
-    print("Acapella / voice-gender + reverb")
+    _log_intro(f"{APP_NAME} v{APP_VERSION}")
+    _log_intro("Acapella / voice-gender + reverb")
     if BATCH_MODE:
-        print("Batched pipeline")
+        _log_intro("Batched pipeline")
     else:
-        print("Per-file mode")
-    print("gender-discogs-effnet + vocal_reverb.pt (mel-CNN)")
-    print(f"Recursive + {reverb_mode_label} metadata")
+        _log_intro("Per-file mode")
+    _log_intro("gender-discogs-effnet + vocal_reverb.pt (mel-CNN)")
+    _log_intro(f"Recursive + {reverb_mode_label} metadata")
     print("==============================")
     print()
 
     if BATCH_MODE:
 
-        print("Audio workers:", AUDIO_WORKERS)
+        _log_intro(f"Audio workers: {AUDIO_WORKERS}")
         print()
 
-    print("Loading voice-gender models...")
+    _log_intro("Loading voice-gender models...")
     gender_backend = load_gender_models(status=_status)
-    print(f"Models loaded ({gender_backend.name})")
+    _log_intro(f"Models loaded ({gender_backend.name})")
     print()
 
-    print("Loading vocal reverb classifier...")
+    _log_intro("Loading vocal reverb classifier...")
     reverb_router = load_vocal_reverb(GENDER_MODEL_DIR, status=_status)
-    print("Reverb classifier loaded")
+    _log_intro("Reverb classifier loaded")
     print()
 
     files = list_audio_files(INPUT_FOLDER)
     total_found = len(files)
     files, skipped_tagged = filter_untagged_files(files, kind="gender")
 
-    print(
-        "Found",
-        total_found,
-        "files (recursive)" if INCLUDE_SUBFOLDERS else "files (top-level only)",
+    _log_intro(
+        f"Found {total_found} "
+        f"{'files (recursive)' if INCLUDE_SUBFOLDERS else 'files (top-level only)'}"
     )
     if skipped_tagged:
-        print(
+        _log_intro(
             f"Skipping {skipped_tagged} already tagged "
             "(Overwrite existing tags is off)"
         )
-    print(f"To process: {len(files)}")
+    _log_intro(f"To process: {len(files)}")
     print()
 
     if not files:
 
-        print(
+        _log_intro(
             "No untagged audio files left. "
             "Enable overwrite to re-tag, or pick another folder."
         )
@@ -2335,55 +2446,36 @@ print()
 
 print()
 print("==============================")
-print(f"{APP_NAME} v{APP_VERSION}")
+_log_intro(f"{APP_NAME} v{APP_VERSION}")
 if BATCH_MODE:
-    print("Batched GPU pipeline")
+    _log_intro("Batched GPU pipeline")
 else:
-    print("Per-file mode")
-print("Instrumental / Discogs genre")
-print("Recursive + metadata write")
+    _log_intro("Per-file mode")
+_log_intro("Instrumental / Discogs genre")
+_log_intro("Recursive + metadata write")
 print("==============================")
 print()
 
-print(
-    "Torch:",
-    torch.__version__
+_log_intro(f"Torch: {torch.__version__}")
+
+_log_intro(
+    "Torchaudio: "
+    f"{getattr(torchaudio, '__version__', None) or 'not installed (librosa resample)'}"
 )
 
-print(
-    "Torchaudio:",
-    getattr(torchaudio, "__version__", None) or "not installed (librosa resample)",
-)
+_log_intro(f"CUDA: {torch.version.cuda}")
 
-print(
-    "CUDA:",
-    torch.version.cuda
-)
-
-print(
-    "Device:",
-    device
-)
+_log_intro(f"Device: {device}")
 
 
 
 if device == "cuda":
 
-    print(
-        "GPU:",
-        torch.cuda.get_device_name(0)
-    )
+    _log_intro(f"GPU: {torch.cuda.get_device_name(0)}")
 
-    print(
-        "VRAM:",
-        round(
-            torch.cuda.get_device_properties(0)
-                .total_memory
-            /
-            1024**3,
-            2
-        ),
-        "GB"
+    _log_intro(
+        "VRAM: "
+        f"{round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2)} GB"
     )
 
 
@@ -2391,31 +2483,19 @@ print()
 
 if BATCH_MODE:
 
-    print(
-        "Batch size:",
-        BATCH_SIZE
-    )
+    _log_intro(f"Batch size: {BATCH_SIZE}")
 
-    print(
-        "Audio workers:",
-        AUDIO_WORKERS
-    )
+    _log_intro(f"Audio workers: {AUDIO_WORKERS}")
 
-print(
-    "Clips/song:",
-    NUMBER_OF_CLIPS
-)
+_log_intro(f"Clips/song: {NUMBER_OF_CLIPS}")
 
-print(
-    "Write metadata:",
-    WRITE_METADATA
-)
+_log_intro(f"Write metadata: {WRITE_METADATA}")
 
 if WRITE_METADATA:
 
-    print(
-        "Tag style:",
-        (
+    _log_intro(
+        "Tag style: "
+        + (
             "Genre/Style combined"
             if TAG_WRITE_MODE == "combined"
             else "GENRE + STYLE separated"
@@ -2430,7 +2510,7 @@ print()
 # LOAD MODEL
 # ==========================================================
 
-print("Loading model...")
+_log_intro("Loading model...")
 
 
 feature_extractor = AutoFeatureExtractor.from_pretrained(
@@ -2452,7 +2532,7 @@ model.to(device)
 model.eval()
 
 
-print("Model loaded")
+_log_intro("Model loaded")
 print()
 
 
@@ -2749,21 +2829,20 @@ files = list_audio_files(INPUT_FOLDER)
 total_found = len(files)
 files, skipped_tagged = filter_untagged_files(files, kind="genre")
 
-print(
-    "Found",
-    total_found,
-    "files (recursive)" if INCLUDE_SUBFOLDERS else "files (top-level only)",
+_log_intro(
+    f"Found {total_found} "
+    f"{'files (recursive)' if INCLUDE_SUBFOLDERS else 'files (top-level only)'}"
 )
 if skipped_tagged:
-    print(
+    _log_intro(
         f"Skipping {skipped_tagged} already tagged "
         "(Overwrite existing tags is off)"
     )
-print(f"To process: {len(files)}")
+_log_intro(f"To process: {len(files)}")
 print()
 
 if not files:
-    print(
+    _log_intro(
         "No untagged audio files left. "
         "Enable overwrite to re-tag, or pick another folder."
     )

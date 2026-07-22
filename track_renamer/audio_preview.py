@@ -312,6 +312,36 @@ class AudioPreviewService:
 
     @staticmethod
     def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+        """Kill *process* and any children so Windows releases audio file handles."""
+        try:
+            parent = psutil.Process(process.pid)
+        except (psutil.Error, OSError):
+            parent = None
+
+        targets: list[psutil.Process] = []
+        if parent is not None:
+            try:
+                targets.extend(parent.children(recursive=True))
+            except (psutil.Error, OSError):
+                pass
+            targets.append(parent)
+
+        if targets:
+            for proc in targets:
+                try:
+                    proc.terminate()
+                except (psutil.Error, OSError):
+                    pass
+            _gone, alive = psutil.wait_procs(targets, timeout=1.0)
+            for proc in alive:
+                try:
+                    proc.kill()
+                except (psutil.Error, OSError):
+                    pass
+            if alive:
+                psutil.wait_procs(alive, timeout=1.0)
+            return
+
         try:
             process.terminate()
             process.wait(timeout=1)
@@ -329,21 +359,17 @@ class AudioPreviewService:
             return "stopped"
         process = self._play_process
         if process is not None and process.poll() is None:
-            try:
-                handle = psutil.Process(process.pid)
-                if self._paused:
-                    handle.resume()
-                    self._paused = False
-                    self._play_started_at = time.monotonic()
-                    return "playing"
-                self._position_seconds = self.playback_position()
-                handle.suspend()
-                self._paused = True
-                self._play_started_at = None
-                return "paused"
-            except (psutil.Error, OSError):
-                self.stop()
-                return "stopped"
+            # Stop the process on pause — do NOT psutil.suspend(). A suspended
+            # ffplay keeps a Windows share lock and blocks rename (WinError 32).
+            self._position_seconds = self.playback_position()
+            self._play_process = None
+            self._play_started_at = None
+            self._terminate_process(process)
+            self._paused = True
+            return "paused"
+        if self._paused:
+            self._paused = False
+            return self._start_playback(self._position_seconds)
         return self._start_playback(self._position_seconds)
 
     def _start_playback(
@@ -382,13 +408,16 @@ class AudioPreviewService:
 
     def playback_state(self) -> Literal["playing", "paused", "stopped"]:
         process = self._play_process
-        if process is None or process.poll() is not None:
-            self._play_process = None
-            self._paused = False
-            self._position_seconds = 0.0
-            self._play_started_at = None
-            return "stopped"
-        return "paused" if self._paused else "playing"
+        if process is not None and process.poll() is None:
+            return "paused" if self._paused else "playing"
+        # Process exited (end of file) or was stopped for pause-without-hold.
+        self._play_process = None
+        self._play_started_at = None
+        if self._paused and self.active_path is not None:
+            return "paused"
+        self._paused = False
+        self._position_seconds = 0.0
+        return "stopped"
 
     def playback_position(self) -> float:
         if self._play_started_at is None:
@@ -405,17 +434,14 @@ class AudioPreviewService:
             self._position_seconds = target
             return target
 
-        was_paused = state == "paused"
+        if state == "paused":
+            # Paused holds no live ffplay — only update the resume cursor.
+            self._position_seconds = target
+            self._paused = True
+            self._play_started_at = None
+            return target
         if self._start_playback(target) != "playing":
             return self._position_seconds
-        if was_paused and self._play_process is not None:
-            try:
-                psutil.Process(self._play_process.pid).suspend()
-                self._paused = True
-                self._position_seconds = target
-                self._play_started_at = None
-            except (psutil.Error, OSError):
-                self.stop()
         return self.playback_position()
 
     def stop(self) -> None:
@@ -435,5 +461,53 @@ class AudioPreviewService:
         self.active_path = None
         self.duration = 0.0
 
+    def _kill_orphan_audio_tools(self) -> None:
+        """Kill leftover ffplay/ffmpeg/ffprobe children of this process."""
+        tool_names = {"ffplay", "ffplay.exe", "ffmpeg", "ffmpeg.exe", "ffprobe", "ffprobe.exe"}
+        if self.tools is not None:
+            tool_names.update(
+                {
+                    self.tools.ffplay.name.lower(),
+                    self.tools.ffmpeg.name.lower(),
+                    self.tools.ffprobe.name.lower(),
+                }
+            )
+        try:
+            children = psutil.Process().children(recursive=True)
+        except (psutil.Error, OSError):
+            return
+        targets: list[psutil.Process] = []
+        for proc in children:
+            try:
+                name = (proc.name() or "").lower()
+            except (psutil.Error, OSError):
+                continue
+            if name in tool_names:
+                targets.append(proc)
+        if not targets:
+            return
+        for proc in targets:
+            try:
+                proc.kill()
+            except (psutil.Error, OSError):
+                pass
+        psutil.wait_procs(targets, timeout=1.5)
+
+    def release_for_file_ops(self, *, settle_s: float | None = None) -> None:
+        """Stop preview/decode jobs and clear the active path before rename/move.
+
+        ffplay (and in-flight ffmpeg/ffprobe) keep a Windows share lock on the
+        audio file; callers must invoke this before os.rename / shutil.move.
+        """
+        self.reset()
+        self._kill_orphan_audio_tools()
+        if settle_s is None:
+            settle_s = 0.35 if sys.platform == "win32" else 0.0
+        if settle_s > 0:
+            # Windows (and AV) may hold shares briefly after process death —
+            # especially right after Analyze (tagger) touched the same files.
+            time.sleep(settle_s)
+
     def shutdown(self) -> None:
         self.reset()
+        self._kill_orphan_audio_tools()

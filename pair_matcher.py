@@ -19,6 +19,8 @@ LOG_EVERY_READ = 500
 LOG_EVERY_MATCH = 1000
 LOG_EVERY_MOVE = 200
 PROGRESS_EVERY = 250
+# Classify-style startup/config indent; === Summary headers stay flush-left.
+LOG_INDENT = '  '
 TITLE_PREFIX_LEN = 6
 TITLE_HEAD_LEN = 3
 INVALID_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -387,7 +389,7 @@ def _match_pairs_indexed(
 
     _report_log(
         on_log,
-        f'Built partner index · {len(partner_tracks):,} tracks · '
+        f'{LOG_INDENT}Built partner index · {len(partner_tracks):,} tracks · '
         f'{len(index.by_title):,} unique titles',
         'info',
     )
@@ -465,7 +467,7 @@ def find_pairs(
 
     _report_log(
         on_log,
-        f'Scanning folders ({scan_note}) · reference: {ref_count:,} · partner: {partner_count:,} · '
+        f'{LOG_INDENT}Scanning folders ({scan_note}) · reference: {ref_count:,} · partner: {partner_count:,} · '
         f'threshold {threshold:.0%}',
         'info',
     )
@@ -686,7 +688,7 @@ def organize_matched_folder(
     done = 0
     scan_note = 'including subfolders' if include_subfolders else 'top level only'
 
-    _report_log(on_log, f'Organizing {file_count:,} file(s) in {matched_dir} ({scan_note})', 'info')
+    _report_log(on_log, f'{LOG_INDENT}Organizing {file_count:,} file(s) in {matched_dir} ({scan_note})', 'info')
 
     tracks: list[TrackTags] = []
     for idx, path in enumerate(paths):

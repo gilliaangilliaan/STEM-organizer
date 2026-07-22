@@ -283,7 +283,7 @@ _CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "Vibraphone",
         "Xylophone",
     ],
-    "Orchestral": [
+    "Orchestra": [
         "Kopuz",
         "Koto",
         "Mandolin",
@@ -364,7 +364,7 @@ def _build_default_categories() -> list[dict[str, str]]:
         "Strings",
         "Vocals",
         "Mallet",
-        "Orchestral",
+        "Orchestra",
     ]
     return [
         {

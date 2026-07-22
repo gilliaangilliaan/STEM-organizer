@@ -1,0 +1,13 @@
+PySide6>=6.6,<6.9
+PySide6-Fluent-Widgets>=1.11,<2
+# ML / audio backends (same as original STEM organizer)
+# torch is installed separately by install-deps.bat (CUDA 12.4 / 12.8 / CPU)
+numpy
+soundfile
+demucs
+sounddevice
+resampy
+psutil
+requests
+# Optional tag writers / metadata
+mutagen

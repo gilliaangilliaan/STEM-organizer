@@ -2,15 +2,32 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
+REM =============================================================================
+REM STEM organizer (PySide6) - install dependencies
+REM
+REM Double-click or run from project root / dist folder.
+REM
+REM PyTorch choice (same as CTk STEM-organizer):
+REM   1 = NVIDIA RTX 20/30/40  -> CUDA 12.4  (https://download.pytorch.org/whl/cu124)
+REM   2 = CPU only             -> CPU wheels (https://download.pytorch.org/whl/cpu)
+REM   3 = NVIDIA RTX 50-series -> CUDA 12.8  (https://download.pytorch.org/whl/cu128)
+REM
+REM Always installs Genre & Gender + Rename Auto-detect (no Y/N prompts).
+REM
+REM Destinations:
+REM   - Next to STEM-organizer.exe  -> site-packages\  (frozen / shipped build)
+REM   - Otherwise (source tree)     -> .venv\          (project virtualenv)
+REM =============================================================================
+
 echo.
-echo STEM organizer - install dependencies
+echo STEM organizer (PySide6) - install dependencies
 echo.
 echo You need:
 echo   - Python 3.10 or 3.11 on PATH ^(same version as the .exe if present^)
-echo   - Internet ^(PyTorch, demucs, ffmpeg^)
+echo   - Internet ^(PyTorch, demucs, ffmpeg, tagger models^)
 echo.
 echo You choose once: GPU or CPU PyTorch.
-echo Then optional: Genre ^& Gender, Rename Auto-detect.
+echo Genre ^& Gender and Rename Auto-detect deps are always installed.
 echo.
 
 where python >nul 2>&1
@@ -50,15 +67,66 @@ if exist "%~dp0python-version.txt" (
     )
 )
 
-set "DEST=%~dp0site-packages"
-if not exist "%DEST%" mkdir "%DEST%"
+REM --- Detect GPU hint (nvidia-smi); user still picks 1/2/3 ---
+set "GPU_HINT=no NVIDIA GPU detected — option 2 (CPU) is safest"
+where nvidia-smi >nul 2>&1
+if not errorlevel 1 (
+    for /f "tokens=*" %%G in ('nvidia-smi --query-gpu=name --format=csv,noheader 2^>nul') do (
+        set "GPU_NAME=%%G"
+        goto gpu_named
+    )
+)
+goto gpu_hint_done
 
-echo Python:
-python --version
-echo Install into: %DEST%
+:gpu_named
+echo Detected GPU: %GPU_NAME%
+echo %GPU_NAME% | findstr /I /C:"RTX 50" >nul
+if not errorlevel 1 (
+    set "GPU_HINT=RTX 50-series detected — prefer option 3 (CUDA 12.8)"
+    goto gpu_hint_done
+)
+echo %GPU_NAME% | findstr /I /C:"RTX 40" /C:"RTX 30" /C:"RTX 20" >nul
+if not errorlevel 1 (
+    set "GPU_HINT=RTX 20/30/40 detected — prefer option 1 (CUDA 12.4)"
+    goto gpu_hint_done
+)
+REM Other NVIDIA (e.g. GTX / A-series): CUDA 12.4 usually works
+set "GPU_HINT=NVIDIA GPU detected — option 1 (CUDA 12.4) usually works; 50-series needs 3"
+
+:gpu_hint_done
+echo Hint: %GPU_HINT%
 echo.
 
-if exist "%DEST%\torch\__init__.py" (
+REM --- Destination: site-packages beside exe, else project .venv ---
+set "USE_SITE=0"
+if exist "%~dp0STEM-organizer.exe" set "USE_SITE=1"
+
+if "%USE_SITE%"=="1" (
+    set "DEST=%~dp0site-packages"
+    if not exist "%DEST%" mkdir "%DEST%"
+    echo Mode: frozen / dist — install into site-packages\
+    echo Install into: %DEST%
+) else (
+    set "VENV_PY=%~dp0.venv\Scripts\python.exe"
+    if not exist "%VENV_PY%" (
+        echo Creating .venv ...
+        python -m venv "%~dp0.venv"
+        if errorlevel 1 (
+            echo ERROR: failed to create .venv
+            pause
+            exit /b 1
+        )
+    )
+    set "DEST=%~dp0.venv\Lib\site-packages"
+    echo Mode: source — install into .venv
+    echo Using: %VENV_PY%
+)
+echo.
+echo Python:
+python --version
+echo.
+
+if "%USE_SITE%"=="1" if exist "%DEST%\torch\__init__.py" (
     choice /C YN /N /M "site-packages already has PyTorch. Reinstall? [Y/N]: "
     if errorlevel 2 (
         echo Cancelled.
@@ -102,8 +170,49 @@ set "STEM_GG_TORCH=2"
 goto install_torch
 
 :install_torch
-REM Clean pip helper — system Python often has leftover ML pkgs (bs-roformer,
-REM audiomentations, …) that make pip print fake conflicts on `pip install -t`.
+if "%USE_SITE%"=="1" goto install_site
+goto install_venv
+
+REM ---------- SOURCE: install into .venv ----------
+:install_venv
+set "PY=%~dp0.venv\Scripts\python.exe"
+
+echo.
+echo [1/4] Core GUI + audio deps ...
+"%PY%" -m pip install --upgrade pip
+if errorlevel 1 goto failed
+REM torch is NOT in requirements.txt — installed from the CUDA/CPU index below
+"%PY%" -m pip install -r "%~dp0requirements.txt" --upgrade
+if errorlevel 1 goto failed
+
+echo [2/4] PyTorch (%TORCH_LABEL%) ...
+"%PY%" -m pip uninstall -y torch torchvision torchaudio 2>nul
+"%PY%" -m pip install torch --index-url %TORCH_INDEX% --upgrade --no-cache-dir
+if errorlevel 1 goto failed
+
+echo [3/4] verify ...
+if /I "%TORCH_LABEL%"=="CPU" (
+    "%PY%" -c "import torch, soundfile, demucs; v=torch.__version__; assert '+cpu' in v or 'cpu' in v.lower(), f'expected CPU torch, got {v}'; print('OK torch', v)"
+) else (
+    "%PY%" -c "import torch, soundfile, demucs; print('OK torch', torch.__version__, 'cuda=', torch.cuda.is_available())"
+)
+if errorlevel 1 goto failed
+
+if /I not "%TORCH_LABEL%"=="CPU" (
+    "%PY%" "%~dp0verify_torch_install.py"
+    if errorlevel 1 (
+        echo WARNING: PyTorch may not match this GPU. App can still run on CPU.
+        if /I "%TORCH_LABEL%"=="CUDA 12.4" echo For RTX 50-series: re-run install-deps.bat and pick 3.
+    )
+)
+
+"%PY%" -c "import sys; v=f'{sys.version_info[0]}.{sys.version_info[1]}\n'; open(r'%~dp0python-version.txt','w',encoding='utf-8').write(v)"
+goto ffmpeg_section
+
+REM ---------- FROZEN: install into site-packages (CTk pattern) ----------
+:install_site
+REM Clean pip helper — system Python often has leftover ML pkgs that make
+REM pip print fake conflicts on `pip install -t`.
 set "PIP_VENV=%TEMP%\stem-organizer-pip-venv"
 if not exist "%PIP_VENV%\Scripts\python.exe" (
     echo Preparing clean pip helper ...
@@ -124,7 +233,7 @@ if errorlevel 1 goto failed
 echo [2/4] audio + UI deps ...
 "%PIP_PY%" -m pip install "cffi>=1.16" -t "%DEST%" --only-binary=:all: --upgrade --no-cache-dir
 if errorlevel 1 goto failed
-"%PIP_PY%" -m pip install soundfile numpy sounddevice customtkinter psutil mutagen scipy librosa resampy audioread -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install soundfile numpy sounddevice PySide6 "PySide6-Fluent-Widgets>=1.11,<2" psutil mutagen scipy librosa resampy audioread requests -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 goto failed
 
 echo [3/4] demucs ...
@@ -150,7 +259,7 @@ if /I "%TORCH_LABEL%"=="CPU" (
     )
 )
 
-echo [4/4] verify + ffmpeg ...
+echo [4/4] verify ...
 if /I "%TORCH_LABEL%"=="CPU" (
     python -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import soundfile; import demucs; v=torch.__version__; assert '+cpu' in v, f'expected CPU torch, got {v}'; print('OK torch', v)"
 ) else (
@@ -178,6 +287,7 @@ for %%F in ("%DEST%\_soundfile_data\libsndfile*.dll") do (
 
 python -c "import sys; v=f'{sys.version_info[0]}.{sys.version_info[1]}\n'; open(r'%DEST%\.python-version-used','w',encoding='utf-8').write(v); open(r'%~dp0python-version.txt','w',encoding='utf-8').write(v)"
 
+:ffmpeg_section
 set "FFMPEG_DIR=%~dp0ffmpeg"
 if exist "%FFMPEG_DIR%\ffmpeg.exe" goto ffmpeg_done
 
@@ -237,43 +347,42 @@ del /Q "%FFMPEG_ZIP%" 2>nul
 :ffmpeg_done
 
 echo.
-echo Core install OK (%TORCH_LABEL%). Start STEM-organizer.exe when finished.
+echo Core install OK (%TORCH_LABEL%).
 echo.
 
+REM --- Always install Genre & Gender + Rename Auto-detect (no prompts) ---
 if not exist "%~dp0genre_gender_tagger\install-deps.bat" goto after_gg
-choice /C YN /N /M "Install Genre & Gender deps? [Y/N]: "
-if errorlevel 2 goto skip_gg
-set "STEM_GG_TORCH=1"
-if /I "%TORCH_LABEL%"=="CPU" set "STEM_GG_TORCH=2"
-if /I "%TORCH_LABEL%"=="CUDA 12.8" set "STEM_GG_TORCH=3"
+echo === Genre ^& Gender deps ^(always^) ===
 set "STEM_GG_BUNDLED=1"
 call "%~dp0genre_gender_tagger\install-deps.bat" %STEM_GG_TORCH%
 set "STEM_GG_BUNDLED="
-goto after_gg
-
-:skip_gg
-echo Skipped Genre ^& Gender.
+if errorlevel 1 (
+    echo WARNING: Genre ^& Gender install reported errors — continuing.
+)
 
 :after_gg
 if not exist "%~dp0instrument_tagger\install-deps.bat" goto after_inst
 echo.
-choice /C YN /N /M "Install Rename Auto-detect deps? [Y/N]: "
-if errorlevel 2 goto skip_inst
+echo === Rename Auto-detect deps ^(always^) ===
 set "STEM_INST_BUNDLED=1"
-set "STEM_GG_TORCH=1"
-if /I "%TORCH_LABEL%"=="CPU" set "STEM_GG_TORCH=2"
-if /I "%TORCH_LABEL%"=="CUDA 12.8" set "STEM_GG_TORCH=3"
+set "STEM_GG_BUNDLED=1"
 call "%~dp0instrument_tagger\install-deps.bat" %STEM_GG_TORCH%
 set "STEM_INST_BUNDLED="
-goto after_inst
-
-:skip_inst
-echo Skipped Rename Auto-detect.
+set "STEM_GG_BUNDLED="
+if errorlevel 1 (
+    echo WARNING: Rename Auto-detect install reported errors — continuing.
+)
 
 :after_inst
 echo.
-echo All done.
-echo Start STEM-organizer.exe in /dist folder
+echo All done (%TORCH_LABEL%).
+if "%USE_SITE%"=="1" (
+    echo Start STEM-organizer.exe in this folder.
+) else (
+    echo Run from source:
+    echo     .venv\Scripts\python.exe run_stem_organizer.py
+)
+echo.
 pause
 exit /b 0
 

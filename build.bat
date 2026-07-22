@@ -2,9 +2,21 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
+REM =============================================================================
+REM STEM organizer (PySide6) - Windows build (PyInstaller)
+REM
+REM Entry: run_stem_organizer.py  /  package stem_organizer
+REM Spec:  stem_organizer_py6.spec  (onedir under dist\STEM-organizer\)
+REM
+REM After a successful build:
+REM   1. Open dist\STEM-organizer\
+REM   2. Double-click install-deps.bat  (picks CUDA 12.4 / CPU / CUDA 12.8)
+REM   3. Run STEM-organizer.exe
+REM =============================================================================
+
 echo.
 echo ========================================
-echo   STEM organizer - Windows build
+echo   STEM organizer (PySide6) - Windows build
 echo ========================================
 echo.
 
@@ -54,7 +66,7 @@ if not exist "%PY%" (
 
 echo   Installing PyInstaller and packager deps ...
 "%PY%" -m pip install -q -U pip
-"%PY%" -m pip install -q pyinstaller requests packaging customtkinter psutil
+"%PY%" -m pip install -q pyinstaller requests packaging PySide6 "PySide6-Fluent-Widgets>=1.11,<2" psutil
 if errorlevel 1 (
     echo ERROR: Failed to install build dependencies.
     pause
@@ -65,49 +77,63 @@ echo   Ready.
 echo.
 
 echo [3/4] Running PyInstaller ...
-echo   Bundling UI into dist\STEM-organizer.exe
-echo   This usually takes ~1 minute - output below:
+echo   Bundling UI into dist\STEM-organizer\STEM-organizer.exe
+echo   This usually takes a few minutes - output below:
 echo.
 
-"%PY%" -m PyInstaller --noconfirm --clean --log-level=INFO stem_organizer.spec 2>&1
+"%PY%" -m PyInstaller --noconfirm --clean --log-level=INFO stem_organizer_py6.spec 2>&1
 if errorlevel 1 goto failed
 
 echo.
 echo [4/4] Finishing dist folder ...
 "%PY%" -c "import sys; open('python-version.txt','w',encoding='utf-8').write(f'{sys.version_info[0]}.{sys.version_info[1]}\n')"
-copy /Y install-deps.bat dist\install-deps.bat >nul
-copy /Y python-version.txt dist\python-version.txt >nul
-copy /Y verify_torch_install.py dist\verify_torch_install.py >nul
+
+set "OUT=dist\STEM-organizer"
+if not exist "%OUT%" (
+    echo ERROR: expected output folder missing: %OUT%
+    goto failed
+)
+
+copy /Y install-deps.bat "%OUT%\install-deps.bat" >nul
+copy /Y python-version.txt "%OUT%\python-version.txt" >nul
+copy /Y verify_torch_install.py "%OUT%\verify_torch_install.py" >nul
+if exist requirements.txt copy /Y requirements.txt "%OUT%\requirements.txt" >nul
 
 echo   Copying genre_gender_tagger\ ^(bundled tagger, no venv^) ...
-if exist "dist\genre_gender_tagger" rmdir /S /Q "dist\genre_gender_tagger"
-mkdir "dist\genre_gender_tagger" >nul
-mkdir "dist\genre_gender_tagger\models" >nul
-copy /Y "genre_gender_tagger\genre_gender_tagger.py" "dist\genre_gender_tagger\" >nul
-copy /Y "genre_gender_tagger\vocal_reverb.py" "dist\genre_gender_tagger\" >nul
-copy /Y "genre_gender_tagger\train_vocal_reverb.py" "dist\genre_gender_tagger\" >nul
-copy /Y "genre_gender_tagger\train-reverb.bat" "dist\genre_gender_tagger\" >nul
-copy /Y "genre_gender_tagger\install-deps.bat" "dist\genre_gender_tagger\" >nul
-copy /Y "genre_gender_tagger\run.bat" "dist\genre_gender_tagger\" >nul
-copy /Y "genre_gender_tagger\requirements.txt" "dist\genre_gender_tagger\" >nul
-copy /Y "genre_gender_tagger\readme.md" "dist\genre_gender_tagger\" >nul
-if exist "genre_gender_tagger\models\*.pb" copy /Y "genre_gender_tagger\models\*.pb" "dist\genre_gender_tagger\models\" >nul
-if exist "genre_gender_tagger\models\vocal_reverb.pt" copy /Y "genre_gender_tagger\models\vocal_reverb.pt" "dist\genre_gender_tagger\models\" >nul
+if exist "%OUT%\genre_gender_tagger" rmdir /S /Q "%OUT%\genre_gender_tagger"
+mkdir "%OUT%\genre_gender_tagger" >nul
+mkdir "%OUT%\genre_gender_tagger\models" >nul
+copy /Y "genre_gender_tagger\genre_gender_tagger.py" "%OUT%\genre_gender_tagger\" >nul
+if exist "genre_gender_tagger\vocal_reverb.py" copy /Y "genre_gender_tagger\vocal_reverb.py" "%OUT%\genre_gender_tagger\" >nul
+if exist "genre_gender_tagger\install-deps.bat" copy /Y "genre_gender_tagger\install-deps.bat" "%OUT%\genre_gender_tagger\" >nul
+if exist "genre_gender_tagger\run.bat" copy /Y "genre_gender_tagger\run.bat" "%OUT%\genre_gender_tagger\" >nul
+if exist "genre_gender_tagger\requirements.txt" copy /Y "genre_gender_tagger\requirements.txt" "%OUT%\genre_gender_tagger\" >nul
+if exist "genre_gender_tagger\readme.md" copy /Y "genre_gender_tagger\readme.md" "%OUT%\genre_gender_tagger\" >nul
+if exist "genre_gender_tagger\models\*.pb" copy /Y "genre_gender_tagger\models\*.pb" "%OUT%\genre_gender_tagger\models\" >nul
+if exist "genre_gender_tagger\models\vocal_reverb.pt" copy /Y "genre_gender_tagger\models\vocal_reverb.pt" "%OUT%\genre_gender_tagger\models\" >nul
 
 echo   Copying instrument_tagger\ ^(Rename Auto-detect, no venv^) ...
-if exist "dist\instrument_tagger" rmdir /S /Q "dist\instrument_tagger"
-mkdir "dist\instrument_tagger" >nul
-copy /Y "instrument_tagger\instrument_tagger.py" "dist\instrument_tagger\" >nul
-copy /Y "instrument_tagger\passt_mel.py" "dist\instrument_tagger\" >nul
-copy /Y "instrument_tagger\install-deps.bat" "dist\instrument_tagger\" >nul
+if exist "%OUT%\instrument_tagger" rmdir /S /Q "%OUT%\instrument_tagger"
+mkdir "%OUT%\instrument_tagger" >nul
+copy /Y "instrument_tagger\instrument_tagger.py" "%OUT%\instrument_tagger\" >nul
+if exist "instrument_tagger\passt_mel.py" copy /Y "instrument_tagger\passt_mel.py" "%OUT%\instrument_tagger\" >nul
+if exist "instrument_tagger\install-deps.bat" copy /Y "instrument_tagger\install-deps.bat" "%OUT%\instrument_tagger\" >nul
+
+REM ffmpeg is already collected by the .spec when present; ensure copy if missed
+if exist "ffmpeg\ffmpeg.exe" if not exist "%OUT%\ffmpeg\ffmpeg.exe" (
+    echo   Copying ffmpeg\ ...
+    xcopy /E /I /Y "ffmpeg" "%OUT%\ffmpeg" >nul
+)
 
 echo.
 echo ========================================
 echo   SUCCESS
 echo ========================================
-echo   dist\STEM-organizer.exe
-echo   dist\install-deps.bat  ^(run this now^)
-echo   dist\genre_gender_tagger\  + dist\instrument_tagger\
+echo   Exe:  dist\STEM-organizer\STEM-organizer.exe
+echo   Next: dist\STEM-organizer\install-deps.bat  ^(run this now^)
+echo         then start STEM-organizer.exe
+echo   Also: dist\STEM-organizer\genre_gender_tagger\
+echo         dist\STEM-organizer\instrument_tagger\
 echo.
 pause
 exit /b 0

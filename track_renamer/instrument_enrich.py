@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,6 +32,43 @@ _CACHE: dict[str, tuple] = {}
 
 ResultCallback = Callable[[dict[str, Any]], None]
 ProgressCallback = Callable[[int, int], None]
+ProcessCallback = Callable[[subprocess.Popen], None]
+
+
+def terminate_tagger_process(proc: subprocess.Popen | None) -> None:
+    """Kill the instrument tagger and any children (Cancel / cleanup)."""
+    if proc is None:
+        return
+    try:
+        import psutil
+
+        try:
+            parent = psutil.Process(proc.pid)
+        except (psutil.Error, OSError):
+            parent = None
+        targets: list = []
+        if parent is not None:
+            try:
+                targets.extend(parent.children(recursive=True))
+            except (psutil.Error, OSError):
+                pass
+            targets.append(parent)
+        for child in targets:
+            try:
+                child.kill()
+            except (psutil.Error, OSError):
+                pass
+        if targets:
+            psutil.wait_procs(targets, timeout=1.5)
+            return
+    except Exception:
+        pass
+    try:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=1.5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def resolve_tagger_python() -> Path | None:
@@ -180,12 +218,16 @@ def enrich_tracks(
     status: Callable[[str], None] | None = None,
     on_progress: ProgressCallback | None = None,
     on_result: ResultCallback | None = None,
+    cancel: threading.Event | None = None,
+    on_process: ProcessCallback | None = None,
 ) -> tuple[int, str | None]:
     """
     Classify tracks missing cache entries via instrument_tagger.
 
     on_result receives one dict per file (cache hit or fresh infer).
     Returns (classified_count, error_message_or_None).
+    If *cancel* is set, the tagger subprocess is killed and the call returns
+    early with error None (caller should treat it as abandoned).
     """
     apply_cached_labels(tracks)
     pending = _paths_needing_infer(tracks)
@@ -194,6 +236,8 @@ def enrich_tracks(
     # Emit cache hits first so the analyze log fills immediately.
     cached_n = 0
     for track in tracks:
+        if cancel is not None and cancel.is_set():
+            return cached_n, None
         path = track.file_path
         if path is None or not path.is_file():
             continue
@@ -227,6 +271,9 @@ def enrich_tracks(
     elif not pending:
         return cached_n, None
 
+    if cancel is not None and cancel.is_set():
+        return cached_n, None
+
     py = resolve_tagger_python()
     if py is None or not TAGGER_SCRIPT.is_file():
         return cached_n, (
@@ -241,6 +288,7 @@ def enrich_tracks(
     list_path: Path | None = None
     classified = 0
     done = cached_n
+    proc: subprocess.Popen | None = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -251,6 +299,9 @@ def enrich_tracks(
             list_path = Path(handle.name)
             for path in pending:
                 handle.write(f"{path.resolve()}\n")
+
+        if cancel is not None and cancel.is_set():
+            return cached_n, None
 
         cmd = [
             str(py),
@@ -275,10 +326,15 @@ def enrich_tracks(
             cwd=str(TAGGER_DIR),
             **subprocess_kwargs(),  # hide console window on Windows
         )
+        if on_process is not None:
+            on_process(proc)
         assert proc.stdout is not None
 
         log_tail: list[str] = []
         for line in proc.stdout:
+            if cancel is not None and cancel.is_set():
+                terminate_tagger_process(proc)
+                return cached_n + classified, None
             raw = line.rstrip("\n")
             stripped = raw.strip()
             if not stripped:
@@ -356,7 +412,15 @@ def enrich_tracks(
             if on_progress:
                 on_progress(done, total)
 
+        if cancel is not None and cancel.is_set():
+            terminate_tagger_process(proc)
+            return cached_n + classified, None
+
         returncode = proc.wait()
+        # Ensure any tagger child workers are gone before the UI renames files.
+        terminate_tagger_process(proc)
+        if cancel is not None and cancel.is_set():
+            return cached_n + classified, None
         if returncode != 0 and classified == 0:
             # Prefer real traceback / ERROR lines over model-dump noise.
             useful = [
@@ -379,6 +443,8 @@ def enrich_tracks(
     except OSError as exc:
         return cached_n, str(exc)
     finally:
+        if cancel is not None and cancel.is_set() and proc is not None:
+            terminate_tagger_process(proc)
         if list_path is not None:
             try:
                 list_path.unlink()

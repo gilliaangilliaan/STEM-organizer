@@ -4,11 +4,64 @@ from __future__ import annotations
 
 import re
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import Callable
 
 from track_renamer.engine.models import Track, TrackType
+
+
+def _is_sharing_violation(exc: OSError) -> bool:
+    """True for Windows WinError 32 (file in use by another process)."""
+    return getattr(exc, "winerror", None) == 32 or getattr(exc, "errno", None) == 32
+
+
+def _rename_with_retry(
+    src: Path,
+    dst: Path,
+    *,
+    attempts: int = 5,
+    delays: tuple[float, ...] = (0.2, 0.4, 0.8, 1.2),
+) -> None:
+    """Rename with backoff retries on sharing violations (preview/tagger locks)."""
+    last_exc: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            src.rename(dst)
+            return
+        except OSError as exc:
+            last_exc = exc
+            if attempt + 1 < attempts and _is_sharing_violation(exc):
+                time.sleep(delays[min(attempt, len(delays) - 1)])
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+
+
+def _move_with_retry(
+    src: Path,
+    dst: Path,
+    *,
+    attempts: int = 5,
+    delays: tuple[float, ...] = (0.2, 0.4, 0.8, 1.2),
+) -> None:
+    """shutil.move with backoff retries on sharing violations."""
+    last_exc: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            shutil.move(str(src), str(dst))
+            return
+        except OSError as exc:
+            last_exc = exc
+            if attempt + 1 < attempts and _is_sharing_violation(exc):
+                time.sleep(delays[min(attempt, len(delays) - 1)])
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".aiff", ".aif", ".flac", ".ogg", ".m4a", ".wma"}
 MIDI_EXTENSIONS = {".mid", ".midi"}
@@ -164,20 +217,20 @@ def apply_file_renames_detailed(
             f".__track_renamer_{uuid.uuid4().hex}{source.suffix}"
         )
         try:
-            source.rename(temporary)
+            _rename_with_retry(source, temporary)
             staged.append((source, temporary, target))
         except OSError as exc:
             errors.append(f"{source.name}: {exc}")
 
     for source, temporary, target in staged:
         try:
-            temporary.rename(target)
+            _rename_with_retry(temporary, target)
             success += 1
             renamed_paths.append(target)
         except OSError as exc:
             errors.append(f"{source.name}: {exc}")
             try:
-                temporary.rename(source)
+                _rename_with_retry(temporary, source)
             except OSError as restore_exc:
                 errors.append(f"Could not restore {source.name}: {restore_exc}")
 
@@ -240,7 +293,7 @@ def move_files_to_prefix_folders(
             )
 
         try:
-            shutil.move(str(source), str(candidate))
+            _move_with_retry(source, candidate)
             moved += 1
         except OSError as exc:
             errors.append(f"{source.name}: {exc}")

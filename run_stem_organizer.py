@@ -1,16 +1,14 @@
-"""PyInstaller entry point — checks external ML deps before loading the UI."""
-from deps_bootstrap import ensure_ml_deps, is_frozen
+"""PyInstaller / dev entry — mirrors the Tk original's run_stem_organizer.py."""
+from __future__ import annotations
+
+import sys
 
 
 def main() -> None:
-    if is_frozen():
-        from frozen_stdlib_imports import ensure_stdlib_for_external_ml
+    from stem_organizer.main_entry import run
 
-        ensure_stdlib_for_external_ml()
-    import stem_organizer_ui
-
-    stem_organizer_ui.main()
+    run(sys.argv)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

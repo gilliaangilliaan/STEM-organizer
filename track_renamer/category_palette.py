@@ -39,12 +39,14 @@ CATEGORY_BADGE_TEXT = "#ffffff"
 
 CATEGORY_BADGE_LABELS: dict[str, str] = {
     "Percussion": "PERC",
-    "Orchestral": "ORCHEST",
+    "Orchestra": "ORCHEST",
+    "Orchestral": "ORCHEST",  # legacy name
 }
 
 # Legacy / alternate category names → canonical key in DEFAULT_CATEGORY_COLORS
 CATEGORY_NAME_ALIASES: dict[str, str] = {
     "Synths": "Synth",
+    "Orchestral": "Orchestra",
 }
 
 # Default color per category name (includes legacy names used in older presets)
@@ -62,7 +64,8 @@ DEFAULT_CATEGORY_COLORS: dict[str, str] = {
     "Strings": "#76C043",
     "Vocals": "#A855F7",
     "Mallet": "#C41D63",
-    "Orchestral": "#626262",
+    "Orchestra": "#626262",
+    "Orchestral": "#626262",  # legacy
 }
 
 _PALETTE_LOWER = {color.lower(): color for color in CATEGORY_PALETTE_COLORS}
@@ -124,6 +127,34 @@ def default_category_color(name: str) -> str:
         return DEFAULT_CATEGORY_COLORS[stripped]
     canonical = resolve_category_name(stripped)
     return DEFAULT_CATEGORY_COLORS.get(canonical, CATEGORY_PALETTE_COLORS[0])
+
+
+def next_unused_category_color(categories: list) -> str:
+    """First palette swatch not already used by any category in the list."""
+    used: set[str] = set()
+    for cat in categories or []:
+        if not isinstance(cat, dict):
+            continue
+        raw = (cat.get("color") or "").strip()
+        if not raw:
+            raw = default_category_color(cat.get("name", ""))
+        used.add(raw.lower())
+    for color in CATEGORY_PALETTE_COLORS:
+        if color.lower() not in used:
+            return color
+    # All swatches taken — cycle by count
+    n = len(categories or [])
+    return CATEGORY_PALETTE_COLORS[n % len(CATEGORY_PALETTE_COLORS)]
+
+
+def next_unused_palette_color(used_colors: list[str] | tuple[str, ...] | set[str]) -> str:
+    """First palette swatch not already used; if all are taken, cycle by count."""
+    used_lower = {(c or "").strip().lower() for c in used_colors if (c or "").strip()}
+    for color in CATEGORY_PALETTE_COLORS:
+        if color.lower() not in used_lower:
+            return color
+    n = len(CATEGORY_PALETTE_COLORS)
+    return CATEGORY_PALETTE_COLORS[len(used_lower) % n] if n else "#EF4444"
 
 
 def category_color(name: str, stored: str = "", *, override: bool = False) -> str:

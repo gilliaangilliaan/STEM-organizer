@@ -12,6 +12,7 @@ import numpy as np
 from pair_matcher import (
     AUDIO_EXTS,
     IgnoreRules,
+    LOG_INDENT,
     LogFn,
     ProgressFn,
     _report_log,
@@ -315,11 +316,11 @@ def distribute_originals(
     total = max(1, len(originals))
     moved = skipped = unmatched = rejected = 0
 
-    _report_log(on_log, f'Distributing {len(originals):,} file(s) to {len(folders):,} subfolder(s)', 'info')
+    _report_log(on_log, f'{LOG_INDENT}Distributing {len(originals):,} file(s) to {len(folders):,} subfolder(s)', 'info')
     if not folders:
         _report_log(
             on_log,
-            'No song subfolders found under stems root (check path, or run Export to verify folder names).',
+            f'{LOG_INDENT}No song subfolders found under stems root (check path, or run Export to verify folder names).',
             'err',
         )
 
@@ -438,7 +439,7 @@ def sort_folders_by_original(
 
     _report_log(
         on_log,
-        f'Sorting {len(folders):,} folder(s) → {with_dir.name} / {without_dir.name}',
+        f'{LOG_INDENT}Sorting {len(folders):,} folder(s) → {with_dir.name} / {without_dir.name}',
         'info',
     )
 
@@ -1081,13 +1082,13 @@ def align_all_songs(
 
     _report_log(
         on_log,
-        f'Aligning {len(ready):,}/{len(folders):,} folder(s) in {align_root.name} with original + stems',
+        f'{LOG_INDENT}Aligning {len(ready):,}/{len(folders):,} folder(s) in {align_root.name} with original + stems',
         'info',
     )
     if skip_existing:
         _report_log(
             on_log,
-            f'Resume: skipping folders that already contain {BACKUP_DIR_NAME}',
+            f'{LOG_INDENT}Resume: skipping folders that already contain {BACKUP_DIR_NAME}',
             'info',
         )
 
