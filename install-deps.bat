@@ -201,9 +201,14 @@ if "%USE_SITE%"=="1" if exist "%DEST%\torch\__init__.py" (
     choice /C YN /N /M "site-packages already has PyTorch. Reinstall? [Y/N]: "
     if errorlevel 2 (
         echo Keeping existing PyTorch / core packages.
-        echo Still installing Genre ^& Gender + Rename Auto-detect extras...
+        echo Still ensuring torchvision/torchaudio + Genre ^& Gender + Rename Auto-detect...
         set "TORCH_LABEL=existing"
         set "STEM_GG_TORCH=2"
+        call :detect_torch_index
+        call :ensure_pip_helper
+        if errorlevel 1 goto failed
+        call :ensure_torch_extras
+        if errorlevel 1 goto failed
         goto ffmpeg_section
     )
     echo.
@@ -297,6 +302,9 @@ echo.
 echo [1/4] PyTorch (%TORCH_LABEL%) ...
 "%PIP_PY%" -m pip install torch --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-cache-dir --no-deps
 if errorlevel 1 goto failed
+REM torchvision (hear21passt/timm) + torchaudio (demucs) from same CUDA/CPU index
+"%PIP_PY%" -m pip install torchvision torchaudio --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-cache-dir --no-deps
+if errorlevel 1 goto failed
 "%PIP_PY%" -m pip install filelock "typing-extensions>=4.10" "setuptools>=77" "sympy>=1.13.3" "networkx>=2.5.1" jinja2 "fsspec>=0.8.5" -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 goto failed
 
@@ -316,13 +324,6 @@ if errorlevel 1 goto failed
 "%PIP_PY%" -m pip install demucs -t "%DEST%" --upgrade --no-cache-dir --no-deps
 if errorlevel 1 goto failed
 
-"%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import demucs" 2>nul
-if errorlevel 1 (
-    echo demucs needs torchaudio - installing ...
-    "%PIP_PY%" -m pip install torchaudio --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-cache-dir --no-deps
-    if errorlevel 1 goto failed
-)
-
 if /I "%TORCH_LABEL%"=="CPU" (
     for /D %%D in ("%DEST%\torch-*.dist-info") do (
         echo %%~nxD | findstr /C:"+cpu" >nul || rmdir /S /Q "%%D" 2>nul
@@ -331,9 +332,9 @@ if /I "%TORCH_LABEL%"=="CPU" (
 
 echo [4/4] verify ...
 if /I "%TORCH_LABEL%"=="CPU" (
-    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import soundfile; import demucs; v=torch.__version__; assert '+cpu' in v, f'expected CPU torch, got {v}'; print('OK torch', v)"
+    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import torchvision; import torchaudio; import soundfile; import demucs; v=torch.__version__; assert '+cpu' in v, f'expected CPU torch, got {v}'; print('OK torch', v, 'torchvision', torchvision.__version__)"
 ) else (
-    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import soundfile; import demucs; print('OK torch', torch.__version__)"
+    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import torch; import torchvision; import torchaudio; import soundfile; import demucs; print('OK torch', torch.__version__, 'torchvision', torchvision.__version__)"
 )
 if errorlevel 1 goto failed
 
@@ -473,6 +474,14 @@ if errorlevel 1 (
 if errorlevel 1 echo WARNING: timm install reported errors - continuing.
 "%PIP_PY%" -m pip install pyyaml huggingface_hub safetensors packaging -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 echo WARNING: PaSST helper deps reported errors - continuing.
+REM hear21passt/timm need torchvision - fill gap if Keep=N left it out.
+if not defined TORCH_INDEX call :detect_torch_index
+call :ensure_torch_extras
+if errorlevel 1 (
+    echo ERROR: torchvision missing ^(required by hear21passt/timm^).
+    echo Fix: re-run install-deps.bat beside STEM-organizer.exe ^(Keep PyTorch = N is fine^).
+    goto after_inst
+)
 REM Same env shape as tagger_launch (PYTHONPATH=site-packages, host Python).
 set "STEM_OLD_PP=%PYTHONPATH%"
 set "PYTHONPATH=%DEST%"
@@ -484,6 +493,15 @@ if errorlevel 1 (
     echo   %DEST%
     echo Expected folder: %DEST%\hear21passt\
     echo Fix: re-run this install-deps.bat beside STEM-organizer.exe.
+    goto after_inst
+)
+"%HOST_PY%" -c "import torchvision; print('OK torchvision', torchvision.__version__)"
+if errorlevel 1 (
+    if defined STEM_OLD_PP (set "PYTHONPATH=%STEM_OLD_PP%") else (set "PYTHONPATH=")
+    set "STEM_OLD_PP="
+    echo ERROR: torchvision not importable from:
+    echo   %DEST%
+    echo hear21passt/timm need torchvision. Re-run install-deps.bat ^(Keep PyTorch = N is fine^).
     goto after_inst
 )
 if defined STEM_OLD_PP (set "PYTHONPATH=%STEM_OLD_PP%") else (set "PYTHONPATH=")
@@ -503,10 +521,11 @@ echo All done (%TORCH_LABEL%).
 if "%USE_SITE%"=="1" (
     echo Start STEM-organizer.exe in this folder.
     if "%PASST_INSTALLED%"=="1" (
-        echo Rename Auto-detect: OK ^(site-packages\hear21passt^).
+        echo Rename Auto-detect: OK ^(hear21passt + torchvision^).
     ) else (
-        echo Rename Auto-detect: NOT READY - site-packages\hear21passt missing.
-        echo Re-run install-deps.bat and confirm "OK hear21passt" appears.
+        echo Rename Auto-detect: NOT READY - hear21passt and/or torchvision missing.
+        echo Re-run install-deps.bat ^(Keep PyTorch = N is fine^) and confirm
+        echo "OK hear21passt" and "OK torchvision" appear.
     )
 ) else (
     echo Run from source:
@@ -521,6 +540,52 @@ echo.
 echo ERROR: install failed. Check messages above.
 pause
 exit /b 1
+
+REM --- Match TORCH_INDEX to existing site-packages torch (+cu128/+cu124/+cpu) ---
+:detect_torch_index
+set "TORCH_INDEX=https://download.pytorch.org/whl/cpu"
+for /f "delims=" %%F in ('"%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import torch; v=torch.__version__; print('cu128' if '+cu128' in v else 'cu124' if '+cu' in v else 'cpu')" 2^>nul') do set "TORCH_FLAVOR=%%F"
+if /I "%TORCH_FLAVOR%"=="cu128" set "TORCH_INDEX=https://download.pytorch.org/whl/cu128"
+if /I "%TORCH_FLAVOR%"=="cu124" set "TORCH_INDEX=https://download.pytorch.org/whl/cu124"
+if /I "%TORCH_FLAVOR%"=="cpu" set "TORCH_INDEX=https://download.pytorch.org/whl/cpu"
+echo Detected torch flavor: %TORCH_FLAVOR% - using %TORCH_INDEX%
+exit /b 0
+
+REM --- Install torchvision/torchaudio into DEST if import fails (same index as torch) ---
+:ensure_torch_extras
+if not defined PIP_PY (
+    echo ERROR: pip helper not ready - cannot install torchvision.
+    exit /b 1
+)
+if not defined TORCH_INDEX set "TORCH_INDEX=https://download.pytorch.org/whl/cpu"
+"%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import torchvision" 1>nul 2>nul
+if errorlevel 1 (
+    echo torchvision missing - installing from %TORCH_INDEX% ...
+    "%PIP_PY%" -m pip install torchvision --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-cache-dir --no-deps
+    if errorlevel 1 (
+        echo ERROR: torchvision install failed ^(needed by hear21passt/timm^).
+        exit /b 1
+    )
+) else (
+    echo torchvision already present.
+)
+"%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import torchaudio" 1>nul 2>nul
+if errorlevel 1 (
+    echo torchaudio missing - installing from %TORCH_INDEX% ...
+    "%PIP_PY%" -m pip install torchaudio --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-cache-dir --no-deps
+    if errorlevel 1 (
+        echo WARNING: torchaudio install failed - demucs may break.
+    )
+) else (
+    echo torchaudio already present.
+)
+"%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import torchvision; print('OK torchvision', torchvision.__version__)"
+if errorlevel 1 (
+    echo ERROR: torchvision still not importable from:
+    echo   %DEST%
+    exit /b 1
+)
+exit /b 0
 
 REM --- Ensure %TEMP%\stem-organizer-pip-venv matches HOST_PY (major.minor) ---
 REM Stale helper from another Python (e.g. 3.11 home while PATH is 3.10) makes
