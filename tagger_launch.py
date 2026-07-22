@@ -20,9 +20,13 @@ from deps_bootstrap import (
     SUPPORTED_PYTHON,
     app_dir,
     external_site_dirs,
+    frozen_exe_dir,
     is_frozen,
 )
 from ffmpeg_bootstrap import subprocess_kwargs
+
+# Child taggers also read this (belt-and-suspenders if PYTHONPATH is dropped).
+STEM_SITE_PACKAGES_ENV = "STEM_SITE_PACKAGES"
 
 
 def _parse_version_tag(text: str) -> tuple[int, int] | None:
@@ -76,10 +80,28 @@ def instrument_tagger_script() -> Path:
 
 
 def _site_packages() -> Path | None:
-    for path in external_site_dirs():
-        if path.is_dir():
-            return path
-    return None
+    """Prefer ``<exe_dir>\\site-packages`` that holds hear21passt when frozen."""
+    dirs = [p for p in external_site_dirs() if p.is_dir()]
+    if is_frozen():
+        exe_site = frozen_exe_dir() / "site-packages"
+        if exe_site.is_dir():
+            try:
+                exe_key = str(exe_site.resolve())
+            except OSError:
+                exe_key = str(exe_site)
+
+            def _same(p: Path) -> bool:
+                try:
+                    return str(p.resolve()) == exe_key
+                except OSError:
+                    return str(p) == exe_key
+
+            # Put exe-dir first so Auto-detect matches install-deps.bat layout.
+            dirs = [exe_site] + [p for p in dirs if not _same(p)]
+        with_passt = [p for p in dirs if (p / "hear21passt").is_dir()]
+        if with_passt:
+            return with_passt[0]
+    return dirs[0] if dirs else None
 
 
 def _expected_python() -> tuple[int, int]:
@@ -198,11 +220,31 @@ def resolve_tagger_python() -> Path | None:
     return None
 
 
+def _env_get_ci(env: dict[str, str], name: str) -> str:
+    """Case-insensitive env lookup (Windows may store ``PythonPath`` etc.)."""
+    if name in env:
+        return env[name]
+    want = name.lower()
+    for key, val in env.items():
+        if key.lower() == want:
+            return val
+    return ""
+
+
+def _env_set_ci(env: dict[str, str], name: str, value: str) -> None:
+    """Set env var, dropping other-case duplicates on Windows."""
+    drop = [k for k in env if k.lower() == name.lower()]
+    for key in drop:
+        del env[key]
+    env[name] = value
+
+
 def tagger_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """Env for tagger spawn; sets PYTHONPATH to site-packages when frozen.
 
     Host Python (not the .exe) must see hear21passt / onnxruntime wheels
-    installed by root install-deps.bat into ``site-packages\\``.
+    installed by root install-deps.bat into ``site-packages\\`` beside the
+    .exe — same shape as: ``set PYTHONPATH=%CD%\\site-packages``.
     """
     env = dict(base if base is not None else os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -211,16 +253,24 @@ def tagger_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
         return env
     site = _site_packages()
     if site is None:
-        return env
+        # Last resort: exe-dir site-packages even if not yet created (clearer errors).
+        site = frozen_exe_dir() / "site-packages"
+        if not site.is_dir():
+            return env
     try:
         entry = str(site.resolve())
     except OSError:
         entry = str(site)
-    existing = env.get("PYTHONPATH", "")
+    existing = _env_get_ci(env, "PYTHONPATH")
     parts = [p for p in existing.split(os.pathsep) if p]
     # Always put site-packages first so Auto-detect finds hear21passt.
     parts = [p for p in parts if os.path.normcase(p) != os.path.normcase(entry)]
-    env["PYTHONPATH"] = entry + (os.pathsep + os.pathsep.join(parts) if parts else "")
+    _env_set_ci(
+        env,
+        "PYTHONPATH",
+        entry + (os.pathsep + os.pathsep.join(parts) if parts else ""),
+    )
+    _env_set_ci(env, STEM_SITE_PACKAGES_ENV, entry)
     return env
 
 

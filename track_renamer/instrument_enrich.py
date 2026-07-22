@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tagger_launch import (
+    STEM_SITE_PACKAGES_ENV,
     instrument_tagger_dir,
     instrument_tagger_script,
     missing_tagger_python_hint,
@@ -20,8 +21,13 @@ from track_renamer.engine.defaults import DEFAULT_CATEGORY_SOURCE, map_instrumen
 from track_renamer.engine.models import OpRule, Rule, Track
 
 
-TAGGER_DIR = instrument_tagger_dir()
-TAGGER_SCRIPT = instrument_tagger_script()
+# Resolve at call time (frozen exe dir can differ from import-time assumptions).
+def _tagger_dir() -> Path:
+    return instrument_tagger_dir()
+
+
+def _tagger_script() -> Path:
+    return instrument_tagger_script()
 
 # Bump when model/label set / primary-pick policy changes so stale cache dies.
 _CACHE_MODEL = "passt-openmic-nosynth-g35"
@@ -258,7 +264,9 @@ def enrich_tracks(
         return cached_n, None
 
     py = resolve_tagger_python()
-    if py is None or not TAGGER_SCRIPT.is_file():
+    tagger_script = _tagger_script()
+    tagger_dir = _tagger_dir()
+    if py is None or not tagger_script.is_file():
         return cached_n, (
             "Instrument tagger not installed.\n"
             f"{missing_tagger_python_hint()}"
@@ -285,10 +293,11 @@ def enrich_tracks(
         if cancel is not None and cancel.is_set():
             return cached_n, None
 
+        spawn_env = tagger_subprocess_env()
         cmd = [
             str(py),
             "-u",
-            str(TAGGER_SCRIPT),
+            str(tagger_script),
             "--files-from",
             str(list_path),
             "--top",
@@ -305,8 +314,8 @@ def enrich_tracks(
             text=True,
             encoding="utf-8",
             errors="replace",
-            cwd=str(TAGGER_DIR),
-            env=tagger_subprocess_env(),
+            cwd=str(tagger_dir),
+            env=spawn_env,
             **subprocess_kwargs(),  # hide console window on Windows
         )
         if on_process is not None:
@@ -418,11 +427,26 @@ def enrich_tracks(
                         "Exception",
                         "UnicodeEncode",
                         "not installed",
+                        "import failed",
+                        "PYTHONPATH",
+                        "STEM_SITE",
+                        "detail:",
+                        "python:",
                     )
                 )
             ]
-            err = "\n".join(useful or log_tail[-8:]).strip() or "tagger failed"
-            return cached_n, err[:500]
+            err = "\n".join(useful or log_tail[-12:]).strip() or "tagger failed"
+            # Always append launch diagnostics when Auto-detect fails cold.
+            diag = (
+                f"\n  launch python: {py}"
+                f"\n  launch PYTHONPATH: {spawn_env.get('PYTHONPATH', '') or '(empty)'}"
+                f"\n  launch {STEM_SITE_PACKAGES_ENV}: "
+                f"{spawn_env.get(STEM_SITE_PACKAGES_ENV, '') or '(empty)'}"
+                f"\n  launch script: {tagger_script}"
+            )
+            if diag.strip() not in err:
+                err = (err + diag).strip()
+            return cached_n, err[:1200]
     except OSError as exc:
         return cached_n, str(exc)
     finally:
@@ -464,4 +488,4 @@ def clear_instrument_cache() -> None:
 
 
 def tagger_available() -> bool:
-    return resolve_tagger_python() is not None and TAGGER_SCRIPT.is_file()
+    return resolve_tagger_python() is not None and _tagger_script().is_file()

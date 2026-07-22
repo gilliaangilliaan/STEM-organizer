@@ -20,9 +20,59 @@ from pathlib import Path
 
 
 def _bootstrap_sibling_site_packages() -> None:
-    """Frozen dist: prefer ``../site-packages`` even if PYTHONPATH was dropped."""
+    """Ensure ``site-packages`` (beside STEM-organizer.exe) is on ``sys.path``.
+
+    Matches frozen Auto-detect launch: ``PYTHONPATH=<exe_dir>\\site-packages``.
+    Prefer ``STEM_SITE_PACKAGES`` from the parent exe, then walk parents for
+    ``STEM-organizer.exe`` / ``hear21passt`` — never trust ``_internal`` alone.
+    """
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: Path | None) -> None:
+        if path is None:
+            return
+        try:
+            path = path.resolve()
+        except OSError:
+            pass
+        key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    explicit = os.environ.get("STEM_SITE_PACKAGES", "").strip()
+    if explicit:
+        add(Path(explicit))
+
+    for part in os.environ.get("PYTHONPATH", "").split(os.pathsep):
+        part = part.strip()
+        if part:
+            add(Path(part))
+
     here = Path(__file__).resolve().parent
-    for site in (here.parent / "site-packages", here.parent.parent / "site-packages"):
+    for folder in (here, *here.parents):
+        if folder.name.lower() == "_internal":
+            continue
+        add(folder / "site-packages")
+        # App root: folder that holds the .exe
+        if any(
+            (folder / name).is_file()
+            for name in ("STEM-organizer.exe", "stem-organizer.exe", "STEM_organizer.exe")
+        ):
+            add(folder / "site-packages")
+            break
+
+    # Prefer a site-packages that actually contains hear21passt.
+    ordered = sorted(
+        candidates,
+        key=lambda p: (
+            0 if (p.is_dir() and (p / "hear21passt").is_dir()) else 1,
+            0 if p.is_dir() else 1,
+        ),
+    )
+    for site in ordered:
         if not site.is_dir():
             continue
         entry = str(site)
@@ -186,18 +236,60 @@ def load_backend(status=_status) -> _PasstOpenmicBackend:
 
         _passt_mod.first_RUN = False
     except ImportError as exc:
-        site_hint = Path(__file__).resolve().parent.parent / "site-packages"
-        missing_dir = not (site_hint / "hear21passt").is_dir()
+        sites: list[Path] = []
+        explicit = os.environ.get("STEM_SITE_PACKAGES", "").strip()
+        if explicit:
+            sites.append(Path(explicit))
+        here = Path(__file__).resolve().parent
+        for folder in (here.parent, *here.parents):
+            if folder.name.lower() == "_internal":
+                continue
+            sites.append(folder / "site-packages")
+            if any(
+                (folder / name).is_file()
+                for name in (
+                    "STEM-organizer.exe",
+                    "stem-organizer.exe",
+                    "STEM_organizer.exe",
+                )
+            ):
+                break
+        # Dedupe while preserving order
+        seen: set[str] = set()
+        uniq_sites: list[Path] = []
+        for site in sites:
+            key = str(site)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq_sites.append(site)
+
+        passt_dirs = [s / "hear21passt" for s in uniq_sites]
+        present = [p for p in passt_dirs if p.is_dir()]
+        pkg_missing = "hear21passt" in str(exc) or not present
+        if pkg_missing and not present:
+            headline = "ERROR: hear21passt not installed."
+        else:
+            # Dependency of hear21passt failed (e.g. timm) — do not mislabel.
+            headline = (
+                f"ERROR: hear21passt import failed ({type(exc).__name__}: {exc})."
+            )
+        look_lines = "\n".join(
+            f"    {p} ({'present' if p.is_dir() else 'MISSING'})" for p in passt_dirs[:4]
+        ) or "    (none)"
         raise SystemExit(
-            "\nERROR: hear21passt not installed.\n"
+            f"\n{headline}\n"
             "  Frozen build: run install-deps.bat beside STEM-organizer.exe\n"
             "    (must create site-packages\\hear21passt\\).\n"
             "  From source: run instrument_tagger\\install-deps.bat\n"
             "    (or root install-deps.bat).\n"
-            f"  looked for: {site_hint / 'hear21passt'}"
-            f" ({'MISSING' if missing_dir else 'present but import failed'})\n"
+            f"  python: {sys.executable}\n"
             f"  PYTHONPATH: {os.environ.get('PYTHONPATH', '') or '(empty)'}\n"
-            f"  detail: {exc}\n"
+            f"  STEM_SITE_PACKAGES: "
+            f"{os.environ.get('STEM_SITE_PACKAGES', '') or '(empty)'}\n"
+            f"  looked for hear21passt:\n{look_lines}\n"
+            f"  sys.path[0:5]: {sys.path[:5]!r}\n"
+            f"  detail: {exc!r}\n"
         ) from exc
 
     # Local mel (no torchaudio) — GG venv often has broken torchaudio wheels.

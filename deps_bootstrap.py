@@ -92,6 +92,60 @@ if is_frozen():
     _fix_frozen_stdio()
 
 
+_EXE_NAMES = frozenset({'stem-organizer.exe', 'stem_organizer.exe'})
+
+
+def _is_app_exe(path: Path) -> bool:
+    return path.is_file() and path.name.lower() in _EXE_NAMES
+
+
+def _climb_out_of_internal(path: Path) -> Path:
+    """Never treat ``_internal`` (PyInstaller MEIPASS) as the app root."""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    if resolved.name.lower() == '_internal':
+        return resolved.parent
+    return resolved
+
+
+def frozen_exe_dir() -> Path:
+    """Directory containing ``STEM-organizer.exe`` (not ``_internal``).
+
+    install-deps.bat puts ``site-packages\\`` beside the .exe. Prefer that
+    folder over anything derived from bundled script ``__file__`` paths.
+    """
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: Path) -> None:
+        path = _climb_out_of_internal(path)
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    add(Path(sys.executable).resolve().parent)
+    add(Path(sys.executable).parent)
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        add(Path(meipass).resolve().parent)
+        add(Path(meipass).parent)
+
+    # Prefer a folder that actually contains the app exe.
+    for base in candidates:
+        if any(_is_app_exe(base / name) for name in (
+            'STEM-organizer.exe', 'stem-organizer.exe', 'STEM_organizer.exe',
+        )):
+            return base
+    return candidates[0] if candidates else Path(sys.executable).resolve().parent
+
+
 def app_dir() -> Path:
     """Folder containing the .exe (frozen) or this repo root (source).
 
@@ -99,7 +153,7 @@ def app_dir() -> Path:
     ``STEM-organizer.exe`` sits beside the bat — must stay aligned.
     """
     if is_frozen():
-        return Path(sys.executable).resolve().parent
+        return frozen_exe_dir()
     return Path(__file__).resolve().parent
 
 
@@ -107,13 +161,13 @@ def _frozen_app_bases() -> list[Path]:
     """Candidate app folders for frozen site-packages discovery.
 
     PyInstaller 6 onedir: exe next to ``_internal`` (``sys._MEIPASS``).
-    Prefer the exe directory; also accept ``_MEIPASS`` parent in case the
-    bootloader reports a different executable path.
+    Prefer the exe directory; never use ``_internal`` itself.
     """
     bases: list[Path] = []
     seen: set[str] = set()
 
     def add(path: Path) -> None:
+        path = _climb_out_of_internal(path)
         try:
             key = str(path.resolve())
         except OSError:
@@ -123,6 +177,7 @@ def _frozen_app_bases() -> list[Path]:
         seen.add(key)
         bases.append(path)
 
+    add(frozen_exe_dir())
     add(Path(sys.executable).resolve().parent)
     add(Path(sys.executable).parent)
     meipass = getattr(sys, '_MEIPASS', None)
