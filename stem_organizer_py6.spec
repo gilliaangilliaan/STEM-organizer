@@ -22,7 +22,11 @@ datas += [('instrument_tagger/instrument_tagger.py', 'instrument_tagger')]
 datas += [('instrument_tagger/passt_mel.py', 'instrument_tagger')]
 
 hiddenimports = []
-hiddenimports += collect_submodules('PySide6')
+# Avoid PySide6.scripts (deploy tooling); collect_submodules hits missing project_lib.
+hiddenimports += [
+    m for m in collect_submodules('PySide6')
+    if not m.startswith('PySide6.scripts')
+]
 hiddenimports += ['classify_backend', 'pair_matcher', 'stem_align',
                   'ffmpeg_bootstrap', 'deps_bootstrap', 'resource_monitor',
                   'update_checker', 'single_instance', 'done_sound',
@@ -39,7 +43,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=['tkinter', 'customtkinter'],
+    excludes=['tkinter', 'customtkinter', 'PySide6.scripts'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

@@ -81,7 +81,8 @@ echo   Bundling UI into dist\STEM-organizer\STEM-organizer.exe
 echo   This usually takes a few minutes - output below:
 echo.
 
-"%PY%" -m PyInstaller --noconfirm --clean --log-level=INFO stem_organizer_py6.spec 2>&1
+REM ERROR keeps real failures visible; hides WARN (e.g. optional ctypes/AppKit/nvml).
+"%PY%" -m PyInstaller --noconfirm --clean --log-level=ERROR stem_organizer_py6.spec 2>&1
 if errorlevel 1 goto failed
 
 echo.
