@@ -1,6 +1,6 @@
 """Stdlib modules needed by external numpy/torch/soundfile/demucs in the frozen exe."""
 
-# Keep in sync with _ML_STDLIB_MODULES in stem_organizer.spec.
+# Keep in sync with hiddenimports in stem_organizer_py6.spec (imports this list).
 _ML_STDLIB_MODULES = (
     'platform',
     'sysconfig',

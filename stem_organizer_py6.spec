@@ -3,6 +3,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+from frozen_stdlib_imports import _ML_STDLIB_MODULES
+
 block_cipher = None
 
 # Pull in PySide6 plugins + translations
@@ -34,6 +36,11 @@ hiddenimports += ['classify_backend', 'pair_matcher', 'stem_align',
                   'track_renamer.engine', 'track_renamer.folder_scanner',
                   'track_renamer.audio_preview', 'track_renamer.instrument_enrich',
                   'track_renamer.category_palette']
+# Stdlib pulled in by external torch/numpy/demucs (e.g. strobelight → timeit).
+# Keep in sync with frozen_stdlib_imports._ML_STDLIB_MODULES; unittest.mock is
+# a common torch miss not always in that curated list.
+hiddenimports += list(_ML_STDLIB_MODULES)
+hiddenimports += ['unittest', 'unittest.mock', 'frozen_stdlib_imports']
 
 a = Analysis(
     ['run_stem_organizer.py'],

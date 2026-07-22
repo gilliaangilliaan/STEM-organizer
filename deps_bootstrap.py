@@ -247,6 +247,11 @@ def load_ml_deps(set_status=None):
         if set_status is not None:
             set_status(msg)
 
+    if is_frozen():
+        from frozen_stdlib_imports import ensure_stdlib_for_external_ml
+
+        ensure_stdlib_for_external_ml()
+
     status('Loading numpy…')
     import numpy as np
     status('Loading PyTorch…')
@@ -259,6 +264,21 @@ def load_ml_deps(set_status=None):
     from demucs.pretrained import get_model
 
     return np, sf, torch, get_model, apply_model, AudioFile
+
+
+def _is_missing_stdlib(exc: ImportError) -> bool:
+    """True when the missing name is stdlib (rebuild exe), not a pip package."""
+    name = (exc.name or '').split('.')[0]
+    if not name:
+        return False
+    try:
+        from frozen_stdlib_imports import _ML_STDLIB_MODULES
+
+        roots = {m.split('.')[0] for m in _ML_STDLIB_MODULES}
+    except Exception:
+        roots = {'timeit', 'unittest', 'platform', 'sysconfig'}
+    roots |= {'unittest', 'timeit'}
+    return name in roots
 
 
 def _pkg_present(dest: Path, name: str) -> bool:
@@ -314,6 +334,17 @@ def missing_deps_message(exc: ImportError) -> str:
         missing_line = f'Missing: {exc.name or "package"} ({detail})'
     else:
         missing_line = f'Missing: {exc.name or exc}'
+
+    if is_frozen() and _is_missing_stdlib(exc):
+        return '\n'.join([
+            'This .exe is missing a Python standard-library module needed by PyTorch.',
+            '',
+            missing_line,
+            '',
+            'install-deps.bat / site-packages cannot fix this.',
+            'Rebuild STEM-organizer.exe (run build.bat) so PyInstaller includes',
+            'stdlib hiddenimports (e.g. timeit) from stem_organizer_py6.spec.',
+        ])
 
     hint = _mismatch_hint(app_dir())
     version_line = _required_python_label()
