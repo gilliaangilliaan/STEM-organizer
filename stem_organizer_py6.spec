@@ -13,7 +13,7 @@ binaries = []
 # Bundle the logo + bundled ffmpeg + tagger scripts (not the venvs/models).
 datas += [('logo.png', '.')]
 datas += [('logo.ico', '.')]
-datas += [('settings.json', '.')]
+# settings.json is user-local (created at runtime by SettingsStore); do not bundle.
 datas += [('ffmpeg', 'ffmpeg')]
 datas += [('genre_gender_tagger/genre_gender_tagger.py', 'genre_gender_tagger')]
 datas += [('genre_gender_tagger/vocal_reverb.py', 'genre_gender_tagger')]
