@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="logo.png" alt="STEM organizer logo" width="200">
+  <img src="logo.png" alt="STEM organizer logo" width="320">
 </p>
+
+<div align="center">
 
 # STEM organizer
 
@@ -9,6 +11,8 @@ Organize, classify, and prepare multitrack music datasets. Automatically identif
 **By:** Gilliaan & Bas Curtiz  
 **Repo:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  
 **Video:** [How to install & use](https://youtu.be/Zqj6thKYrUs)
+
+</div>
 
 <p align="center">
   <img src="screenshots.gif" alt="STEM organizer screenshot" width="800">
