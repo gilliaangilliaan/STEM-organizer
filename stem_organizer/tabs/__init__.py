@@ -21,18 +21,18 @@ def register_all_tabs(window: "MainWindow", settings: "SettingsStore") -> None:
         print(f"[stem_organizer] classify tab unavailable: {exc}")
 
     try:
-        from .pair_finder_tab import register as register_pair
-
-        register_pair(window, settings)
-    except Exception as exc:
-        print(f"[stem_organizer] pair-finder tab unavailable: {exc}")
-
-    try:
         from .genre_gender_tab import register as register_gg
 
         register_gg(window, settings)
     except Exception as exc:
         print(f"[stem_organizer] genre/gender tab unavailable: {exc}")
+
+    try:
+        from .pair_finder_tab import register as register_pair
+
+        register_pair(window, settings)
+    except Exception as exc:
+        print(f"[stem_organizer] pair-finder tab unavailable: {exc}")
 
     try:
         from .rename_tab import register as register_rename

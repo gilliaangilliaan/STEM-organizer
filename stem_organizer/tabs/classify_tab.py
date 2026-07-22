@@ -145,6 +145,7 @@ class ClassifyTab(QWidget):
         filters_body.setAlignment(Qt.AlignTop)
 
         self.delete_if_short = CheckBox("Delete output shorter than")
+        self.delete_if_short.setChecked(True)  # CTk default ON
         self.delete_if_short.setToolTip("Recycle output folders whose duration is below the minimum.")
         self.min_duration_sec = CompactSpinBox()
         self.min_duration_sec.setObjectName("FilterDurationSpin")
@@ -160,6 +161,7 @@ class ClassifyTab(QWidget):
         self.delete_if_incomplete.setToolTip("Recycle output folders that don't contain every expected stem.")
 
         self.skip_existing = CheckBox("Skip songs that already have output stems")
+        self.skip_existing.setChecked(True)  # CTk default ON
         self.skip_existing.setToolTip("Resume mode — skip any song whose output folder already exists.")
 
         _row_h = theme.COMPACT_SPIN_HEIGHT
@@ -291,6 +293,7 @@ class ClassifyTab(QWidget):
         self.dedup = CheckBox("De-dupe identical stems")
         self.dedup.setToolTip("Detect near-identical stems (phase-inverted null test) and keep one.")
         self.peak_norm = CheckBox("Peak normalize to -1 dBFS")
+        self.peak_norm.setChecked(True)  # CTk default ON
         self.peak_norm.setToolTip("Scale each category mix so its peak is -1 dBFS.")
         self.make_mixture = CheckBox("Write mixture (WAV only)")
         self.make_mixture.setToolTip("Also write a mixture.wav that sums all categorized stems.")
@@ -782,7 +785,7 @@ class ClassifyTab(QWidget):
                 self.margin_slider.setValue(int(float(d["min_margin"]) * 100))
             if d.get("batch_size") is not None:
                 self.batch_spin.setValue(int(d["batch_size"]))
-            self.peak_norm.setChecked(bool(d.get("peak_norm", False)))
+            self.peak_norm.setChecked(bool(d.get("peak_norm", True)))
             self.make_mixture.setChecked(bool(d.get("make_mixture", False)))
             self.dedup.setChecked(bool(d.get("dedup", False)))
             if d.get("ambig_label") in cb.AMBIG_MODES:
@@ -791,11 +794,11 @@ class ClassifyTab(QWidget):
                 self.scan_combo.setCurrentText(d["scan_label"])
             if d.get("naming_label") in cb.NAMING_MODES:
                 self.naming_combo.setCurrentText(d["naming_label"])
-            self.delete_if_short.setChecked(bool(d.get("delete_if_short", False)))
+            self.delete_if_short.setChecked(bool(d.get("delete_if_short", True)))
             if d.get("min_duration_sec") is not None:
                 self.min_duration_sec.setValue(int(d["min_duration_sec"]))
             self.delete_if_incomplete.setChecked(bool(d.get("delete_if_incomplete", False)))
-            self.skip_existing.setChecked(bool(d.get("skip_existing", False)))
+            self.skip_existing.setChecked(bool(d.get("skip_existing", True)))
             self.sdr_delete_folder.setChecked(bool(d.get("sdr_delete_folder", True)))
             stored = d.get("sdr_thresholds")
             if isinstance(stored, dict):

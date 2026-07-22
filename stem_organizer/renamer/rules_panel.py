@@ -41,6 +41,7 @@ from track_renamer.category_palette import (
     sync_category_names_from_affix,
 )
 from track_renamer.engine.defaults import (
+    DEFAULT_CATEGORY_SOURCE,
     RULE_CATALOG,
     make_category_bundle,
     make_category_rules,
@@ -525,7 +526,7 @@ class RulesPanel(QWidget):
         src_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         source_row.addWidget(src_lbl)
         source_group = QButtonGroup(self)
-        cur_source = rule.params.get("source", "filename")
+        cur_source = rule.params.get("source", DEFAULT_CATEGORY_SOURCE)
         for val, lbl in SOURCE_LABELS:
             rb = ToggleButton(lbl)
             rb.setCheckable(True)

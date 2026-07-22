@@ -1,21 +1,29 @@
 """Genre & Gender tagger QThread wrapper.
 
-Spawns the bundled genre_gender_tagger subprocess (in its own venv) with the
-GG_* env-var protocol, streams stdout line by line, parses the progress markers
-and tqdm bars, and emits Qt signals.
+Spawns the bundled genre_gender_tagger subprocess with the GG_* env-var
+protocol, streams stdout line by line, parses the progress markers and tqdm
+bars, and emits Qt signals.
+
+Frozen: host Python + site-packages\\ beside the exe (see tagger_launch).
+Source: genre_gender_tagger\\venv when present.
 """
 from __future__ import annotations
 
-import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 
 from ffmpeg_bootstrap import subprocess_kwargs
+from tagger_launch import (
+    genre_gender_dir,
+    genre_gender_script,
+    missing_tagger_python_hint,
+    resolve_tagger_python,
+    tagger_subprocess_env,
+)
 
 
 _TQDM_PCT_RE = re.compile(
@@ -134,9 +142,9 @@ class TaggerWorker(QThread):
                 pass
 
     def run(self) -> None:  # noqa: N802 Qt name
-        tagger_dir = Path(__file__).resolve().parent.parent.parent / "genre_gender_tagger"
-        script = tagger_dir / "genre_gender_tagger.py"
-        python = tagger_dir / "venv" / "Scripts" / "python.exe"
+        tagger_dir = genre_gender_dir()
+        script = genre_gender_script()
+        python = resolve_tagger_python()
         if not script.is_file():
             self.log_line.emit(
                 f"Bundled tagger not found:\n{script}\n\n"
@@ -145,19 +153,18 @@ class TaggerWorker(QThread):
             )
             self.finished_ok.emit("Failed — tagger missing")
             return
-        if not python.is_file():
+        if python is None or not python.is_file():
             self.log_line.emit(
-                f"Genre & Gender venv not found:\n{python}\n\n"
-                "Run genre_gender_tagger\\install-deps.bat once.",
+                f"Genre & Gender Python not found.\n\n{missing_tagger_python_hint()}",
                 "err",
             )
-            self.finished_ok.emit("Failed — venv missing")
+            self.finished_ok.emit("Failed — Python missing")
             return
 
         # Resolve input while STEM cwd may differ; tagger subprocess cwd is tagger_dir.
         input_dir = str(Path(self._input_dir).expanduser().resolve())
 
-        env = os.environ.copy()
+        env = tagger_subprocess_env()
         env["GG_MODE"] = self._mode
         env["GG_INPUT"] = input_dir
         env["GG_BATCH"] = "1" if self._batch_mode else "0"
@@ -173,8 +180,6 @@ class TaggerWorker(QThread):
         else:
             env["GG_TAG_STYLE"] = self._tag_style
             env["GG_REVERB_MODE"] = "combined"
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PYTHONIOENCODING"] = "utf-8"
         if self._csv_path:
             env["GG_CSV"] = self._csv_path
 

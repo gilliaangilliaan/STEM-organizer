@@ -32,6 +32,7 @@ from typing import List, Optional
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -634,17 +635,37 @@ class StemPlayerWindow(QWidget):
     review_error = Signal(object)            # exc
 
     def __init__(self, parent=None, *, library_root: Optional[str] = None) -> None:
-        super().__init__(parent, Qt.Window | Qt.FramelessWindowHint)
+        # Independent top-level window (parent=None). Parenting to MainWindow
+        # creates a native child HWND that can cover the host 1:1 and leave the
+        # OS pointing-hand cursor stuck on the main GUI after close.
+        super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
         self.setWindowTitle("STEM Player")
-        self.resize(theme.WIN_DEFAULT_W, theme.WIN_DEFAULT_H)
+        self._host = parent
+        # Match main GUI size (host when available); safe now that we are not a
+        # native child of MainWindow.
+        pw, ph = theme.WIN_DEFAULT_W, theme.WIN_DEFAULT_H
+        if parent is not None:
+            try:
+                host = parent.window()
+                if host is not None and host.isVisible():
+                    hg = host.frameGeometry()
+                    if hg.width() > 0 and hg.height() > 0:
+                        pw, ph = hg.width(), hg.height()
+            except Exception:
+                pass
+        self.resize(pw, ph)
         self.setMinimumSize(PLAYER_MIN_W, PLAYER_MIN_H)
         
         from ..widgets.titlebar import install_rounded_corner_watcher, install_frame_resize
         install_rounded_corner_watcher(self, radius=theme.WINDOW_CORNER_RADIUS)
         install_frame_resize(self)
 
-        self._host = parent
         self._colors = theme.COLORS
+        # Center once after first show (frame / thick-frame geometry known).
+        self._center_pending = True
+        # Closed windows destroy their HWND; reopening must construct a new
+        # StemPlayerWindow (show() on a closed instance → CreateWindowEx fail).
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
 
         # State
         self._engine: Optional[AudioEngine] = None
@@ -1367,6 +1388,14 @@ class StemPlayerWindow(QWidget):
     # ----- close -----
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        # Drop resize mouse-grab before hide — otherwise the grip's cursor can
+        # stick on the host window underneath.
+        handler = getattr(self, "_frame_resize_handler", None)
+        if handler is not None and getattr(handler, "is_resizing", False):
+            try:
+                handler.end_resize()
+            except Exception:
+                pass
         self._tick_timer.stop()
         if self._engine is not None:
             self._engine.set_playing(False)
@@ -1375,7 +1404,13 @@ class StemPlayerWindow(QWidget):
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
+        self.unsetCursor()
+        _release_cursor_overrides()
+        _forget_player_window(self)
         super().closeEvent(event)
+        # After this HWND is gone, re-apply cursor for whatever is under the mouse
+        # (Qt often skips leave/enter when a covering window is closed).
+        QTimer.singleShot(0, _force_cursor_resync)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -1390,7 +1425,53 @@ class StemPlayerWindow(QWidget):
             if handler is not None:
                 handler._layout_grips()
                 handler._raise_grips()
+            # After thick-frame so frameGeometry is valid (exe Win11 top-left bug).
+            if self._center_pending:
+                self._center_pending = False
+                self._center_on_parent_or_screen()
         QTimer.singleShot(0, _after_show)
+
+    def _center_on_parent_or_screen(self) -> None:
+        """Center over parent MainWindow (or its screen). Skip if maximized.
+
+        Matches dialogs.py / CTk: prefer host ``frameGeometry``, else the
+        screen that contains the host, else the primary screen work area.
+        """
+        if self.isMaximized() or getattr(self, "_custom_maximized", False):
+            return
+
+        host = None
+        if self._host is not None:
+            try:
+                host = self._host.window()
+            except Exception:
+                host = self._host
+
+        if host is not None and host is not self and host.isVisible():
+            hg = host.frameGeometry()
+            fg = self.frameGeometry()
+            self.move(
+                hg.x() + max(0, (hg.width() - fg.width()) // 2),
+                hg.y() + max(0, (hg.height() - fg.height()) // 2),
+            )
+            return
+
+        screen = None
+        if host is not None:
+            try:
+                screen = host.screen()
+            except Exception:
+                screen = None
+        if screen is None:
+            screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        fg = self.frameGeometry()
+        self.move(
+            avail.x() + max(0, (avail.width() - fg.width()) // 2),
+            avail.y() + max(0, (avail.height() - fg.height()) // 2),
+        )
 
     def nativeEvent(self, eventType, message):  # noqa: N802
         # Must match MainWindow: unpack MSG, then handle_native_frame_message(window, msg).
@@ -1437,27 +1518,89 @@ class StemPlayerWindow(QWidget):
 _PLAYER_WINDOW: Optional[StemPlayerWindow] = None
 
 
+def _forget_player_window(win: Optional[StemPlayerWindow]) -> None:
+    """Drop singleton / host refs so the next Play constructs a fresh window."""
+    global _PLAYER_WINDOW
+    if win is None:
+        return
+    if _PLAYER_WINDOW is win:
+        _PLAYER_WINDOW = None
+    host = getattr(win, "_host", None)
+    if host is not None and getattr(host, "_player_window", None) is win:
+        try:
+            host._player_window = None
+        except Exception:
+            pass
+
+
+def _release_cursor_overrides() -> None:
+    app = QApplication.instance()
+    if app is None:
+        return
+    while app.overrideCursor() is not None:
+        app.restoreOverrideCursor()
+
+
+def _force_cursor_resync() -> None:
+    """Re-apply the cursor for the widget under the mouse after player close."""
+    from PySide6.QtGui import QCursor
+
+    _release_cursor_overrides()
+    app = QApplication.instance()
+    if app is None:
+        return
+    w = QApplication.widgetAt(QCursor.pos())
+    cursor = w.cursor() if w is not None else QCursor(Qt.ArrowCursor)
+    app.setOverrideCursor(cursor)
+    app.restoreOverrideCursor()
+
+
 def open_stem_player(parent=None, library_root: Optional[str] = None):
     """Open (or focus) the singleton Stem Player window."""
     global _PLAYER_WINDOW
     _ensure_player_audio_deps()
     if _PLAYER_WINDOW is not None:
         try:
+            # Only reuse a still-living, visible window. After close the HWND is
+            # gone (WA_DeleteOnClose); show() on that instance → CreateWindowEx fail.
             if _PLAYER_Window_visible(_PLAYER_WINDOW):
+                if library_root and (
+                    not _PLAYER_WINDOW._library_root
+                    or Path(library_root) != _PLAYER_WINDOW._library_root
+                ):
+                    _PLAYER_WINDOW._prepare_library(library_root)
                 _PLAYER_WINDOW.raise_()
                 _PLAYER_WINDOW.activateWindow()
-                if library_root and (not _PLAYER_WINDOW._library_root or
-                                     Path(library_root) != _PLAYER_WINDOW._library_root):
-                    _PLAYER_WINDOW._prepare_library(library_root)
-                _PLAYER_WINDOW.show()
-                return
+                if parent is not None:
+                    try:
+                        parent._player_window = _PLAYER_WINDOW  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                return _PLAYER_WINDOW
         except Exception:
-            _PLAYER_WINDOW = None
+            pass
+        _forget_player_window(_PLAYER_WINDOW)
 
     win = StemPlayerWindow(parent, library_root=library_root)
     _PLAYER_WINDOW = win
+    if parent is not None:
+        try:
+            parent._player_window = win  # type: ignore[attr-defined]
+        except Exception:
+            pass
     win.show()
     return win
+
+
+def close_stem_player() -> None:
+    """Close the singleton player if open (used from MainWindow shutdown)."""
+    win = _PLAYER_WINDOW
+    if win is None:
+        return
+    try:
+        win.close()
+    except Exception:
+        _forget_player_window(win)
 
 
 def _PLAYER_Window_visible(win: StemPlayerWindow) -> bool:

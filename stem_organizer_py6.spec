@@ -30,7 +30,8 @@ hiddenimports += [
     if not m.startswith('PySide6.scripts')
 ]
 hiddenimports += ['classify_backend', 'pair_matcher', 'stem_align',
-                  'ffmpeg_bootstrap', 'deps_bootstrap', 'resource_monitor',
+                  'ffmpeg_bootstrap', 'deps_bootstrap', 'tagger_launch',
+                  'resource_monitor',
                   'update_checker', 'single_instance', 'done_sound',
                   'sounddevice', 'soundfile', 'resampy', 'numpy',
                   'track_renamer.engine', 'track_renamer.folder_scanner',

@@ -475,8 +475,9 @@ class GenreGenderTab(QWidget):
                     "A CSV export is always written.",
                 ]),
                 ("Setup", [
-                    "Genre & Gender uses the bundled folder genre_gender_tagger\\ with its own venv. "
-                    "Run genre_gender_tagger\\install-deps.bat once (or accept it at the end of STEM install-deps.bat).",
+                    "Frozen build: run install-deps.bat beside STEM-organizer.exe "
+                    "(wheels go into site-packages\\; no nested genre_gender_tagger\\venv). "
+                    "From source: run root install-deps.bat or genre_gender_tagger\\install-deps.bat.",
                 ]),
             ],
         )

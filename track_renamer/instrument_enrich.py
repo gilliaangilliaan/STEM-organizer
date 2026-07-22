@@ -4,25 +4,24 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from track_renamer.engine.defaults import map_instrument_to_category
+from tagger_launch import (
+    instrument_tagger_dir,
+    instrument_tagger_script,
+    missing_tagger_python_hint,
+    resolve_tagger_python,
+    tagger_subprocess_env,
+)
+from track_renamer.engine.defaults import DEFAULT_CATEGORY_SOURCE, map_instrument_to_category
 from track_renamer.engine.models import OpRule, Rule, Track
 
 
-def _app_root() -> Path:
-    """Folder that holds instrument_tagger\\ + genre_gender_tagger\\ (exe dir when frozen)."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
-
-
-TAGGER_DIR = _app_root() / "instrument_tagger"
-TAGGER_SCRIPT = TAGGER_DIR / "instrument_tagger.py"
+TAGGER_DIR = instrument_tagger_dir()
+TAGGER_SCRIPT = instrument_tagger_script()
 
 # Bump when model/label set / primary-pick policy changes so stale cache dies.
 _CACHE_MODEL = "passt-openmic-nosynth-g35"
@@ -71,26 +70,10 @@ def terminate_tagger_process(proc: subprocess.Popen | None) -> None:
         pass
 
 
-def resolve_tagger_python() -> Path | None:
-    """Prefer shared genre_gender_tagger venv (one torch for both taggers)."""
-    root = _app_root()
-    candidates = (
-        root / "genre_gender_tagger" / "venv" / "Scripts" / "python.exe",
-        root / "genre_gender_tagger" / "venv" / "bin" / "python",
-        # Legacy dedicated instrument venv (pre-slim).
-        TAGGER_DIR / "venv" / "Scripts" / "python.exe",
-        TAGGER_DIR / "venv" / "bin" / "python",
-    )
-    for path in candidates:
-        if path.is_file():
-            return path
-    return None
-
-
 def rules_need_instrument_ml(rules: list[Rule]) -> bool:
     for rule in rules:
         if isinstance(rule, OpRule) and rule.op == "categoryBundle":
-            source = str(rule.params.get("source", "filename")).lower()
+            source = str(rule.params.get("source", DEFAULT_CATEGORY_SOURCE)).lower()
             if source in ("model", "combo"):
                 return True
     return False
@@ -278,8 +261,7 @@ def enrich_tracks(
     if py is None or not TAGGER_SCRIPT.is_file():
         return cached_n, (
             "Instrument tagger not installed.\n"
-            "Run dist\\install-deps.bat and answer Yes to Rename Auto-detect\n"
-            "(shared venv: genre_gender_tagger\\venv — not under instrument_tagger\\)."
+            f"{missing_tagger_python_hint()}"
         )
 
     total = cached_n + len(pending)
@@ -324,6 +306,7 @@ def enrich_tracks(
             encoding="utf-8",
             errors="replace",
             cwd=str(TAGGER_DIR),
+            env=tagger_subprocess_env(),
             **subprocess_kwargs(),  # hide console window on Windows
         )
         if on_process is not None:

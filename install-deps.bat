@@ -398,7 +398,10 @@ echo.
 echo Core install OK (%TORCH_LABEL%).
 echo.
 
-REM --- Always install Genre & Gender + Rename Auto-detect (no prompts) ---
+REM --- Genre & Gender + Rename Auto-detect ---
+REM Frozen: extra wheels into site-packages\ (no nested genre_gender_tagger\venv).
+REM Source: nested genre_gender_tagger\venv shared by both taggers.
+if "%USE_SITE%"=="1" goto install_tagger_site
 if not exist "%~dp0genre_gender_tagger\install-deps.bat" goto after_gg
 echo === Genre ^& Gender deps ^(always^) ===
 set "STEM_GG_BUNDLED=1"
@@ -420,6 +423,38 @@ set "STEM_GG_BUNDLED="
 if errorlevel 1 (
     echo WARNING: Rename Auto-detect install reported errors - continuing.
 )
+goto after_inst
+
+:install_tagger_site
+echo === Genre ^& Gender + Rename deps into site-packages ===
+if not defined PIP_PY (
+    set "PIP_VENV=%TEMP%\stem-organizer-pip-venv"
+    if not exist "%PIP_VENV%\Scripts\python.exe" (
+        echo Preparing clean pip helper ...
+        python -m venv "%PIP_VENV%"
+        if errorlevel 1 (
+            echo WARNING: could not create pip helper - skipping tagger extras.
+            goto after_inst
+        )
+    )
+    set "PIP_PY=%PIP_VENV%\Scripts\python.exe"
+)
+if not defined PIP_PY goto after_inst
+if "%PIP_PY%"=="" goto after_inst
+"%PIP_PY%" -m pip install -q -U pip
+if exist "%~dp0genre_gender_tagger\requirements.txt" (
+    "%PIP_PY%" -m pip install -r "%~dp0genre_gender_tagger\requirements.txt" -t "%DEST%" --upgrade --no-cache-dir
+    if errorlevel 1 echo WARNING: Genre ^& Gender extras reported errors - continuing.
+) else (
+    echo WARNING: genre_gender_tagger\requirements.txt missing - skipping.
+)
+echo Rename Auto-detect ^(hear21passt^) ...
+"%PIP_PY%" -m pip install hear21passt --no-deps -t "%DEST%" --upgrade --no-cache-dir
+if errorlevel 1 echo WARNING: hear21passt install reported errors - continuing.
+"%PIP_PY%" -m pip install timm --no-deps -t "%DEST%" --upgrade --no-cache-dir
+if errorlevel 1 echo WARNING: timm install reported errors - continuing.
+"%PIP_PY%" -m pip install pyyaml huggingface_hub safetensors packaging -t "%DEST%" --upgrade --no-cache-dir
+if errorlevel 1 echo WARNING: PaSST helper deps reported errors - continuing.
 
 :after_inst
 echo.

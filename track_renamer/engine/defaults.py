@@ -327,7 +327,7 @@ OPENMIC_TO_CATEGORY: dict[str, str] = {
     "voice": "Vocals",
 }
 
-DEFAULT_CATEGORY_SOURCE = "filename"
+DEFAULT_CATEGORY_SOURCE = "combo"
 
 
 def map_instrument_to_category(label: str) -> str:

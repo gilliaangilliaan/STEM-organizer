@@ -1,7 +1,7 @@
 """Main window for STEM organizer (PySide6 port).
 
 Frameless QMainWindow with a custom title bar, a left column holding a tab
-widget (Classify / Match & Align / Genre & Gender / Rename) plus a shared
+widget (Classify / Genre & Gender / Match & Align / Rename) plus a shared
 action bar, a right column with the log panel, and a bottom status bar.
 
 This file currently wires up the skeleton; tab contents are added in their
@@ -536,4 +536,10 @@ class MainWindow(QMainWindow):
                 self._player_window.close()
             except Exception:
                 pass
+        try:
+            from .player.stem_player_window import close_stem_player
+
+            close_stem_player()
+        except Exception:
+            pass
         event.accept()
