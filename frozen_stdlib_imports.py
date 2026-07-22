@@ -44,6 +44,21 @@ def _skip_stdlib_part(name: str) -> bool:
         return True
     return False
 
+
+def is_excluded_stdlib_hiddenimport(name: str) -> bool:
+    """True if a dotted module name must never be a PyInstaller hiddenimport.
+
+    Catches ``__phello__``, ``__phello__.foo`` (intentional ImportError stub),
+    ``__hello__``, and other skip-list tops (``antigravity``, ``this``, …).
+    """
+    if not name:
+        return True
+    if '__phello__' in name:
+        return True
+    if name == '__hello__' or name.startswith('__hello__.'):
+        return True
+    return _skip_stdlib_part(name.split('.', 1)[0])
+
 # Generous curated set for runtime ensure_* (and Analysis when traced from entry).
 _ML_STDLIB_MODULES = (
     # --- already required / previously missing ---
@@ -281,7 +296,7 @@ def iter_ml_stdlib_module_names(lib_root: Path | None = None) -> list[str]:
         elif entry.suffix == '.py' and entry.name != '__init__.py':
             if not _skip_stdlib_part(entry.stem):
                 names.append(entry.stem)
-    return names
+    return [n for n in names if not is_excluded_stdlib_hiddenimport(n)]
 
 
 def ensure_stdlib_for_external_ml() -> None:

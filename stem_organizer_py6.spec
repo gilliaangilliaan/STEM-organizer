@@ -3,7 +3,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-from frozen_stdlib_imports import _ML_STDLIB_MODULES, iter_ml_stdlib_module_names
+from frozen_stdlib_imports import (
+    _ML_STDLIB_MODULES,
+    is_excluded_stdlib_hiddenimport,
+    iter_ml_stdlib_module_names,
+)
 
 block_cipher = None
 
@@ -45,6 +49,13 @@ for _name in list(iter_ml_stdlib_module_names()) + list(_ML_STDLIB_MODULES):
         _seen.add(_name)
         hiddenimports.append(_name)
 hiddenimports += ['frozen_stdlib_imports']
+# Hard filter: never feed CPython demo/frozen stubs to Analysis (e.g. __phello__.foo).
+hiddenimports = [m for m in hiddenimports if not is_excluded_stdlib_hiddenimport(m)]
+assert not any(
+    m == '__hello__' or m.startswith('__hello__.') or '__phello__' in m
+    for m in hiddenimports
+), 'stdlib demo stubs leaked into hiddenimports'
+# REM debug: print('hiddenimports ok; count=', len(hiddenimports))
 
 a = Analysis(
     ['run_stem_organizer.py'],
@@ -54,7 +65,11 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=['tkinter', 'customtkinter', 'PySide6.scripts'],
+    excludes=[
+        'tkinter', 'customtkinter', 'PySide6.scripts',
+        # Keep Analysis from rediscovering frozen demo stubs.
+        '__phello__', '__phello__.foo', '__phello__.spam', '__hello__',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
