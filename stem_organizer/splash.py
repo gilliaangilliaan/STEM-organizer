@@ -42,10 +42,8 @@ class StartupWorker(QThread):
             self.status.emit("Checking ML dependencies…")
             from deps_bootstrap import ensure_ml_deps
 
-            if not ensure_ml_deps(show_dialog=False, set_status=lambda m: self.status.emit(m)):
-                raise RuntimeError(
-                    "Missing Python packages. Run install-deps.bat beside this app."
-                )
+            # show_dialog=False: on failure raises RuntimeError with package list
+            ensure_ml_deps(show_dialog=False, set_status=lambda m: self.status.emit(m))
             self.status.emit("Initializing application…")
             import classify_backend
 

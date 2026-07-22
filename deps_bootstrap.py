@@ -53,17 +53,27 @@ def _mismatch_hint(app_dir: Path) -> str | None:
         expected = _embedded_python(app_dir)
         if expected is None:
             return None
-    marker = app_dir / 'site-packages' / SITE_PACKAGES_MARKER
-    if not marker.is_file():
-        return None
-    installed = _parse_version_tag(marker.read_text(encoding='utf-8'))
-    if installed is None or installed == expected:
-        return None
-    return (
-        f'site-packages were installed with Python {_version_label(installed)}, '
-        f'but this app needs {_version_label(expected)}.\n'
-        f'Delete site-packages\\ and run install-deps.bat with py -{expected[0]}.{expected[1]}.'
-    )
+    markers = [app_dir / 'site-packages' / SITE_PACKAGES_MARKER]
+    if is_frozen():
+        for dest in external_site_dirs():
+            markers.append(dest / SITE_PACKAGES_MARKER)
+    seen: set[str] = set()
+    for marker in markers:
+        key = str(marker)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not marker.is_file():
+            continue
+        installed = _parse_version_tag(marker.read_text(encoding='utf-8'))
+        if installed is None or installed == expected:
+            return None
+        return (
+            f'site-packages were installed with Python {_version_label(installed)}, '
+            f'but this app needs {_version_label(expected)}.\n'
+            f'Delete site-packages\\ and run install-deps.bat with py -{expected[0]}.{expected[1]}.'
+        )
+    return None
 
 
 def is_frozen() -> bool:
@@ -83,17 +93,60 @@ if is_frozen():
 
 
 def app_dir() -> Path:
+    """Folder containing the .exe (frozen) or this repo root (source).
+
+    install-deps.bat installs into ``<this>/site-packages`` when
+    ``STEM-organizer.exe`` sits beside the bat — must stay aligned.
+    """
     if is_frozen():
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
 
+def _frozen_app_bases() -> list[Path]:
+    """Candidate app folders for frozen site-packages discovery.
+
+    PyInstaller 6 onedir: exe next to ``_internal`` (``sys._MEIPASS``).
+    Prefer the exe directory; also accept ``_MEIPASS`` parent in case the
+    bootloader reports a different executable path.
+    """
+    bases: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: Path) -> None:
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        bases.append(path)
+
+    add(Path(sys.executable).resolve().parent)
+    add(Path(sys.executable).parent)
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        add(Path(meipass).resolve().parent)
+    return bases
+
+
 def external_site_dirs() -> list[Path]:
-    base = app_dir()
-    return [
-        base / 'site-packages',
-        base / '.venv' / 'Lib' / 'site-packages',
-    ]
+    """Paths where install-deps.bat (or a project .venv) may put wheels."""
+    bases = _frozen_app_bases() if is_frozen() else [app_dir()]
+    dirs: list[Path] = []
+    seen: set[str] = set()
+    for base in bases:
+        for candidate in (
+            base / 'site-packages',
+            base / '.venv' / 'Lib' / 'site-packages',
+        ):
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            dirs.append(candidate)
+    return dirs
 
 
 def _prepend_path(path: Path) -> None:
@@ -171,14 +224,16 @@ def init_external_deps(set_status=None) -> None:
 
     setup_ffmpeg()
     status('Preparing native libraries…')
-    for path in external_site_dirs():
-        if path.is_dir():
-            entry = str(path)
-            if entry not in sys.path:
-                sys.path.insert(0, entry)
-            _register_native_libs(path)
-            _prepare_soundfile_dll(path)
-            _preload_site_extensions(path)
+    # Insert last→first so the first candidate (exe-side site-packages) ends
+    # up at sys.path[0]. install-deps.bat frozen mode uses that folder.
+    existing = [p for p in external_site_dirs() if p.is_dir()]
+    for path in reversed(existing):
+        entry = str(path)
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+        _register_native_libs(path)
+        _prepare_soundfile_dll(path)
+        _preload_site_extensions(path)
 
     torch_home = app_dir() / 'torch_home'
     checkpoints = torch_home / 'hub' / 'checkpoints'
@@ -220,11 +275,13 @@ def _import_probe(name: str) -> str:
 
 
 def _site_packages_hint() -> str:
-    dest = app_dir() / 'site-packages'
+    candidates = external_site_dirs()
+    dest = next((p for p in candidates if p.is_dir()), candidates[0] if candidates else app_dir() / 'site-packages')
     if not dest.is_dir():
-        return f'site-packages\\ folder not found next to this app ({dest}).'
+        tried = ', '.join(str(p) for p in candidates) or str(dest)
+        return f'site-packages\\ folder not found next to this app (tried: {tried}).'
 
-    lines: list[str] = []
+    lines: list[str] = [f'Using: {dest}']
     torch_dir = dest / 'torch'
     if torch_dir.is_dir():
         lib_dir = torch_dir / 'lib'
@@ -238,7 +295,7 @@ def _site_packages_hint() -> str:
 
     lines.append('')
     lines.append('Import check:')
-    for name in ('numpy', 'torch', '_cffi_backend', 'soundfile'):
+    for name in ('numpy', 'torch', '_cffi_backend', 'soundfile', 'demucs'):
         lines.append(f'  {_import_probe(name)}')
 
     return '\n'.join(lines)
@@ -347,28 +404,41 @@ def demucs_model_cached(model_id: str) -> bool:
 def ensure_ml_deps(*, show_dialog: bool = True, set_status=None) -> bool:
     init_external_deps(set_status)
     hint = _mismatch_hint(app_dir())
-    if hint and show_dialog:
-        import tkinter as tk
-        from tkinter import messagebox
+    if hint:
+        if show_dialog:
+            try:
+                import tkinter as tk
+                from tkinter import messagebox
 
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror('Python version mismatch', hint, parent=root)
-        root.destroy()
-        return False
+                root = tk.Tk()
+                root.withdraw()
+                messagebox.showerror('Python version mismatch', hint, parent=root)
+                root.destroy()
+            except Exception:
+                pass
+            return False
+        raise RuntimeError(hint)
     try:
         load_ml_deps(set_status)
         return True
     except ImportError as exc:
         if show_dialog:
-            _show_missing_deps_dialog(exc)
-        return False
+            try:
+                _show_missing_deps_dialog(exc)
+            except Exception:
+                pass
+            return False
+        raise RuntimeError(missing_deps_message(exc)) from exc
     except OSError as exc:
         wrapped = ImportError(f'DLL load failed: {exc}')
         wrapped.__cause__ = exc
         if show_dialog:
-            _show_missing_deps_dialog(wrapped)
-        return False
+            try:
+                _show_missing_deps_dialog(wrapped)
+            except Exception:
+                pass
+            return False
+        raise RuntimeError(missing_deps_message(wrapped)) from exc
 
 
 def python_for_install() -> str:

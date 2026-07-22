@@ -100,6 +100,12 @@ echo.
 REM --- Destination: site-packages beside exe, else project .venv ---
 REM NOTE: set DEST inside IF (...), then use %DEST% AFTER the block ends
 REM (cmd expands %VAR% at parse time inside parentheses).
+REM
+REM Frozen path contract (must match deps_bootstrap.external_site_dirs):
+REM   install here:  <folder-with-STEM-organizer.exe>\site-packages\
+REM   exe looks in:  Path(sys.executable).parent / "site-packages"
+REM Put install-deps.bat in the SAME folder as STEM-organizer.exe (the
+REM COLLECT output folder, e.g. dist\STEM-organizer\), then run it there.
 set "USE_SITE=0"
 set "DEST="
 set "PY="

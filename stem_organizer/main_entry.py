@@ -8,6 +8,7 @@ Stage 9 wires together:
 """
 from __future__ import annotations
 
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -20,6 +21,34 @@ from .app import MainWindow
 from .settings_store import SettingsStore, app_dir
 from .splash import show_splash_and_startup
 from .widgets.dialogs import show_info
+
+
+def _startup_error_report(exc: BaseException) -> str:
+    """Full diagnostics for startup_error.log (exc may no longer be 'active')."""
+    parts: list[str] = [
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        "",
+        f"executable: {sys.executable}",
+        f"frozen: {getattr(sys, 'frozen', False)}",
+        f"_MEIPASS: {getattr(sys, '_MEIPASS', None)}",
+        f"cwd: {os.getcwd()}",
+        f"python: {sys.version}",
+        "",
+        "sys.path:",
+    ]
+    parts.extend(f"  {p}" for p in sys.path)
+    parts.append("")
+    parts.append("site-packages candidates:")
+    try:
+        from deps_bootstrap import app_dir as deps_app_dir
+        from deps_bootstrap import external_site_dirs
+
+        parts.append(f"  deps app_dir: {deps_app_dir()}")
+        for path in external_site_dirs():
+            parts.append(f"  {path}  exists={path.is_dir()}")
+    except Exception as list_exc:
+        parts.append(f"  (could not list: {list_exc})")
+    return "\n".join(parts)
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -67,23 +96,24 @@ def run(argv: list[str] | None = None) -> int:
 
 def _on_ready(app: QApplication, settings: SettingsStore, startup_error) -> None:
     if startup_error is not None:
-        traceback.print_exc()
-        if isinstance(startup_error, RuntimeError):
-            try:
-                from deps_bootstrap import ensure_ml_deps
-
-                ensure_ml_deps(show_dialog=True)
-            except Exception:
-                pass
+        report = _startup_error_report(startup_error)
+        try:
+            sys.stderr.write(report + "\n")
+        except Exception:
+            pass
         try:
             log_path = app_dir() / "startup_error.log"
-            log_path.write_text(traceback.format_exc(), encoding="utf-8")
+            log_path.write_text(report, encoding="utf-8")
         except OSError:
             pass
+        # Keep dialog readable; full traceback + sys.path are in the log.
+        msg = str(startup_error).strip() or repr(startup_error)
+        if len(msg) > 1800:
+            msg = msg[:1800] + "\n…"
         show_info(
             None,
             "STEM organizer — startup failed",
-            f"Startup failed:\n{startup_error}\n\nDetails were written to startup_error.log.",
+            f"Startup failed:\n{msg}\n\nDetails were written to startup_error.log.",
         )
         sys.exit(1)
     _construct_and_show(app, settings, startup_error)
