@@ -1,78 +1,58 @@
-# STEM organizer (PySide6)
+<p align="center">
+  <img src="logo.png" alt="STEM organizer logo" width="200">
+</p>
 
-Organize, classify, and prepare multitrack music datasets. Automatically identify stem layouts, tag genres and vocals, align tracks, rename files, and build clean AI-ready datasets
+# STEM organizer
 
-PySide6 re-creation of the original [STEM organizer](https://github.com/gilliaangilliaan/STEM-organizer)
-GUI (Tkinter / CustomTkinter). Same dark look, same four tabs, same backends —
-only the GUI layer was rewritten.
+Organize, classify, and prepare multitrack music datasets. Automatically identify stem layouts, tag genres and vocals, align tracks, rename files, and build clean AI-ready datasets.
 
-## Tabs (unchanged from the original)
+**By:** Gilliaan & Bas Curtiz  
+**Repo:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  
+**Video:** [How to install & use](https://youtu.be/Zqj6thKYrUs)
+
+<p align="center">
+  <img src="screenshot.png" alt="STEM organizer screenshot" width="800">
+</p>
+
+## Tabs
 
 | Tab | Role |
 |-----|------|
-| **Classify**      | Demucs RMS classify → group → FLAC/WAV export; dedup, normalize, SI-SDR |
-| **Match & Align** | Pair acapella / instrumental, organize, align to original timeline |
-| **Genre & Gender**| MAEST genre/style + EffNet gender + dry/wet reverb (PaSST, ONNX) |
-| **Rename**        | Rule-based sample rename + optional instrument Auto-detect (PaSST) |
+| **Classify** | Demucs classify → group → FLAC/WAV export; optional dedup, normalize, SI-SDR |
+| **Match & Align** | Pair acapella/instrumental, organize, align to original |
+| **Genre & Gender** | MAEST genre/style; EffNet gender; vocal dry/wet reverb |
+| **Rename** | Rule-based sample rename + optional instrument Auto-detect (PaSST) |
 
-Plus the **Stem Player** window (waveform + transport + per-stem mute/solo).
+Hover **?** in the UI for per-setting help.
+
+## Requirements
+
+- Windows
+- Python **3.10** or **3.11** on PATH (for `install-deps.bat` / `build.bat`)
+- Disk space for `site-packages\` (Demucs/torch) and optional ML venv under `genre_gender_tagger\`
 
 ## Quick start (from source)
 
 ```bat
-pip install -r requirements.txt
-python run_stem_organizer.py
+install-deps.bat
+python stem_organizer_ui.py
 ```
 
-For the optional Genre & Gender and Rename Auto-detect models, run the bundled
-installers inside `genre_gender_tagger\` and `instrument_tagger\` (or re-run
-the original `install-deps.bat` from the Tk project — the venv folders are not
-included here).
+`install-deps.bat` installs Demucs + ffmpeg, then optionally Genre & Gender and Rename Auto-detect (shared `genre_gender_tagger\venv`).
 
-## Layout
+## Build `.exe`
 
-```
-STEM-organizer-Py6\
-├── run_stem_organizer.py            # entry
-├── classify_backend.py              # tk-free Classify (RMS) + SI-SDR worker layer
-├── pair_matcher.py, stem_align.py   # copied verbatim from the Tk project
-├── ffmpeg_bootstrap.py, deps_bootstrap.py, resource_monitor.py, …
-├── track_renamer\engine\            # copied verbatim
-├── track_renamer\folder_scanner.py, audio_preview.py, instrument_enrich.py, category_palette.py
-├── genre_gender_tagger\, instrument_tagger\
-├── stem_organizer\                  # PySide6 GUI
-│   ├── app.py                       # QMainWindow (frameless + custom title bar)
-│   ├── main_entry.py                # splash + single-instance + startup
-│   ├── theme.py                     # COLORS / DARK tokens + QSS + QPalette
-│   ├── settings_store.py            # JSON load / save / autosave
-│   ├── splash.py                    # QSplashScreen + StartupWorker
-│   ├── widgets\                     # title bar, action bar, log, status, sections, dialogs
-│   ├── workers\                     # QThread adapters for Classify / Pair / Tagger
-│   ├── tabs\                        # classify / pair_finder / genre_gender / rename
-│   ├── player\                      # stem player window + audio engine + waveform widget
-│   └── renamer\                     # rename GUI (rules + preview + audio bar)
-└── logo.png, logo.ico, ffmpeg\, settings.json
+```bat
+build.bat
 ```
 
-## Architecture
+Then in `dist\`:
 
-- **Threading**: `QThread` subclasses + Qt signals (`Qt.QueuedConnection`) replace
-  the original `queue.Queue` + `after(100, ...)` drain loop. The Classify workers
-  reuse the verbatim `threading.Thread`-based `Worker` / `SdrWorker` classes
-  (see `classify_backend.py`) inside a `BaseWorker` adapter that bridges tuples
-  to Qt signals.
-- **Waveforms**: `QPainterPath` filled polygon replaces the original
-  `tk.Canvas.create_polygon`. Audio engine + TrackState are pure Python +
-  numpy + sounddevice, ported near-verbatim.
-- **Custom title bar**: frameless `QMainWindow` with `Qt.FramelessWindowHint`,
-  drag + edge-resize reimplemented on `mousePress/Move`, Win11 rounded corners
-  via `DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND)`.
-- **Rename preview**: `QTableView` + `QAbstractTableModel` replaces the
-  hand-rolled virtualized canvas list, with the same lazy-compute worker
-  (priority visible rows first) and ANALYZE LOG sub-panel.
-- **Theme**: `COLORS` / `DARK` dicts ported verbatim from `ui_theme.py`; built
-  into a single QSS stylesheet + `QPalette`.
+```bat
+install-deps.bat
+STEM-organizer.exe
+```
 
 ## License
 
-MIT (same as the original).
+[MIT](LICENSE)
