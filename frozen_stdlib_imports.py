@@ -11,6 +11,7 @@ larger bundle over rebuild whack-a-mole.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -58,6 +59,21 @@ def is_excluded_stdlib_hiddenimport(name: str) -> bool:
     if name == '__hello__' or name.startswith('__hello__.'):
         return True
     return _skip_stdlib_part(name.split('.', 1)[0])
+
+
+def is_available_stdlib_hiddenimport(name: str) -> bool:
+    """True if *name* may be a PyInstaller hiddenimport on this build Python.
+
+    Combines the hard skip list with ``importlib.util.find_spec`` so removed
+    stdlib modules (``binhex`` on 3.11+, ``imp``/``formatter``/… on older
+    cuts) are omitted automatically for the interpreter running the .spec.
+    """
+    if is_excluded_stdlib_hiddenimport(name):
+        return False
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
 
 # Generous curated set for runtime ensure_* (and Analysis when traced from entry).
 _ML_STDLIB_MODULES = (
@@ -142,7 +158,6 @@ _ML_STDLIB_MODULES = (
     'secrets',
     'base64',
     'binascii',
-    'binhex',
     'quopri',
     'uu',
     # --- numbers / text ---
@@ -296,7 +311,7 @@ def iter_ml_stdlib_module_names(lib_root: Path | None = None) -> list[str]:
         elif entry.suffix == '.py' and entry.name != '__init__.py':
             if not _skip_stdlib_part(entry.stem):
                 names.append(entry.stem)
-    return [n for n in names if not is_excluded_stdlib_hiddenimport(n)]
+    return [n for n in names if is_available_stdlib_hiddenimport(n)]
 
 
 def ensure_stdlib_for_external_ml() -> None:

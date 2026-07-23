@@ -5,6 +5,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 from frozen_stdlib_imports import (
     _ML_STDLIB_MODULES,
+    is_available_stdlib_hiddenimport,
     is_excluded_stdlib_hiddenimport,
     iter_ml_stdlib_module_names,
 )
@@ -16,7 +17,7 @@ datas = []
 datas += collect_data_files('PySide6', include_py_files=False)
 binaries = []
 
-# Bundle the logo + tagger scripts (not the venvs/models).
+# Bundle the logo + tagger scripts + Essentia ONNX/TF models.
 datas += [('logo.png', '.')]
 datas += [('logo.ico', '.')]
 # settings.json is user-local (created at runtime by SettingsStore); do not bundle.
@@ -24,6 +25,14 @@ datas += [('logo.ico', '.')]
 datas += [('genre_gender_tagger/genre_gender_tagger.py', 'genre_gender_tagger')]
 datas += [('genre_gender_tagger/vocal_reverb.py', 'genre_gender_tagger')]
 datas += [('genre_gender_tagger/requirements.txt', 'genre_gender_tagger')]
+# Prefer offline gender tagging; download is SSL-fragile on some Win11 VMs.
+import os as _os
+_gg_models = 'genre_gender_tagger/models'
+if _os.path.isdir(_gg_models):
+    for _name in _os.listdir(_gg_models):
+        _src = _os.path.join(_gg_models, _name)
+        if _os.path.isfile(_src):
+            datas += [(_src, 'genre_gender_tagger/models')]
 datas += [('instrument_tagger/instrument_tagger.py', 'instrument_tagger')]
 datas += [('instrument_tagger/passt_mel.py', 'instrument_tagger')]
 
@@ -43,9 +52,11 @@ hiddenimports += ['classify_backend', 'pair_matcher', 'stem_align',
                   'track_renamer.category_palette']
 # Stdlib for external torch/numpy/demucs: nearly full Lib/ dump (CTk strategy)
 # plus curated runtime list. Prefer larger onedir over ModuleNotFoundError cycles.
+# Only keep names find_spec can resolve on *this* build Python (drops binhex on
+# 3.11+, imp/formatter/… when absent, etc.).
 _seen = set()
 for _name in list(iter_ml_stdlib_module_names()) + list(_ML_STDLIB_MODULES):
-    if _name not in _seen:
+    if _name not in _seen and is_available_stdlib_hiddenimport(_name):
         _seen.add(_name)
         hiddenimports.append(_name)
 hiddenimports += ['frozen_stdlib_imports']
@@ -55,6 +66,11 @@ assert not any(
     m == '__hello__' or m.startswith('__hello__.') or '__phello__' in m
     for m in hiddenimports
 ), 'stdlib demo stubs leaked into hiddenimports'
+import sys as _sys
+if _sys.version_info >= (3, 11):
+    assert 'binhex' not in hiddenimports, (
+        'binhex must not be a hiddenimport on Python 3.11+ (removed from stdlib)'
+    )
 # REM debug: print('hiddenimports ok; count=', len(hiddenimports))
 
 a = Analysis(

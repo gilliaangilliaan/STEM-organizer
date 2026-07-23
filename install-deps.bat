@@ -96,17 +96,65 @@ if defined REQ_VER (
 )
 
 REM --- Detect GPU hint (nvidia-smi); user still picks 1/2/3 ---
+REM Older nvidia-smi may reject csv,noheader and print ERROR on stdout;
+REM never treat that text as a GPU name.
 set "GPU_HINT=no NVIDIA GPU detected - option 2 (CPU) is safest"
+set "GPU_NAME="
 where nvidia-smi >nul 2>&1
-if not errorlevel 1 (
-    for /f "tokens=*" %%G in ('nvidia-smi --query-gpu=name --format=csv,noheader 2^>nul') do (
-        set "GPU_NAME=%%G"
-        goto gpu_named
-    )
+if errorlevel 1 goto gpu_hint_done
+
+REM 1) Modern: csv,noheader
+for /f "tokens=* delims=" %%G in ('nvidia-smi --query-gpu=name --format=csv,noheader 2^>nul') do (
+    set "GPU_NAME=%%G"
+    goto gpu_validate_modern
 )
+goto gpu_try_csv
+
+:gpu_validate_modern
+call :gpu_name_ok
+if errorlevel 1 (
+    set "GPU_NAME="
+    goto gpu_try_csv
+)
+goto gpu_named
+
+:gpu_try_csv
+REM 2) csv with header - skip first row
+for /f "skip=1 tokens=* delims=" %%G in ('nvidia-smi --query-gpu=name --format=csv 2^>nul') do (
+    set "GPU_NAME=%%G"
+    goto gpu_validate_csv
+)
+goto gpu_try_plain
+
+:gpu_validate_csv
+call :gpu_name_ok
+if errorlevel 1 (
+    set "GPU_NAME="
+    goto gpu_try_plain
+)
+goto gpu_named
+
+:gpu_try_plain
+REM 3) Plain nvidia-smi - first product-like line (findstr avoids | pipes in echo)
+for /f "tokens=* delims=" %%G in ('nvidia-smi 2^>nul ^| findstr /I "GeForce Quadro Tesla Titan RTX GTX"') do (
+    set "GPU_NAME=%%G"
+    goto gpu_named
+)
+goto gpu_name_unknown
+
+:gpu_name_unknown
+REM nvidia-smi on PATH but no reliable name - do not echo error text as GPU
+set "GPU_HINT=could not read GPU name - option 2 (CPU) is safest; NVIDIA: try 1 (CUDA 12.4) or 3 for 50-series"
 goto gpu_hint_done
 
 :gpu_named
+REM Strip table pipes so echo/findstr are safe
+set "GPU_NAME=%GPU_NAME:|=%"
+call :gpu_name_ok
+if errorlevel 1 (
+    set "GPU_NAME="
+    goto gpu_name_unknown
+)
 echo Detected GPU: %GPU_NAME%
 echo %GPU_NAME% | findstr /I /C:"RTX 50" >nul
 if not errorlevel 1 (
@@ -543,6 +591,15 @@ echo.
 echo ERROR: install failed. Check messages above.
 pause
 exit /b 1
+
+REM --- Reject empty / header / nvidia-smi error text as GPU_NAME ---
+:gpu_name_ok
+if not defined GPU_NAME exit /b 1
+if "%GPU_NAME%"=="" exit /b 1
+if /I "%GPU_NAME%"=="name" exit /b 1
+echo %GPU_NAME% | findstr /I /C:"ERROR" /C:"not recognized" >nul
+if not errorlevel 1 exit /b 1
+exit /b 0
 
 REM --- Match TORCH_INDEX to existing site-packages torch (+cu128/+cu124/+cpu) ---
 :detect_torch_index
