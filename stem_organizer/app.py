@@ -37,6 +37,7 @@ from .widgets.titlebar import (
     enable_win32_thick_frame,
     handle_native_frame_message,
     note_minimize_restore_to_default,
+    prepare_dark_frameless_chrome,
     toggle_work_area_maximize,
 )
 
@@ -63,6 +64,8 @@ class MainWindow(QMainWindow):
         root = QWidget()
         root.setObjectName("AppRoot")
         self.setCentralWidget(root)
+        # Dark fill on HWND + client before first paint (avoids default gray seams).
+        prepare_dark_frameless_chrome(self)
         self._root_layout = QVBoxLayout(root)
         self._root_layout.setContentsMargins(0, 0, 0, 0)
         self._root_layout.setSpacing(0)
@@ -251,6 +254,7 @@ class MainWindow(QMainWindow):
         # Defer Win32 style tweak until the platform window exists and is shown.
         # Touching styles via winId() during __init__ caused CreateWindowEx failures.
         def _after_show() -> None:
+            # Thick-frame FRAMECHANGED + NCCALCSIZE + re-apply rounded region.
             enable_win32_thick_frame(self)
             handler = getattr(self, "_frame_resize_handler", None)
             if handler is not None:

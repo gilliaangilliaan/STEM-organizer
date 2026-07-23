@@ -92,6 +92,10 @@ def enable_win32_thick_frame(window: QWidget) -> None:
     Calling ``winId()`` / ``SetWindowLong`` during ``__init__`` (before the
     first ``show``) leaves Qt's window-creation state inconsistent and can
     make the next ``CreateWindowEx`` fail.
+
+    Arm ``_win32_thick_frame`` *before* ``SWP_FRAMECHANGED`` so the synchronous
+    ``WM_NCCALCSIZE`` is handled and Windows does not leave light thick-frame
+    chrome around the client (intermittent gray/white borders).
     """
     if _user32 is None or sys.platform != "win32":
         return
@@ -112,6 +116,8 @@ def enable_win32_thick_frame(window: QWidget) -> None:
         # WS_SYSMENU here — they get mirrored into Qt title hints and can
         # break a later CreateWindowEx when combined with FramelessWindowHint.
         new_style = style | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+        # Must be True before FRAMECHANGED — that call sends WM_NCCALCSIZE now.
+        window._win32_thick_frame = True  # type: ignore[attr-defined]
         if new_style != style:
             _user32.SetWindowLongW(hwnd, GWL_STYLE, new_style)
             _user32.SetWindowPos(
@@ -123,9 +129,39 @@ def enable_win32_thick_frame(window: QWidget) -> None:
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
             )
-        window._win32_thick_frame = True  # type: ignore[attr-defined]
+        # FRAMECHANGED can invalidate the region clip; re-apply dark chrome.
+        apply_window_corner_preference(window, theme.WINDOW_CORNER_RADIUS)
+        window.update()
     except Exception:
         pass
+
+
+def prepare_dark_frameless_chrome(window: QWidget) -> None:
+    """Paint theme bg on the HWND/client so default gray never shows in seams.
+
+    QSS alone is not always enough for QMainWindow / top-level QWidget while
+    Win32 thick-frame geometry settles; palette + auto-fill closes the gap.
+    """
+    from PySide6.QtGui import QColor, QPalette
+
+    targets: list[QWidget] = [window]
+    cw_getter = getattr(window, "centralWidget", None)
+    if callable(cw_getter):
+        cw = cw_getter()
+        if cw is not None and cw is not window:
+            targets.append(cw)
+
+    bg = QColor(theme.COLORS["bg"])
+    for w in targets:
+        pal = w.palette()
+        for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+            pal.setColor(group, QPalette.Window, bg)
+            pal.setColor(group, QPalette.Base, bg)
+        w.setPalette(pal)
+        w.setAutoFillBackground(True)
+        w.setAttribute(Qt.WA_StyledBackground, True)
+        # Do not leave translucent attrs that reveal desktop/system gray.
+        w.setAttribute(Qt.WA_TranslucentBackground, False)
 
 
 def _win_is_zoomed(hwnd: int) -> bool:
@@ -502,6 +538,10 @@ def apply_rounded_window_region(
 
     When maximized (or radius <= 0), clears the region so the window is square.
     Skips no-op updates to avoid flicker / busy cursor loops.
+
+    Region size uses the HWND physical rect (``GetWindowRect``), not Qt logical
+    ``width()``/``height()`` — on HiDPI a logical-sized region leaves unpainted
+    strips around the clip.
     """
     if _user32 is None or _gdi32 is None or sys.platform != "win32":
         return
@@ -511,15 +551,30 @@ def apply_rounded_window_region(
         hwnd = int(window.winId())
         if hwnd == 0:
             return
-        w = max(int(window.width()), 1)
-        h = max(int(window.height()), 1)
+        # Prefer physical HWND size so CreateRoundRectRgn matches the frame.
+        cur = wintypes.RECT()
+        if _user32.GetWindowRect(hwnd, ctypes.byref(cur)):
+            w = max(int(cur.right - cur.left), 1)
+            h = max(int(cur.bottom - cur.top), 1)
+        else:
+            try:
+                dpr = float(window.devicePixelRatioF())
+            except Exception:
+                dpr = 1.0
+            w = max(int(round(window.width() * dpr)), 1)
+            h = max(int(round(window.height() * dpr)), 1)
         if w < 2 or h < 2:
             return
         if maximized is None:
             is_max = is_window_filled(window)
         else:
             is_max = bool(maximized)
-        key = (w, h, is_max, int(radius), "rgn")
+        try:
+            dpr = float(window.devicePixelRatioF())
+        except Exception:
+            dpr = 1.0
+        pr = max(1, int(round(radius * dpr))) if radius > 0 else 0
+        key = (w, h, is_max, int(pr), "rgn")
         if getattr(window, "_round_corner_key", None) == key:
             return
 
@@ -529,7 +584,7 @@ def apply_rounded_window_region(
                 _user32.SetWindowRgn(hwnd, 0, True)
             else:
                 # CreateRoundRectRgn: right/bottom exclusive; ellipse diameter = 2*r
-                hrgn = _gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, radius * 2, radius * 2)
+                hrgn = _gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, pr * 2, pr * 2)
                 if not hrgn:
                     return
                 # On success the system owns hrgn — do not DeleteObject.

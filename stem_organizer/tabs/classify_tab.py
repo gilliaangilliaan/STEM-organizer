@@ -765,8 +765,7 @@ class ClassifyTab(QWidget):
             version_line=f"v{theme.APP_VERSION} — by Gilliaan & Bas Curtiz",
             intro=(
                 "Organize, classify, and prepare multitrack music datasets.\n"
-                "Automatically create 2- or 4-stems, identify genre/style and vocals/reverb, "
-                "align tracks & auto-rename files."
+                "Automatically create 2- or 4-stems, identify genre/style + vocal gender/reverb, align tracks & auto-rename files."
             ),
             header_icon=logo if logo.exists() else None,
             repo_url=theme.STATUS_LINK_URL,

@@ -565,10 +565,13 @@ class _FolderNameBar(BodyLabel):
         # Parent-only super().__init__: FluentLabelBase's text overload does
         # self.__init__(parent), which re-enters this subclass __init__ forever.
         super().__init__(parent)
+        self.setObjectName("StemFolderChip")
         self.setText("(no folder loaded)")
         self._interactive = False
         self._hovered = False
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        # Same tip path as Load (native QToolTip). Scope chip QSS to #StemFolderChip
+        # so unqualified color/background do not leak into the tooltip.
         self._apply_style()
 
     def set_interactive(self, enabled: bool) -> None:
@@ -580,7 +583,9 @@ class _FolderNameBar(BodyLabel):
             self._hovered = False
         if enabled:
             self.setCursor(Qt.PointingHandCursor)
-            self.setToolTip("Open folder in Explorer")
+            self.setToolTip(
+                theme.format_tooltip("Open folder in Explorer")
+            )
         else:
             self.unsetCursor()
             self.setToolTip("")
@@ -593,9 +598,12 @@ class _FolderNameBar(BodyLabel):
             bg = theme.CONTROL_BG
         else:
             bg = "transparent"
+        # Type+objectName selector only — bare color/bg rules restyle QToolTip.
         self.setStyleSheet(
-            f"color: {theme.DARK['text']}; background-color: {bg}; "
-            f"padding: 4px 8px; border-radius: 4px;"
+            f"QLabel#StemFolderChip {{"
+            f" color: {theme.DARK['text']}; background-color: {bg};"
+            f" padding: 4px 8px; border-radius: 4px;"
+            f"}}"
         )
 
     def enterEvent(self, event) -> None:
@@ -731,9 +739,16 @@ class StemPlayerWindow(QWidget):
         self._default_w = pw
         self._default_h = ph
 
-        from ..widgets.titlebar import install_rounded_corner_watcher, install_frame_resize
+        from ..widgets.titlebar import (
+            install_frame_resize,
+            install_rounded_corner_watcher,
+            prepare_dark_frameless_chrome,
+        )
         install_rounded_corner_watcher(self, radius=theme.WINDOW_CORNER_RADIUS)
         install_frame_resize(self)
+        # Same dark chrome fill as MainWindow (shared thick-frame path).
+        self.setObjectName("AppRoot")
+        prepare_dark_frameless_chrome(self)
 
         self._colors = theme.COLORS
         # Center once after first show (frame / thick-frame geometry known).
@@ -1476,7 +1491,10 @@ class StemPlayerWindow(QWidget):
         except ValueError:
             new_idx = idx
         bg = "#7ee0a0" if verdict == "pass" else "#ff7a7a"
-        self.title_lbl.setStyleSheet(f"background: {bg}; color: #000; padding: 4px 8px; border-radius: 4px;")
+        self.title_lbl.setStyleSheet(
+            f"QLabel#StemFolderChip {{ background: {bg}; color: #000; "
+            f"padding: 4px 8px; border-radius: 4px; }}"
+        )
         QTimer.singleShot(1500, self.title_lbl._apply_style)
         self._folder_job_active = False
         if 0 <= new_idx < len(self._song_folders):

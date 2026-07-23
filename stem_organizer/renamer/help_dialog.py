@@ -136,7 +136,7 @@ def show_rename_help_dialog(parent: Optional[QWidget] = None) -> None:
 
     layout.addWidget(_help_section_card(
         card, "Workflow",
-        "1. Open a folder and choose whether subfolders are included.\n"
+        "1. Browse & select a folder. Choose whether subfolders are included.\n"
         "2. Add, reorder, enable, or edit rules on the left.\n"
         "3. Click Apply only when rules have changed, then inspect the preview.\n"
         "4. Select the files you want and click Rename.",

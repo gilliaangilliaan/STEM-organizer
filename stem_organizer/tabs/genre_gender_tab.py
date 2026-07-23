@@ -222,7 +222,7 @@ class GenreGenderTab(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(0, 8, 0, 10)
         header.setSpacing(6)
-        title = BodyLabel("Tag instrumental/music files with Discogs genre and style tags")
+        title = BodyLabel("Tag instrumental/music files with Discogs genre / style tags")
         title.setObjectName("HeaderDesc")
         header.addWidget(title)
         header.addWidget(InfoIcon(inner, on_click=lambda: self._show_help("genre")))

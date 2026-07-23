@@ -3,7 +3,7 @@
 Stage 9 wires together:
   - single_instance.acquire_single_instance() gate
   - QSplashScreen + StartupWorker (deps_bootstrap + classify_backend._init_ml)
-  - MainWindow construction after startup completes
+  - MainWindow construction while splash still visible, then splash.finish(main)
   - update_checker background thread
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QApplication
 from . import theme
 from .app import MainWindow
 from .settings_store import SettingsStore, app_dir
-from .splash import show_splash_and_startup
+from .splash import Splash, dismiss_splash, show_splash_and_startup
 from .widgets.dialogs import show_info
 
 
@@ -88,15 +88,25 @@ def run(argv: list[str] | None = None) -> int:
         splash_shown = False
 
     if splash_shown:
-        splash, worker = show_splash_and_startup(on_ready=lambda exc: _on_ready(app, settings, exc))
+        splash, worker = show_splash_and_startup(
+            on_ready=lambda exc: _on_ready(app, settings, exc, splash)
+        )
         return app.exec()
     else:
-        _construct_and_show(app, settings, None)
+        _construct_and_show(app, settings, None, splash=None)
         return app.exec()
 
 
-def _on_ready(app: QApplication, settings: SettingsStore, startup_error) -> None:
+def _on_ready(
+    app: QApplication,
+    settings: SettingsStore,
+    startup_error,
+    splash: Splash | None,
+) -> None:
     if startup_error is not None:
+        # Always dismiss splash on failure so it never sticks forever.
+        if splash is not None:
+            splash.close()
         report = _startup_error_report(startup_error)
         try:
             sys.stderr.write(report + "\n")
@@ -117,42 +127,58 @@ def _on_ready(app: QApplication, settings: SettingsStore, startup_error) -> None
             f"Startup failed:\n{msg}\n\nDetails were written to startup_error.log.",
         )
         sys.exit(1)
-    _construct_and_show(app, settings, startup_error)
+    _construct_and_show(app, settings, startup_error, splash=splash)
 
 
-def _construct_and_show(app: QApplication, settings: SettingsStore, startup_error) -> None:
-    window = MainWindow(settings)
-
-    from .tabs import register_all_tabs
-
-    register_all_tabs(window, settings)
-
-    theme.polish_fluent_controls(window)
-    # Rename Apply clones Clear width after Clear gets polished fonts/padding
-    from PySide6.QtCore import QTimer
-
-    from .renamer.rules_panel import RulesPanel
-
-    def _sync_rename_apply() -> None:
-        for panel in window.findChildren(RulesPanel):
-            panel.match_apply_to_clear()
-
-    _sync_rename_apply()
-    window.show()
-    QTimer.singleShot(0, _sync_rename_apply)
-
-    from .widgets.titlebar import apply_window_corner_preference
-
-    # Region clip needs a mapped HWND + final size (same as CTk after show)
-    apply_window_corner_preference(window, theme.WINDOW_CORNER_RADIUS)
-
-    # Background update check
+def _construct_and_show(
+    app: QApplication,
+    settings: SettingsStore,
+    startup_error,
+    splash: Splash | None = None,
+) -> None:
+    # Build UI while splash still covers the screen (avoids blank gap).
     try:
-        from update_checker import run_check_in_thread
+        window = MainWindow(settings)
 
-        run_check_in_thread(theme.APP_VERSION, window)
+        from .tabs import register_all_tabs
+
+        register_all_tabs(window, settings)
+
+        theme.polish_fluent_controls(window)
+        # Rename Apply clones Clear width after Clear gets polished fonts/padding
+        from PySide6.QtCore import QTimer
+
+        from .renamer.rules_panel import RulesPanel
+
+        def _sync_rename_apply() -> None:
+            for panel in window.findChildren(RulesPanel):
+                panel.match_apply_to_clear()
+
+        _sync_rename_apply()
+        window.show()
+        QTimer.singleShot(0, _sync_rename_apply)
+
+        from .widgets.titlebar import apply_window_corner_preference
+
+        # Region clip needs a mapped HWND + final size (same as CTk after show)
+        apply_window_corner_preference(window, theme.WINDOW_CORNER_RADIUS)
+
+        # Classic Qt handoff: main is shown, then splash fades/finishes onto it.
+        if splash is not None:
+            dismiss_splash(splash, window)
+            splash = None  # owned by fade; don't double-close in except
+
+        # Background update check
+        try:
+            from update_checker import run_check_in_thread
+
+            run_check_in_thread(theme.APP_VERSION, window)
+        except Exception:
+            pass
     except Exception:
-        pass
+        if splash is not None:
+            splash.close()
+        raise
 
 
 if __name__ == "__main__":

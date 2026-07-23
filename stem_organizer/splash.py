@@ -4,6 +4,8 @@ Port of stem_organizer_ui.show_splash_screen + _startup_tasks + launch.
 
 A QSplashScreen with the logo + status text, fade in/out via QPropertyAnimation,
 and a startup QThread that runs deps_bootstrap.ensure_ml_deps + classify_backend._init_ml.
+
+Caller dismisses the splash only after MainWindow is shown (see dismiss_splash).
 """
 from __future__ import annotations
 
@@ -103,10 +105,35 @@ class Splash(QSplashScreen):
         return time.monotonic() >= self._min_visible_until
 
 
+def dismiss_splash(splash: Splash, main_window: Optional[QWidget] = None) -> None:
+    """Fade out then close splash. Prefer after ``main_window.show()`` (no blank gap).
+
+    If ``main_window`` is given, calls ``splash.finish(main_window)`` after the fade
+    so Qt raises the main window; otherwise just ``close()`` (error / no-window paths).
+    """
+    fade_out = QPropertyAnimation(splash, b"windowOpacity", splash)
+    fade_out.setDuration(SPLASH_FADE_OUT_MS)
+    fade_out.setStartValue(1.0)
+    fade_out.setEndValue(0.0)
+
+    def _close() -> None:
+        if main_window is not None:
+            splash.finish(main_window)
+        else:
+            splash.close()
+
+    fade_out.finished.connect(_close)
+    fade_out.start()
+    splash._fade_out = fade_out  # type: ignore[attr-defined] keep ref
+
+
 def show_splash_and_startup(
     on_ready: Callable[[Optional[Exception]], None],
 ) -> tuple[Splash, StartupWorker]:
-    """Show splash, run startup; call ``on_ready(exc)`` when min hold + startup done."""
+    """Show splash, run startup; call ``on_ready(exc)`` when min hold + startup done.
+
+    Splash stays visible until the caller dismisses it (after MainWindow is shown).
+    """
     splash = Splash()
     splash.show()
 
@@ -125,13 +152,8 @@ def show_splash_and_startup(
         if not splash.elapsed_ok():
             QTimer.singleShot(80, lambda: check_finish(error))
             return
-        fade_out = QPropertyAnimation(splash, b"windowOpacity", splash)
-        fade_out.setDuration(SPLASH_FADE_OUT_MS)
-        fade_out.setStartValue(1.0)
-        fade_out.setEndValue(0.0)
-        fade_out.finished.connect(lambda: (splash.close(), on_ready(error)))
-        fade_out.start()
-        splash._fade_out = fade_out  # type: ignore[attr-defined]
+        # Keep splash up while MainWindow is built/shown — caller dismisses.
+        on_ready(error)
 
     worker.finished_ok.connect(check_finish)
     worker.start()
