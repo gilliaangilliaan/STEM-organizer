@@ -12,11 +12,6 @@ REM   1 = NVIDIA RTX 20/30/40  -> CUDA 12.4  (https://download.pytorch.org/whl/c
 REM   2 = CPU only             -> CPU wheels (https://download.pytorch.org/whl/cpu)
 REM   3 = NVIDIA RTX 50-series -> CUDA 12.8  (https://download.pytorch.org/whl/cu128)
 REM
-REM Always installs Genre & Gender + Rename Auto-detect (no Y/N prompts).
-REM
-REM Destinations:
-REM   - Next to STEM-organizer.exe  -> site-packages\  (frozen / shipped build)
-REM   - Otherwise (source tree)     -> .venv\          (project virtualenv)
 REM =============================================================================
 
 echo.
@@ -27,7 +22,7 @@ echo   - Python 3.10 or 3.11 on PATH ^(same version as the .exe if present^)
 echo   - Internet ^(PyTorch, demucs, ffmpeg, tagger models^)
 echo.
 echo You choose once: GPU or CPU PyTorch.
-echo Genre ^& Gender and Rename Auto-detect deps are always installed.
+echo Genre ^& Gender and Rename Auto-detect deps will also be installed.
 echo.
 
 where python >nul 2>&1
