@@ -1,4 +1,5 @@
 # update_checker.py
+import os
 import threading
 import webbrowser
 
@@ -12,6 +13,19 @@ GITHUB_API_URL = (
     f'https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/releases/latest'
 )
 RELEASES_PAGE_URL = f'https://github.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/releases'
+
+# Set STEM_FORCE_UPDATE_DIALOG=1 to show the update dialog with fake data (no remote needed).
+# Optional: STEM_FORCE_UPDATE_TAG=v9.9.9 to control the version string shown.
+_FORCE_TRUTHY = ("1", "true", "True", "yes", "YES")
+
+
+def _force_update_dialog() -> bool:
+    return os.environ.get("STEM_FORCE_UPDATE_DIALOG", "").strip() in _FORCE_TRUTHY
+
+
+def _force_update_tag() -> str:
+    tag = os.environ.get("STEM_FORCE_UPDATE_TAG", "").strip()
+    return tag or "v99.0.0"
 
 
 def get_latest_release_info():
@@ -46,8 +60,29 @@ def compare_versions(current_version_str, latest_version_str):
         return False
 
 
-def show_update_dialog(new_version_tag, parent_window):
-    """Show a simple modal dialog when a newer release is available."""
+def _show_update_dialog_qt(new_version_tag, parent_window):
+    """Fluent opaque-card prompt (matches app dialogs; works with Qt MainWindow)."""
+    from stem_organizer.widgets.dialogs import ask_yes_no
+
+    message = (
+        f'A new version ({new_version_tag}) is available.\n'
+        f'Visit the Releases page on GitHub to download.'
+    )
+    if ask_yes_no(
+        parent_window,
+        'Update Available',
+        message,
+        yes_text='Download Update',
+        no_text='Later',
+    ):
+        try:
+            webbrowser.open(RELEASES_PAGE_URL, new=2)
+        except Exception as exc:
+            print(f'[Update Check] Failed to open browser: {exc}')
+
+
+def _show_update_dialog_tk(new_version_tag, parent_window):
+    """Legacy Tk dialog (only when parent is a real Tk window)."""
     if parent_window is None or not isinstance(parent_window, (tk.Tk, tk.Toplevel)):
         print('ERROR: Cannot show update dialog, invalid parent window.')
         return
@@ -98,8 +133,72 @@ def show_update_dialog(new_version_tag, parent_window):
     parent_window.wait_window(dlg)
 
 
+def show_update_dialog(new_version_tag, parent_window):
+    """Show a modal dialog when a newer release is available."""
+    try:
+        from PySide6.QtWidgets import QWidget
+
+        if isinstance(parent_window, QWidget):
+            _show_update_dialog_qt(new_version_tag, parent_window)
+            return
+    except Exception as exc:
+        print(f'[Update Check] Qt dialog failed, falling back to Tk: {exc}')
+
+    _show_update_dialog_tk(new_version_tag, parent_window)
+
+
+def _make_ui_scheduler(root_window):
+    """Build a callable that posts work onto the UI thread.
+
+    Must be constructed on the UI thread (``run_check_in_thread`` entry).
+    """
+    try:
+        from PySide6.QtCore import QObject, Signal
+        from PySide6.QtWidgets import QWidget
+
+        if isinstance(root_window, QWidget):
+            class _UiBridge(QObject):
+                request = Signal(object)
+
+            bridge = _UiBridge(root_window)
+            bridge.request.connect(lambda fn: fn())
+            return lambda fn: bridge.request.emit(fn)
+    except Exception as exc:
+        print(f'[Update Check] Qt UI scheduler unavailable: {exc}')
+
+    if hasattr(root_window, 'after') and callable(getattr(root_window, 'after')):
+        return lambda fn: root_window.after(0, fn)
+
+    return lambda fn: fn()
+
+
 def run_check_in_thread(current_version, root_window):
     """Check GitHub releases in a background thread; show dialog on the UI thread."""
+    schedule = _make_ui_scheduler(root_window)
+
+    # Force path: no network; defer so the main window finishes mapping first.
+    if _force_update_dialog():
+        latest_tag = _force_update_tag()
+        print(
+            f'[Update Check] STEM_FORCE_UPDATE_DIALOG set — '
+            f'showing dialog for {latest_tag} (current {current_version}).'
+        )
+
+        def _show(tag=latest_tag):
+            show_update_dialog(tag, parent_window=root_window)
+
+        try:
+            from PySide6.QtCore import QTimer
+            from PySide6.QtWidgets import QWidget
+
+            if isinstance(root_window, QWidget):
+                QTimer.singleShot(400, _show)
+                return
+        except Exception:
+            pass
+        schedule(_show)
+        return
+
     def threaded_task():
         release_info = get_latest_release_info()
         if not release_info or 'tag_name' not in release_info:
@@ -111,10 +210,8 @@ def run_check_in_thread(current_version, root_window):
 
         if compare_versions(current_version, latest_tag):
             print(f'[Update Check] New version found: {latest_tag}. Scheduling dialog.')
-            root_window.after(
-                0,
-                lambda: show_update_dialog(latest_tag, parent_window=root_window),
-            )
+            tag = latest_tag
+            schedule(lambda: show_update_dialog(tag, parent_window=root_window))
         else:
             print('[Update Check] Application is up-to-date.')
 
