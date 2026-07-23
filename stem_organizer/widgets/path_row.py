@@ -51,11 +51,23 @@ class PathRow(QWidget):
         theme.style_line_edit(self.entry)
         layout.addWidget(self.entry, stretch=1)
 
+        browse_tip = tip_text or (
+            "Choose a file path."
+            if (save_dialog or filter_pattern)
+            else "Choose a folder."
+        )
+        open_tip = (
+            "Open this file's folder in Explorer."
+            if (save_dialog or filter_pattern)
+            else "Open this folder in Explorer."
+        )
+
         self.browse_btn = action_button(
             "Browse",
             on_click=self._browse,
             width=theme.PATH_BTN_WIDTH_BROWSE,
             height=field_h,
+            tip=browse_tip,
         )
         layout.addWidget(self.browse_btn)
 
@@ -64,6 +76,7 @@ class PathRow(QWidget):
             on_click=self._open,
             width=theme.PATH_BTN_WIDTH_OPEN,
             height=field_h,
+            tip=open_tip,
         )
         layout.addWidget(self.open_btn)
 
@@ -72,10 +85,9 @@ class PathRow(QWidget):
         self._caption = caption
 
         if tip_text:
-            self._lbl.setToolTip(tip_text)
-            self.entry.setToolTip(tip_text)
-            self.browse_btn.setToolTip(tip_text)
-        self.open_btn.setToolTip("Open this folder in Explorer.")
+            tip = theme.format_tooltip(tip_text)
+            self._lbl.setToolTip(tip)
+            self.entry.setToolTip(tip)
 
         # Auto-pack into parent layout (fixes overlapping PathRows).
         if parent is not None:

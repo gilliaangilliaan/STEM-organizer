@@ -43,6 +43,35 @@ from ..workers.tagger_worker import TaggerWorker
 
 PANEL_TITLE = "Genre & Gender"
 
+TIPS = {
+    "genre_input": "Folder containing instrumental FLAC/MP3/WAV files to tag with genre.",
+    "gender_input": "Folder containing acapella FLAC/MP3/WAV files to tag with voice gender.",
+    "include_subfolders": "Scan audio files in subfolders too, not just the selected folder itself.",
+    "batch_mode": (
+        "Batch shares GPU batches across files (fastest). Per-file logs each prediction live."
+    ),
+    "tag_style": (
+        "Combined writes a single GENRE tag as Genre/Style. "
+        "Split writes separate GENRE and STYLE tags."
+    ),
+    "tag_field": "Comment writes gender to the COMMENT tag. Gender writes to a GENDER tag.",
+    "reverb_mode": (
+        "Dry/wet from the bundled vocal mel-CNN. "
+        "Combined writes gender/reverb into the chosen field. "
+        "Split writes gender alone and REVERB=wet|dry as a separate custom field."
+    ),
+    "write_meta": "Write tags to FLAC/MP3/M4A/WAV. Disable to only generate the CSV.",
+    "overwrite_tags": (
+        "Off (default): skip files that already have genre/gender tags "
+        "(resume-friendly). On: re-tag every file."
+    ),
+    "tag_genre": "Run the genre/style tagger on the input folder.",
+    "tag_gender": "Run the voice gender + reverb tagger on the input folder.",
+    "stop": "Stop the running tagger.",
+}
+
+TIPS = {k: theme.format_tooltip(v) for k, v in TIPS.items()}
+
 # Hint text beside radios — QLabel + stylesheet (BodyLabel polish resets to white)
 _HINT_FONT_PX = theme.BODY_FONT_PX
 
@@ -97,7 +126,8 @@ class _RadioRow(QWidget):
             rb.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             rb.setCursor(Qt.PointingHandCursor)
             if tooltip:
-                rb.setToolTip(tooltip)
+                tip = theme.format_tooltip(tooltip)
+                rb.setToolTip(tip)
             self._group.addButton(rb)
             self._buttons[key] = rb
             cell_lay.addWidget(rb, 0, Qt.AlignVCenter)
@@ -108,7 +138,7 @@ class _RadioRow(QWidget):
                 _style_radio_hint(hint_lbl)
                 hint_lbl.setCursor(Qt.PointingHandCursor)
                 if tooltip:
-                    hint_lbl.setToolTip(tooltip)
+                    hint_lbl.setToolTip(tip)
                 hint_lbl.mousePressEvent = (  # type: ignore[method-assign]
                     lambda _e, v=key: self.set_value(v)
                 )
@@ -201,9 +231,14 @@ class GenreGenderTab(QWidget):
 
         paths = Section(inner, "Path")
         paths.body.layout().setSpacing(12)
-        self.genre_input_row = PathRow(paths.body, "Input folder", label_width=80)
+        self.genre_input_row = PathRow(
+            paths.body, "Input folder",
+            tip_text=TIPS["genre_input"],
+            label_width=80,
+        )
         self.genre_include_subfolders = CheckBox("Include subfolders")
         self.genre_include_subfolders.setChecked(True)
+        self.genre_include_subfolders.setToolTip(TIPS["include_subfolders"])
         paths.body.layout().addWidget(self.genre_include_subfolders)
         v.addWidget(paths)
 
@@ -212,7 +247,7 @@ class GenreGenderTab(QWidget):
             run_card.body,
             [("Batch (fast)", "batch"), ("Per-file (live results)", "per_file")],
             "batch",
-            tooltip="Batch shares GPU batches across files (fastest). Per-file logs each prediction live.",
+            tooltip=TIPS["batch_mode"],
         )
         run_card.body.layout().addWidget(self.genre_run_mode)
         v.addWidget(run_card)
@@ -222,7 +257,7 @@ class GenreGenderTab(QWidget):
             style_card.body,
             [("Combined  (GENRE=Rock/Surf)", "combined"), ("Split  (GENRE=Rock, STYLE=Surf)", "split")],
             "combined",
-            tooltip="Combined writes a single GENRE tag as Genre/Style. Split writes separate GENRE and STYLE tags.",
+            tooltip=TIPS["tag_style"],
         )
         style_card.body.layout().addWidget(self.genre_tag_style)
         v.addWidget(style_card)
@@ -234,9 +269,9 @@ class GenreGenderTab(QWidget):
         opts_lay.setSpacing(12)
         self.genre_write_meta = CheckBox("Write metadata tags")
         self.genre_write_meta.setChecked(True)
-        self.genre_write_meta.setToolTip("Write tags to FLAC/MP3/M4A/WAV. Disable to only generate the CSV.")
+        self.genre_write_meta.setToolTip(TIPS["write_meta"])
         self.genre_overwrite_tags = CheckBox("Overwrite existing tags")
-        self.genre_overwrite_tags.setToolTip("Off (default): skip files that already have genre tags (resume-friendly). On: re-tag every file.")
+        self.genre_overwrite_tags.setToolTip(TIPS["overwrite_tags"])
         opts_lay.addWidget(self.genre_write_meta)
         opts_lay.addWidget(self.genre_overwrite_tags)
         v.addWidget(opts_card)
@@ -268,9 +303,14 @@ class GenreGenderTab(QWidget):
 
         paths = Section(inner, "Path")
         paths.body.layout().setSpacing(12)
-        self.gender_input_row = PathRow(paths.body, "Input folder", label_width=80)
+        self.gender_input_row = PathRow(
+            paths.body, "Input folder",
+            tip_text=TIPS["gender_input"],
+            label_width=80,
+        )
         self.gender_include_subfolders = CheckBox("Include subfolders")
         self.gender_include_subfolders.setChecked(True)
+        self.gender_include_subfolders.setToolTip(TIPS["include_subfolders"])
         paths.body.layout().addWidget(self.gender_include_subfolders)
         v.addWidget(paths)
 
@@ -279,6 +319,7 @@ class GenreGenderTab(QWidget):
             run_card.body,
             [("Batch (fast)", "batch"), ("Per-file (live results)", "per_file")],
             "batch",
+            tooltip=TIPS["batch_mode"],
         )
         run_card.body.layout().addWidget(self.gender_run_mode)
         v.addWidget(run_card)
@@ -291,7 +332,7 @@ class GenreGenderTab(QWidget):
             field_card.body,
             [("Comment", "comment"), ("Gender (custom)", "gender")],
             "comment",
-            tooltip="Comment writes gender to the COMMENT tag. Gender writes to a GENDER tag.",
+            tooltip=TIPS["tag_field"],
         )
         field_card.body.layout().addWidget(self.gender_tag_field)
         v.addWidget(field_card)
@@ -304,11 +345,7 @@ class GenreGenderTab(QWidget):
             rev_card.body,
             [("Combined  (COMMENT=female/wet)", "combined"), ("Split  (GENDER=female, REVERB=wet)", "split")],
             "combined",
-            tooltip=(
-                "Dry/wet from the bundled vocal mel-CNN. "
-                "Combined writes gender/reverb into the chosen field. "
-                "Split writes gender alone and REVERB=wet|dry as a separate custom field."
-            ),
+            tooltip=TIPS["reverb_mode"],
         )
         rev_card.body.layout().addWidget(self.gender_reverb_mode)
         v.addWidget(rev_card)
@@ -320,7 +357,9 @@ class GenreGenderTab(QWidget):
         opts_lay.setSpacing(12)
         self.gender_write_meta = CheckBox("Write metadata tags")
         self.gender_write_meta.setChecked(True)
+        self.gender_write_meta.setToolTip(TIPS["write_meta"])
         self.gender_overwrite_tags = CheckBox("Overwrite existing tags")
+        self.gender_overwrite_tags.setToolTip(TIPS["overwrite_tags"])
         opts_lay.addWidget(self.gender_write_meta)
         opts_lay.addWidget(self.gender_overwrite_tags)
         v.addWidget(opts_card)
@@ -340,15 +379,15 @@ class GenreGenderTab(QWidget):
 
     def attach_action_bar(self, page: ActionBarPage, window) -> None:
         self._action_page = page
-        self.genre_btn = action_button("▶ Tag genre", on_click=self._start_genre, accent=True)
-        self.genre_btn.setFixedWidth(120)
-        self.gender_btn = action_button("▶ Tag gender", on_click=self._start_gender, accent=True)
-        self.gender_btn.setFixedWidth(120)
-        self.stop_btn = action_button("■ Stop", on_click=self._stop)
+        # Same metrics as Classify: action_button height/font + content width (no fixed widths).
+        self.genre_btn = action_button(
+            "▶ Tag genre", on_click=self._start_genre, accent=True, tip=TIPS["tag_genre"]
+        )
+        self.gender_btn = action_button(
+            "▶ Tag gender", on_click=self._start_gender, accent=True, tip=TIPS["tag_gender"]
+        )
+        self.stop_btn = action_button("■ Stop", on_click=self._stop, tip=TIPS["stop"])
         self.stop_btn.setEnabled(False)
-        # Match Classify: content-sized Stop (don't let it expand across the bar)
-        self.stop_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.stop_btn.setFixedWidth(max(72, self.stop_btn.sizeHint().width()))
         page.add_button(self.genre_btn)
         page.add_button(self.gender_btn)
         page.add_button(self.stop_btn)

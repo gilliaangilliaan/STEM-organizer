@@ -117,13 +117,18 @@ def _ask_preset_name(parent: QWidget) -> str:
     entry = LineEdit()
     entry.setPlaceholderText("My preset")
     entry.setClearButtonEnabled(False)
+    entry.setToolTip("Name for this rule preset.")
     theme.style_line_edit(entry)
     lay.addWidget(entry)
 
     btns = _QH()
     btns.addStretch(1)
-    cancel = action_button("Cancel", on_click=dlg.reject, parent=card)
-    ok = action_button("OK", on_click=dlg.accept, accent=True, parent=card)
+    cancel = action_button(
+        "Cancel", on_click=dlg.reject, parent=card, tip=TIPS.get("cancel_dialog", "Dismiss without saving.")
+    )
+    ok = action_button(
+        "OK", on_click=dlg.accept, accent=True, parent=card, tip=TIPS.get("ok_dialog", "Confirm and continue.")
+    )
     ok.setMinimumWidth(72)
     btns.addWidget(cancel)
     btns.addWidget(ok)

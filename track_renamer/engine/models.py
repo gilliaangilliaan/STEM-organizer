@@ -131,7 +131,9 @@ class CategoryRule:
             enabled=bool(data.get("enabled", True)),
             existing_affix_policy=data.get("existingAffixPolicy", "skip"),
             color=data.get("color", ""),
-            color_override=bool(data.get("colorOverride", False)),
+            color_override=bool(
+                data.get("colorOverride", data.get("color_override", False))
+            ),
             cat_id=data.get("id") or new_id("cat"),
         )
 

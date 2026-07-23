@@ -64,13 +64,14 @@ def run(argv: list[str] | None = None) -> int:
 
     theme.apply_theme(app)
 
-    # Single instance gate
+    # Single instance gate (set STEM_ALLOW_MULTI=1 to open a second window for testing)
     try:
         from single_instance import acquire_single_instance
 
-        if not acquire_single_instance():
-            show_info(None, "STEM organizer", "Another instance is already running.")
-            return 0
+        if os.environ.get("STEM_ALLOW_MULTI", "").strip() not in ("1", "true", "True", "yes", "YES"):
+            if not acquire_single_instance():
+                show_info(None, "STEM organizer", "Another instance is already running.")
+                return 0
     except Exception:
         # single_instance optional — continue if missing
         pass

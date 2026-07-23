@@ -55,6 +55,7 @@ DWMWCP_ROUND = 2
 # WM_NCHITTEST results — native edge resize for frameless windows
 WM_NCHITTEST = 0x0084
 WM_NCCALCSIZE = 0x0083
+WM_NCLBUTTONDBLCLK = 0x00A3  # caption double-click → OS maximize
 WVR_REDRAW = 0x0100
 HTCLIENT = 1
 HTCAPTION = 2
@@ -273,6 +274,105 @@ def apply_window_rect(window: QWidget, rect) -> None:
     window.setGeometry(rect)
 
 
+def _sync_titlebar_max_glyph(window: QWidget) -> None:
+    tb = getattr(window, "title_bar", None)
+    if tb is not None and hasattr(tb, "_sync_max_glyph"):
+        tb._sync_max_glyph()
+
+
+def _refresh_frame_grips(window: QWidget) -> None:
+    handler = getattr(window, "_frame_resize_handler", None)
+    if handler is not None:
+        handler._layout_grips()
+        handler._raise_grips()
+
+
+def center_window_default_size(window: QWidget, width: int, height: int) -> None:
+    """Resize to ``width``×``height`` (clamped to work area) and center."""
+    from PySide6.QtWidgets import QApplication
+
+    screen = window.screen() or QApplication.primaryScreen()
+    if screen is None:
+        window.resize(width, height)
+        return
+    avail = screen.availableGeometry()
+    w = min(width, avail.width())
+    h = min(height, avail.height())
+    window.resize(w, h)
+    x = avail.x() + (avail.width() - w) // 2
+    y = avail.y() + (avail.height() - h) // 2
+    window.move(x, y)
+
+
+def toggle_work_area_maximize(window: QWidget) -> None:
+    """Fill the monitor work area (CTk-style) — avoid OS ``showMaximized``.
+
+    WS_THICKFRAME + Qt showMaximized leaves bright/white edges around the
+    client. Matching CTk, fill via SetWindowPos(rcWork). Window attrs used:
+    ``_custom_maximized``, ``_restore_geometry``.
+    """
+    if getattr(window, "_custom_maximized", False):
+        window._custom_maximized = False  # type: ignore[attr-defined]
+        geo = getattr(window, "_restore_geometry", None)
+        if geo is not None and geo.isValid():
+            apply_window_rect(window, geo)
+        else:
+            window.showNormal()
+        apply_window_corner_preference(window, theme.WINDOW_CORNER_RADIUS)
+        _sync_titlebar_max_glyph(window)
+        _refresh_frame_grips(window)
+        return
+
+    # If somehow OS-maximized, normalize first then treat as restore path.
+    if window.isMaximized():
+        window.showNormal()
+        apply_window_corner_preference(window, theme.WINDOW_CORNER_RADIUS)
+        _sync_titlebar_max_glyph(window)
+        return
+
+    window._restore_geometry = window.geometry()  # type: ignore[attr-defined]
+    # Flag before move so NCCALCSIZE (if any) does not treat this as OS max.
+    window._custom_maximized = True  # type: ignore[attr-defined]
+    apply_work_area_fill(window)
+    apply_window_corner_preference(window, theme.WINDOW_CORNER_RADIUS)
+    _sync_titlebar_max_glyph(window)
+    handler = getattr(window, "_frame_resize_handler", None)
+    if handler is not None:
+        handler._layout_grips()
+
+
+def apply_default_size_after_unminimize(
+    window: QWidget, width: int, height: int
+) -> None:
+    """After taskbar restore: clear fill state and reset to default size."""
+    if window.isMinimized():
+        return
+    window._custom_maximized = False  # type: ignore[attr-defined]
+    window._restore_geometry = None  # type: ignore[attr-defined]
+    if window.isMaximized():
+        window.showNormal()
+    center_window_default_size(window, width, height)
+    apply_window_corner_preference(window, theme.WINDOW_CORNER_RADIUS)
+    _sync_titlebar_max_glyph(window)
+    _refresh_frame_grips(window)
+
+
+def note_minimize_restore_to_default(
+    window: QWidget, event, *, width: int, height: int
+) -> None:
+    """Hook for ``changeEvent``: minimize → taskbar restore → default size."""
+    if event.type() != QEvent.Type.WindowStateChange:
+        return
+    if window.isMinimized():
+        window._was_minimized = True  # type: ignore[attr-defined]
+        return
+    if getattr(window, "_was_minimized", False):
+        window._was_minimized = False  # type: ignore[attr-defined]
+        QTimer.singleShot(
+            0, lambda: apply_default_size_after_unminimize(window, width, height)
+        )
+
+
 def handle_native_frame_message(window: QWidget, msg) -> Optional[tuple]:
     """Handle WM_NCHITTEST / WM_NCCALCSIZE for frameless + thick-frame resize.
 
@@ -335,6 +435,16 @@ def handle_native_frame_message(window: QWidget, msg) -> Optional[tuple]:
         except Exception:
             return None
         return None
+
+    # HTCAPTION hit-tests enable native drag, but OS also maximizes on caption
+    # double-click — that fights SetWindowRgn rounded corners. Maximize button
+    # (and our Qt toggle) remain the only maximize paths.
+    if message == WM_NCLBUTTONDBLCLK:
+        try:
+            if int(msg.wParam) == HTCAPTION:
+                return True, 0
+        except Exception:
+            return True, 0
 
     return None
 
@@ -870,7 +980,8 @@ class CustomTitleBar(QWidget):
     """Custom dark title bar with icon + title + min/max/close.
 
     Edge resize is owned by ``_FrameResizeHandler`` (invisible edge grips).
-    This widget only handles caption drag and double-click maximize.
+    Caption drag is handled here; title-bar double-click maximize is disabled
+    (rounded-corner chrome looks wrong — use the maximize button instead).
     """
 
     close_requested: Callable[[], None]
@@ -921,6 +1032,9 @@ class CustomTitleBar(QWidget):
         self.min_btn = _make_title_button(_GLYPH_MIN)
         self.max_btn = _make_title_button(_GLYPH_MAX)
         self.close_btn = _make_title_button(_GLYPH_CLOSE, danger=True)
+        self.min_btn.setToolTip("Minimize")
+        self.max_btn.setToolTip("Maximize / restore")
+        self.close_btn.setToolTip("Close")
 
         self.min_btn.clicked.connect(self._on_min)
         self.max_btn.clicked.connect(self._on_max)
@@ -990,5 +1104,6 @@ class CustomTitleBar(QWidget):
         self._drag_start_pos = None
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802 Qt name
-        if event.button() == Qt.LeftButton:
-            self._on_max()
+        # Intentionally no maximize — custom SetWindowRgn corners look wonky
+        # when toggled via caption double-click (Qt path + native HTCAPTION).
+        event.accept()

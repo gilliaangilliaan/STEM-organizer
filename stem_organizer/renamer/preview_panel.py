@@ -51,6 +51,7 @@ from track_renamer.engine.processor import compute_preview_row, prepare_rules
 
 from .. import theme
 from ..widgets.log_panel import LOG_INDENT
+from .theme import TIPS
 
 
 # Columns: ✓ | Category | Original | New
@@ -95,6 +96,11 @@ class PreviewModel(QAbstractTableModel):
 
     def set_category_colors(self, colors: dict) -> None:
         self._category_colors = dict(colors or {})
+        if self._rows:
+            # Repaint Category badges when palette changes (Apply / live refresh).
+            top = self.index(0, COL_CATEGORY)
+            bottom = self.index(len(self._rows) - 1, COL_CATEGORY)
+            self.dataChanged.emit(top, bottom, [Qt.DisplayRole, Qt.BackgroundRole])
 
     def track_at(self, row: int) -> Optional[Track]:
         if 0 <= row < len(self._tracks):
@@ -142,6 +148,10 @@ class PreviewModel(QAbstractTableModel):
             if section == COL_CHECK:
                 return Qt.AlignHCenter | Qt.AlignVCenter
             return Qt.AlignLeft | Qt.AlignVCenter
+        if role == Qt.ToolTipRole:
+            if section == COL_CHECK:
+                return TIPS["file_checkbox"]
+            return None
         if role != Qt.DisplayRole:
             return None
         return ("✓", "Category", "Original", "New")[section]
@@ -158,6 +168,8 @@ class PreviewModel(QAbstractTableModel):
 
         if role == Qt.CheckStateRole and col == COL_CHECK:
             return Qt.Checked if track.selected else Qt.Unchecked
+        if role == Qt.ToolTipRole and col == COL_CHECK:
+            return TIPS["file_checkbox"]
         if role == Qt.TextAlignmentRole:
             if col == COL_CHECK:
                 return Qt.AlignHCenter | Qt.AlignVCenter
@@ -419,11 +431,14 @@ class PreviewPanel(QWidget):
         tools = QHBoxLayout()
         tools.setContentsMargins(0, 0, 0, 0)
         self.select_all_btn = PushButton("Select all")
+        self.select_all_btn.setToolTip(TIPS["select_all"])
         self.select_all_btn.clicked.connect(self._select_all)
         self.deselect_all_btn = PushButton("Deselect all")
+        self.deselect_all_btn.setToolTip(TIPS["deselect_all"])
         self.deselect_all_btn.clicked.connect(self._deselect_all)
         self.only_changed_btn = ToggleButton("✓ Only changed")
         self.only_changed_btn.setCheckable(True)
+        self.only_changed_btn.setToolTip(TIPS["only_changed"])
         self.only_changed_btn.toggled.connect(self._on_only_changed_toggled)
         for b in (self.select_all_btn, self.deselect_all_btn, self.only_changed_btn):
             tools.addWidget(b)

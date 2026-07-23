@@ -36,8 +36,8 @@ TIPS = {
     "category_color": "Click to change this category's color.",
     "instrument_source": "How the category PREFIX is chosen for each file.",
     "instrument_source_filename": "Filename: match keywords in the current name against the category rows below. No audio listening — preview updates immediately with Apply.",
-    "instrument_source_auto": "Auto-detect: classify the audio with ML (PaSST OpenMIC-2018, 20 instruments) and map the top label to a category PREFIX.",
-    "instrument_source_combo": "Combo: try Filename keywords first; if none match, fall back to Auto-detect on that file's audio.",
+    "instrument_source_auto": "Audio: classify the audio with ML (PaSST OpenMIC-2018, 20 instruments) and map the top label to a category PREFIX.",
+    "instrument_source_combo": "Combo: try Filename keywords first; if none match, fall back to Audio on that file's audio.",
     "add_child_rule": "Add another operation inside this condition group.",
     "select_all": "Select every file in the preview for renaming.",
     "deselect_all": "Deselect every file in the preview.",
@@ -50,9 +50,16 @@ TIPS = {
         "Preview Apply does not analyze audio — only this button does."
     ),
     "remove_text": "Text to remove from the filename.",
-    # Radio values are filename / model / combo (UI label for model = Auto-detect).
+    "rule_text": "Text used by this rule (remove / replace / add).",
+    "play_preview": "Play / pause the selected preview file.",
+    "close_dialog": "Close this dialog.",
+    "ok_dialog": "Confirm and continue.",
+    "cancel_dialog": "Dismiss without saving.",
+    # Radio values are filename / model / combo (UI label for model = Audio).
     "instrument_source_model": (
-        "Auto-detect: classify the audio with ML (PaSST OpenMIC-2018, 20 instruments) "
+        "Audio: classify the audio with ML (PaSST OpenMIC-2018, 20 instruments) "
         "and map the top label to a category PREFIX."
     ),
 }
+
+TIPS = {k: theme.format_tooltip(v) for k, v in TIPS.items()}

@@ -384,10 +384,12 @@ class LogPanel(QWidget):
         self.clear_btn = PushButton("Clear")
         self.clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.clear_btn.setFixedHeight(theme.ACTION_BTN_HEIGHT)
+        self.clear_btn.setToolTip("Clear the log panel for a fresh run.")
         self.clear_btn.clicked.connect(self.clear)
         self.save_btn = PushButton("Save…")
         self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_btn.setFixedHeight(theme.ACTION_BTN_HEIGHT)
+        self.save_btn.setToolTip("Save the current log to a text file.")
         self.save_btn.clicked.connect(lambda: self.save_to_file(self.window()))
 
         # Chip / format / line-spacing state lives on ChipRenderer so other log

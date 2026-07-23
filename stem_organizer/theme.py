@@ -197,8 +197,48 @@ DIALOG_FONT_PX = 13
 HEADER_DESC_FONT_PX = 12
 # CTk Tooltip uses Tk ('Segoe UI', 9) which is *points* ≈ 12px at 96 DPI
 TOOLTIP_FONT_PX = 12
+
+# Do not treat these as sentence ends when splitting tooltips (e.g. "e.g. Artist").
+_TOOLTIP_ABBREVS = ("e.g.", "i.e.", "etc.", "vs.", "Mr.", "Mrs.", "Dr.", "St.")
+
+
+def format_tooltip(text: str) -> str:
+    """Put each sentence of a tooltip on its own line (Qt respects ``\\n``).
+
+    Single-sentence tips are unchanged. Inserts a newline after ``.`` / ``?`` /
+    ``!`` followed by space(s), skipping common abbreviations. Idempotent when
+    tips already use ``\\n`` between sentences.
+    """
+    if not text or not any(m in text for m in (". ", "? ", "! ")):
+        return text
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch in ".?!" and i + 1 < n and text[i + 1] == " ":
+            abbrev = False
+            if ch == ".":
+                for ab in _TOOLTIP_ABBREVS:
+                    start = i + 1 - len(ab)
+                    if start >= 0 and text[start : i + 1] == ab:
+                        abbrev = True
+                        break
+            if not abbrev:
+                out.append(ch)
+                out.append("\n")
+                i += 2
+                while i < n and text[i] == " ":
+                    i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 PATH_FIELD_HEIGHT = 28
 COMPACT_SPIN_HEIGHT = 26  # dense rows; CompactSpinButton must match (Fluent default is 33)
+COMPACT_SPIN_WIDTH = 64  # duration / batch / analysis spins (was 58; earlier 68, 72–88)
 ACTION_BTN_HEIGHT = 30
 TITLE_ICON_SIZE = 22  # match CTk TITLE_ICON_SIZE
 TITLE_LABEL_FONT_PX = 13  # CTk title Label uses Segoe UI 10pt ≈ 13px
@@ -600,7 +640,7 @@ def build_app_overrides_qss() -> str:
         background-color: {CONTROL_BG_PRESSED};
     }}
     SpinBox, DoubleSpinBox, CompactSpinBox, CompactDoubleSpinBox {{
-        min-width: 72px;
+        min-width: {COMPACT_SPIN_WIDTH}px;
         color: {t['text']};
         font-family: "{FONT_FAMILY}";
         font-size: {BODY_FONT_PX}px;
@@ -1201,10 +1241,20 @@ def polish_fluent_controls(root: QWidget) -> None:
         """
 
     hand = Qt.CursorShape.PointingHandCursor
+    dim = DARK["text_dim"]
     for cb in root.findChildren(CheckBox):
         fluent_set_font(cb, BODY_FONT_PX)
         cb.setTextColor(soft, soft)
         cb.setCheckedColor(accent, accent)
+        # setTextColor() only sets the enabled color — without :disabled the
+        # label stays bright when setEnabled(False). Match CTk text_dim grey-out.
+        soft_hex = QColor(soft).name(QColor.NameFormat.HexArgb)
+        dim_hex = QColor(dim).name(QColor.NameFormat.HexArgb)
+        sheet = (
+            f"CheckBox{{color:{soft_hex};}}"
+            f"CheckBox:disabled{{color:{dim_hex};}}"
+        )
+        setCustomStyleSheet(cb, sheet, sheet)
         cb.setCursor(hand)
 
     for rb in root.findChildren(RadioButton):

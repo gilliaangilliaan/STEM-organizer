@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -41,6 +42,27 @@ from ..widgets.section import Section
 from ..widgets.slider_field import SliderField
 from ..workers.base import BaseWorker
 from ..workers.classify_worker import ClassifyWorker, SdrClassifyWorker
+
+
+# Action-bar / mode tips (field tips are set inline beside each control).
+TIPS = {
+    "start": "Begin classifying and mixing. The UI stays responsive during the run.",
+    "stop": "Request a clean stop after the current folder finishes.",
+    "play_stems": (
+        "Open the stem preview player.\n"
+        "Load a folder with bass/drums/other/vocals or instrumental/vocals to audition mixes."
+    ),
+    "start_sdr": (
+        "Run SI-SDR quality check on organized stem folders.\n"
+        "Each stem file is processed through Demucs individually and compared to the model output."
+    ),
+    "stop_sdr": "Request a clean stop after the current folder finishes.",
+    "cls_rms": "Classify stems by Demucs RMS energy share per category.",
+    "cls_sdr": "Score already-organized stems with SI-SDR and recycle low-quality files.",
+    "sdr_threshold": "Minimum SI-SDR (dB) for this stem. Files scoring below are moved to the Recycle Bin.",
+}
+
+TIPS = {k: theme.format_tooltip(v) for k, v in TIPS.items()}
 
 
 class ClassifyTab(QWidget):
@@ -152,7 +174,7 @@ class ClassifyTab(QWidget):
         self.min_duration_sec.setRange(1, 3600)
         self.min_duration_sec.setValue(8)
         self.min_duration_sec.setSuffix(" s")
-        self.min_duration_sec.setFixedWidth(88)
+        self.min_duration_sec.setFixedWidth(theme.COMPACT_SPIN_WIDTH)
         self.min_duration_sec.setToolTip("Minimum duration, in seconds.")
         theme.sync_compact_spin_button(self.min_duration_sec, theme.COMPACT_SPIN_HEIGHT)
         theme._install_compact_spin_resize_sync(self.min_duration_sec)
@@ -206,8 +228,10 @@ class ClassifyTab(QWidget):
         for k in cb.MODELS:
             self.model_combo.addItem(k)
         self.model_combo.setToolTip(
-            "htdemucs = good balance. htdemucs_ft = best but slowest. "
-            "htdemucs_6s = fastest but lowest quality."
+            theme.format_tooltip(
+                "htdemucs = good balance. htdemucs_ft = best but slowest. "
+                "htdemucs_6s = fastest but lowest quality."
+            )
         )
         self.stem_combo = ComboBox()
         for k in cb.STEM_MODES:
@@ -216,8 +240,6 @@ class ClassifyTab(QWidget):
             "2: vocals + instrumental.\n4: bass / drums / other / vocals."
         )
         self.stem_combo.currentTextChanged.connect(lambda _t: self._rebuild_sdr_thresholds())
-        # Cap width so long labels don't expand the Options card
-        self.stem_combo.setMaximumWidth(220)
         self.quality_combo = ComboBox()
         for k in cb.QUALITY_PRESETS:
             self.quality_combo.addItem(k)
@@ -231,11 +253,17 @@ class ClassifyTab(QWidget):
             "What to do when a stem can't be confidently assigned to one category."
         )
         self.use_cuda = CheckBox("Use CUDA (GPU)")
-        self.use_cuda.setChecked(True)  # on by default; backend falls back to CPU if unavailable
-        self.use_cuda.setToolTip("Use NVIDIA GPU for separation. Falls back to CPU if unavailable.")
+        self._configure_cuda_checkbox()
 
         self._place_combo(opts_grid, 0, 0, "Model", self.model_combo)
         self._place_combo(opts_grid, 0, 2, "Stems", self.stem_combo)
+        # qfluent ComboBox.setText() calls adjustSize(); pin width to the longest
+        # label so 2↔4 selection does not reflow the Options grid. Use theme
+        # body font (polish may apply it after construct).
+        _stem_pad = 40  # left/right padding + dropdown chevron
+        _stem_fm = QFontMetrics(theme.F_BODY)
+        _stem_w = max(_stem_fm.horizontalAdvance(t) for t in cb.STEM_MODES) + _stem_pad
+        self.stem_combo.setFixedWidth(_stem_w)
         self._place_combo(opts_grid, 1, 0, "Quality", self.quality_combo)
         opts_grid.addWidget(self.use_cuda, 1, 2, 1, 2, Qt.AlignLeft | Qt.AlignVCenter)
         self._place_combo(opts_grid, 2, 0, "Ambiguous", self.ambig_combo)
@@ -249,6 +277,14 @@ class ClassifyTab(QWidget):
         self._cls_seg.addItem("rms", "RMS")
         self._cls_seg.addItem("sdr", "SI-SDR")
         theme.configure_segmented_widget(self._cls_seg)
+        for key, tip in (("rms", TIPS["cls_rms"]), ("sdr", TIPS["cls_sdr"])):
+            item = self._cls_seg.widget(key) if hasattr(self._cls_seg, "widget") else None
+            if item is not None:
+                item.setToolTip(tip)
+            else:
+                # Fallback: tip the whole segmented control once
+                self._cls_seg.setToolTip(TIPS["cls_rms"] + "\n\n" + TIPS["cls_sdr"])
+                break
         self._cls_stack = QStackedWidget()
         self._cls_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.cls_notebook = self._cls_stack  # keep name for _rebuild_sdr_thresholds
@@ -302,11 +338,14 @@ class ClassifyTab(QWidget):
         self.batch_spin.setObjectName("FilterDurationSpin")
         self.batch_spin.setRange(1, 32)
         self.batch_spin.setValue(4)
-        self.batch_spin.setFixedWidth(72)
+        self.batch_spin.setFixedWidth(theme.COMPACT_SPIN_WIDTH)
         theme.sync_compact_spin_button(self.batch_spin)
         theme._install_compact_spin_resize_sync(self.batch_spin)
         self.batch_spin.setToolTip(
-            "How many stems Demucs processes in one forward pass. Lower if you hit CUDA OOM."
+            theme.format_tooltip(
+                "How many stems Demucs processes in one forward pass. "
+                "Lower if you hit CUDA OOM."
+            )
         )
 
         _row_h = theme.COMPACT_SPIN_HEIGHT
@@ -354,7 +393,10 @@ class ClassifyTab(QWidget):
         self.sdr_delete_folder = CheckBox("Delete entire folder when any stem fails")
         self.sdr_delete_folder.setChecked(True)
         self.sdr_delete_folder.setToolTip(
-            "Off: delete only the failing stem file. On: delete the whole output folder."
+            theme.format_tooltip(
+                "Off: delete only the failing stem file. "
+                "On: delete the whole output folder."
+            )
         )
 
         self._cls_stack.addWidget(rms_tab)
@@ -434,6 +476,49 @@ class ClassifyTab(QWidget):
         grid.addWidget(lbl, row, col, Qt.AlignLeft | Qt.AlignVCenter)
         grid.addWidget(combo, row, col + 1)
 
+    def _configure_cuda_checkbox(self) -> None:
+        """Enable/disable Use CUDA to match CTk (cuda_effective + greyed label)."""
+        try:
+            enabled = bool(cb.cuda_effective())
+        except Exception:
+            enabled = False
+        self._cuda_enabled = enabled
+
+        if enabled:
+            self.use_cuda.setText("Use CUDA (GPU)")
+            self.use_cuda.setChecked(True)
+            self.use_cuda.setEnabled(True)
+            self.use_cuda.setToolTip(
+                theme.format_tooltip(
+                    "Use NVIDIA GPU for separation. Falls back to CPU if unavailable."
+                )
+            )
+            return
+
+        # CTk label variants when CUDA cannot be used
+        try:
+            torch_mod = getattr(cb, "torch", None)
+            if torch_mod is not None and torch_mod.cuda.is_available():
+                text = "Use CUDA (GPU)   ·   incompatible PyTorch build"
+                tip = (
+                    cb.cuda_incompatibility_hint()
+                    or "GPU detected but this PyTorch build cannot run on it. Using CPU."
+                )
+            elif cb.torch_cuda_built():
+                text = "Use CUDA (GPU)   ·   no GPU detected"
+                tip = "PyTorch has CUDA support, but no usable NVIDIA GPU was detected."
+            else:
+                text = "Use CUDA (GPU)   ·   unavailable"
+                tip = "CUDA is not available. Processing will use CPU."
+        except Exception:
+            text = "Use CUDA (GPU)   ·   unavailable"
+            tip = "CUDA is not available. Processing will use CPU."
+
+        self.use_cuda.setText(text)
+        self.use_cuda.setChecked(False)
+        self.use_cuda.setEnabled(False)
+        self.use_cuda.setToolTip(theme.format_tooltip(tip))
+
     def _on_cls_seg_changed(self, key: str) -> None:
         idx = 1 if key == "sdr" else 0
         self._cls_stack.setCurrentIndex(idx)
@@ -467,6 +552,7 @@ class ClassifyTab(QWidget):
                 minimum=0, maximum=40, value=default,
                 format_value=lambda v, _c=cat: f"{v} dB",
             )
+            slider.setToolTip(TIPS["sdr_threshold"])
             slider.valueChanged.connect(lambda v, c=cat: self._on_sdr_threshold_changed(c, v))
             layout.insertWidget(insert_at, slider)
             self._sdr_threshold_widgets[cat] = slider
@@ -489,10 +575,18 @@ class ClassifyTab(QWidget):
 
     def attach_action_bar(self, page: ActionBarPage, window) -> None:
         self._action_page = page
-        self.start_btn = action_button("▶ Start RMS", on_click=self._on_start, accent=True)
-        self.stop_btn = action_button("■ Stop", on_click=self._on_stop)
+        self.start_btn = action_button(
+            "▶ Start RMS", on_click=self._on_start, accent=True, tip=TIPS["start"]
+        )
+        self.stop_btn = action_button(
+            "■ Stop", on_click=self._on_stop, tip=TIPS["stop"]
+        )
         self.stop_btn.setEnabled(False)
-        self.play_btn = action_button("♫ Play", on_click=lambda: self.request_open_player.emit())
+        self.play_btn = action_button(
+            "♫ Play",
+            on_click=lambda: self.request_open_player.emit(),
+            tip=TIPS["play_stems"],
+        )
         page.add_button(self.start_btn)
         page.add_button(self.stop_btn)
         page.add_stretch()
@@ -502,10 +596,12 @@ class ClassifyTab(QWidget):
     def _update_action_buttons(self) -> None:
         if self._is_sdr_mode:
             self.start_btn.setText("▶ Start SI-SDR")
-            self.start_btn.setToolTip("Run SI-SDR scoring on already-classified stems.")
+            self.start_btn.setToolTip(TIPS["start_sdr"])
+            self.stop_btn.setToolTip(TIPS["stop_sdr"])
         else:
             self.start_btn.setText("▶ Start RMS")
-            self.start_btn.setToolTip("Run Demucs RMS classification.")
+            self.start_btn.setToolTip(TIPS["start"])
+            self.stop_btn.setToolTip(TIPS["stop"])
 
     # ----- worker lifecycle -------------------------------------------
 
@@ -602,7 +698,7 @@ class ClassifyTab(QWidget):
         for w in (
             self.input_row, self.output_row, self.scan_combo, self.naming_combo,
             self.model_combo, self.stem_combo, self.quality_combo, self.ambig_combo,
-            self.use_cuda, self.threshold_slider, self.margin_slider, self.batch_spin,
+            self.threshold_slider, self.margin_slider, self.batch_spin,
             self.dedup, self.peak_norm, self.make_mixture,
             self.delete_if_short, self.min_duration_sec, self.skip_existing, self.delete_if_incomplete,
             self.sdr_delete_folder,
@@ -612,6 +708,11 @@ class ClassifyTab(QWidget):
                 w.setEnabled(not running)
             except Exception:
                 pass
+        # Keep CUDA greyed out when no usable GPU — do not re-enable after a run.
+        try:
+            self.use_cuda.setEnabled(bool(getattr(self, "_cuda_enabled", False)) and not running)
+        except Exception:
+            pass
         if running:
             self.request_status_running.emit()
         else:
@@ -663,9 +764,9 @@ class ClassifyTab(QWidget):
             heading="STEM organizer",
             version_line=f"v{theme.APP_VERSION} — by Gilliaan & Bas Curtiz",
             intro=(
-                "Organize, classify, and prepare multitrack music datasets. "
-                "Automatically identify stem layouts, tag genres and vocals, "
-                "align tracks, rename files, and build clean AI-ready datasets"
+                "Organize, classify, and prepare multitrack music datasets.\n"
+                "Automatically create 2- or 4-stems, identify genre/style and vocals/reverb, "
+                "align tracks & auto-rename files."
             ),
             header_icon=logo if logo.exists() else None,
             repo_url=theme.STATUS_LINK_URL,
@@ -684,7 +785,7 @@ class ClassifyTab(QWidget):
                     "Accepted stems are summed from their original files (not AI-separated). "
                     "You can filter short or incomplete outputs, resume by skipping existing "
                     "results, and export an optional mixture.wav per song.",
-                    "Additionally, you can play 2-stem or 4-stem folders to audition mixes, "
+                    "Additionally, you can play 2- or 4-stem folders to audition mixes, "
                     "using the STEM player with the Play button.",
                 ]),
                 ("Stem legend — 2-stem", [
@@ -712,7 +813,7 @@ class ClassifyTab(QWidget):
                 ]),
                 ("(Optional) Calculate SI-SDR", [
                     "After organizing stems (or on an existing library), you can filter out "
-                    "low-quality results using scale-invariant SDR (SI-SDR):",
+                    "low-quality results using scale-invariant SDR:",
                     "• Optional SI-SDR quality check on organized stem folders.",
                     "• Each stem file is processed individually through Demucs and compared "
                     "to the model output.",
@@ -768,8 +869,12 @@ class ClassifyTab(QWidget):
                 self.input_row.set_text(d["input_dir"])
             if d.get("output_dir"):
                 self.output_row.set_text(d["output_dir"])
-            # Default True (CTk: data.get('use_cuda', True))
-            self.use_cuda.setChecked(bool(d.get("use_cuda", True)))
+            # Default True when CUDA is usable (CTk: data.get('use_cuda', True));
+            # force off + disabled when cuda_effective() is False.
+            if getattr(self, "_cuda_enabled", False):
+                self.use_cuda.setChecked(bool(d.get("use_cuda", True)))
+            else:
+                self.use_cuda.setChecked(False)
             if d.get("model_label") in cb.MODELS:
                 self.model_combo.setCurrentText(d["model_label"])
             stem_mode = cb.resolve_stem_mode(d.get("stem_mode") or "")

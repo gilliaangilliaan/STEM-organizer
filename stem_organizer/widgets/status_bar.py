@@ -155,10 +155,11 @@ class StatusBar(QFrame):
         center_col.setContentsMargins(0, 0, 0, 0)
         center_col.setSpacing(0)
         center_col.addStretch(1)
-        self._credit = QLabel(f"v{theme.APP_VERSION}  by Gilliaan & Bas Curtiz")
+        self._credit = QLabel(f"v{theme.APP_VERSION}")
         self._credit.setObjectName("Link")
         self._credit.setFont(theme.F_STATUS)
         self._credit.setCursor(Qt.PointingHandCursor)
+        self._credit.setToolTip("View source code on GitHub")
         self._credit.mousePressEvent = self._on_credit_click  # type: ignore[assignment]
         center_col.addWidget(self._credit, 0, Qt.AlignHCenter | Qt.AlignVCenter)
         center_col.addStretch(1)

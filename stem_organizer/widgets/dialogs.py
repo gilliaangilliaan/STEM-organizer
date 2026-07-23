@@ -47,24 +47,31 @@ INFO_PROMPT_SCROLL_MAX_HEIGHT = 360
 # Vertical rhythm — Track Renamer help is the reference for Match / Align /
 # Genre / Gender (help_dialog default) and renamer/help_dialog.py.
 # Classify About keeps its own gaps via rhythm="classify" (see HELP_ABOUT_*).
+# Rename Close spacing uses HELP_RENAME_FOOTER_TOP (8); shared tab help uses
+# HELP_FOOTER_TOP (40 ≈ two empty rows) for air above Close.
 HELP_OUTER_MARGINS = (12, 12, 12, 12)  # dialog chrome around the panel
-HELP_SHELL_MARGINS = (22, 18, 22, 16)  # panel padding
+# Panel padding — +10 top/bottom for air above first content / below footer
+# (not card padding; card vertical margins stay tight).
+HELP_SHELL_MARGINS = (22, 28, 22, 26)
 HELP_ICON_TO_HEADING = 6
 HELP_TITLE_TO_INTRO = 8  # heading → intro (Renamer)
 HELP_INTRO_TO_REPO = 4
 HELP_HEADER_TO_CARDS = 22  # intro → first section card (Renamer)
 HELP_CARD_GAP = 10  # between section cards
-HELP_FOOTER_TOP = 8  # body → footer row (Renamer original)
+HELP_FOOTER_TOP = 40  # body → footer row (Match / Align / Genre / Gender); ~2 rows
 HELP_FOOTER_SPACING = 12  # footer note ↔ Close
-HELP_CARD_MARGINS = (14, 10, 14, 11)  # section card inner padding
+HELP_CARD_MARGINS = (14, 10, 14, 11)  # section card inner padding (shared)
 HELP_CARD_SPACING = 4  # section header → body (tight; no extra air)
 
 # Classify About only (logo / version / stem chips). Do not reuse for tab help.
 HELP_ABOUT_TITLE_TO_VERSION = 8
 HELP_ABOUT_VERSION_TO_INTRO = 4
 HELP_ABOUT_HEADER_TO_CARDS = 22
-HELP_ABOUT_FOOTER_TOP = 12
+HELP_ABOUT_FOOTER_TOP = 40  # ~2 empty rows above Close (was 20)
 HELP_ABOUT_CARD_SPACING = 4
+
+# Rename help keeps the original 8px body→footer gap (see renamer/help_dialog.py).
+HELP_RENAME_FOOTER_TOP = 8
 
 HelpRhythm = Literal["renamer", "classify"]
 
@@ -232,12 +239,20 @@ def _modal_prompt(
     footer.addStretch(1)
     if secondary_text:
         no_btn = action_button(
-            secondary_text, on_click=dlg.reject, accent=False, parent=shell
+            secondary_text,
+            on_click=dlg.reject,
+            accent=False,
+            parent=shell,
+            tip="Dismiss without continuing.",
         )
         no_btn.setMinimumWidth(72)
         footer.addWidget(no_btn)
     yes_btn = action_button(
-        primary_text, on_click=dlg.accept, accent=True, parent=shell
+        primary_text,
+        on_click=dlg.accept,
+        accent=True,
+        parent=shell,
+        tip="Confirm and continue.",
     )
     yes_btn.setMinimumWidth(72)
     footer.addWidget(yes_btn)
@@ -705,7 +720,8 @@ def help_dialog(
     layout.addWidget(scroll)
 
     footer = QHBoxLayout()
-    footer.setContentsMargins(0, footer_top, 0, 0)
+    # Match body_lay right inset so Close lines up with section card edges
+    footer.setContentsMargins(0, footer_top, HELP_SCROLL_RIGHT_GAP, 0)
     footer.setSpacing(HELP_FOOTER_SPACING)
     if footer_note:
         fn = CaptionLabel(footer_note)
@@ -713,7 +729,9 @@ def help_dialog(
         footer.addWidget(fn, 1)
     else:
         footer.addStretch(1)
-    close_btn = action_button("Close", on_click=dlg.accept, accent=True, parent=shell)
+    close_btn = action_button(
+        "Close", on_click=dlg.accept, accent=True, parent=shell, tip="Close this dialog."
+    )
     close_btn.setMinimumWidth(72)
     footer.addWidget(close_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
     layout.addLayout(footer)

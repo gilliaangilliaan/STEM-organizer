@@ -6,7 +6,7 @@
 
 # STEM organizer
 
-Organize, classify, and prepare multitrack music datasets. Automatically identify stem layouts, tag genres and vocals, align tracks, rename files, and build clean AI-ready datasets.
+Organize, classify, and prepare multitrack music datasets. Automatically create 2- or 4-stems, identify genre/style and vocals/reverb, align tracks & auto-rename files.
 
 **By:** Gilliaan & Bas Curtiz  
 **Repo:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  

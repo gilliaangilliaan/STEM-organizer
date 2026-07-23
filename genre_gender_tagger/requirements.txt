@@ -17,6 +17,8 @@ transformers
 onnxruntime-directml
 librosa
 soxr
+# CA bundle for Essentia HTTPS downloads on Win11/VMs (CERTIFICATE_VERIFY_FAILED).
+certifi
 
 # Instrument Auto-detect (PaSST) shares this venv — install via
 # instrument_tagger\install-deps.bat (adds hear21passt).

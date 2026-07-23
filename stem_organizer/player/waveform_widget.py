@@ -140,7 +140,7 @@ class WaveformWidget(QWidget):
         bg = QColor(theme.COLORS["panel"])
         bg.setAlpha(180)
         p.fillRect(QRectF(rect_x, rect_y, text_w + pad_x * 2, text_h + pad_y * 2), bg)
-        p.setPen(QColor(theme.COLORS["fg_dim"]))
+        p.setPen(QColor(theme.COLORS["fg"]))
         p.drawText(
             QRectF(rect_x + pad_x, rect_y + pad_y, text_w, text_h),
             Qt.AlignLeft | Qt.AlignVCenter,

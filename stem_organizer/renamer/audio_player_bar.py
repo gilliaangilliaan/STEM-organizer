@@ -242,7 +242,7 @@ class _WaveView(QWidget):
             chip_bg = QColor(theme.COLORS["panel"])
             chip_bg.setAlpha(180)
             p.fillRect(QRectF(rect_x, rect_y, tw + pad_x * 2, th + pad_y * 2), chip_bg)
-            p.setPen(QColor(theme.COLORS["fg_dim"]))
+            p.setPen(QColor(theme.COLORS["fg"]))
             p.drawText(
                 QRectF(rect_x + pad_x, rect_y + pad_y, tw, th),
                 Qt.AlignLeft | Qt.AlignVCenter,
@@ -279,6 +279,7 @@ class AudioPlayerBar(QWidget):
         self.play_btn = _make_transport_button(self, self.toggle_playback)
         _set_transport_icon(self.play_btn, playing=False)
         self.play_btn.setEnabled(False)
+        self.play_btn.setToolTip("Play / pause the selected preview file.")
         layout.addWidget(self.play_btn)
 
         self.wave = _WaveView(self)

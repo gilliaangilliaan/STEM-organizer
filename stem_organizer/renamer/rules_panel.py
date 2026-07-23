@@ -264,7 +264,7 @@ CONDITION_OPS = [
     ("matches", "matches"),
     ("notContains", "not contains"),
 ]
-SOURCE_LABELS = [("filename", "Filename"), ("model", "Auto-detect"), ("combo", "Combo")]
+SOURCE_LABELS = [("filename", "Filename"), ("model", "Audio"), ("combo", "Combo")]
 
 
 class RulesPanel(QWidget):
@@ -335,6 +335,7 @@ class RulesPanel(QWidget):
         add_row.setSpacing(6)
         plus = BodyLabel("+")
         self.add_combo = ComboBox()
+        self.add_combo.setToolTip(TIPS["add_rule"])
         self.add_combo.activated.connect(self._on_add_activated)
         self._rebuild_add_combo()
         add_row.addWidget(plus)
@@ -484,12 +485,14 @@ class RulesPanel(QWidget):
             entry = LineEdit()
             entry.setText(rule.params.get("text", ""))
             entry.setPlaceholderText(TIPS.get("remove_text", "text"))
+            entry.setToolTip(TIPS.get("rule_text", TIPS["remove_text"]))
             entry.textChanged.connect(lambda v, r=rule: self._on_op_text(r, v, group=group))
             theme.style_line_edit(entry)
             card_lay.addWidget(entry, stretch=1)
         elif rule.op == "replaceText":
             entry = LineEdit()
             entry.setText(rule.params.get("text", ""))
+            entry.setToolTip(TIPS.get("rule_text", TIPS["remove_text"]))
             entry.textChanged.connect(lambda v, r=rule: self._on_op_text(r, v, group=group))
             theme.style_line_edit(entry)
             card_lay.addWidget(entry, stretch=1)
@@ -603,6 +606,7 @@ class RulesPanel(QWidget):
         head.setContentsMargins(0, 0, 0, 0)
         enable = CheckBox()
         enable.setChecked(group.enabled)
+        enable.setToolTip(TIPS["rule_enable"])
         enable.toggled.connect(lambda v, g=group: self._on_group_enable(g, v))
         head.addWidget(enable)
         cond = group.conditions[0] if group.conditions else Condition()
@@ -620,6 +624,7 @@ class RulesPanel(QWidget):
         if_row.setContentsMargins(20, 0, 0, 0)
         if_row.addWidget(BodyLabel("IF"))
         field_lbl = BodyLabel("filename")
+        field_lbl.setToolTip(TIPS["condition_field"])
         if_row.addWidget(field_lbl)
         op_combo = ComboBox()
         for val, lbl in CONDITION_OPS:
@@ -627,6 +632,7 @@ class RulesPanel(QWidget):
         op_combo.setCurrentText(
             dict((v, l) for v, l in CONDITION_OPS).get(cond.operator, "contains")
         )
+        op_combo.setToolTip(TIPS["condition_op"])
         op_combo.currentIndexChanged.connect(
             lambda i, c=cond, t=title, g=group: self._on_condition_op(c, op_combo.itemData(i), g, t)
         )
@@ -654,6 +660,7 @@ class RulesPanel(QWidget):
             card_lay.addWidget(child_card)
 
         add_child = ComboBox()
+        add_child.setToolTip(TIPS["add_child_rule"])
         add_child.addItem("Add child rule…")
         used_child = {c.op for c in group.children if isinstance(c, OpRule)}
         for entry in RULE_CATALOG:
@@ -803,7 +810,9 @@ class RulesPanel(QWidget):
         if accepted:
             color = dlg.currentColor()
             cat_dict["color"] = color.name()
-            cat_dict["color_override"] = True
+            # Must match CategoryRule.to_dict / from_dict key (camelCase).
+            cat_dict["colorOverride"] = True
+            cat_dict.pop("color_override", None)  # drop legacy snake_case if present
             if prefix_edit is not None:
                 _style_prefix_color(prefix_edit, color.name())
             self._notify()

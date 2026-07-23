@@ -7,6 +7,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QWidget
 from qfluentwidgets import BodyLabel, Slider, SpinBox
 
+from .. import theme
+
 
 class SliderField(QWidget):
     """Labeled horizontal slider with live readout.
@@ -69,6 +71,17 @@ class SliderField(QWidget):
             self._update_readout(value)
 
         self.slider.valueChanged.connect(self._on_changed)
+
+    def setToolTip(self, tip: str) -> None:  # noqa: N802 Qt naming
+        """Propagate tip to label + slider (+ readout/spin) — hover hits children."""
+        tip = theme.format_tooltip(tip)
+        super().setToolTip(tip)
+        self._lbl.setToolTip(tip)
+        self.slider.setToolTip(tip)
+        if self._spin is not None:
+            self._spin.setToolTip(tip)
+        if self._readout is not None:
+            self._readout.setToolTip(tip)
 
     def _on_changed(self, value: int) -> None:
         if self._readout is not None:

@@ -161,14 +161,16 @@ def category_color(name: str, stored: str = "", *, override: bool = False) -> st
     """Return the display color for a category — defaults are tied to the category name."""
     default = default_category_color(name)
     if override and stored:
-        normalized = _PALETTE_LOWER.get(stored.lower())
-        if normalized:
-            return normalized
+        # Prefer canonical palette spelling; keep free-form picks as-is.
+        return _PALETTE_LOWER.get(stored.lower(), stored)
     return default
 
 
 def normalize_category_dict(cat: dict) -> None:
     name = (cat.get("name") or "").strip()
+    # Accept legacy snake_case written by an older picker; canonicalize to camelCase.
+    if cat.pop("color_override", None) and not cat.get("colorOverride"):
+        cat["colorOverride"] = True
     if cat.get("colorOverride"):
         cat["color"] = category_color(name, cat.get("color", ""), override=True)
     else:

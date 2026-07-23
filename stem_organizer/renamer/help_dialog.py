@@ -24,10 +24,10 @@ from ..widgets.dialogs import (
     HELP_CARD_MARGINS,
     HELP_FOOTER_PX,
     HELP_FOOTER_SPACING,
-    HELP_FOOTER_TOP,
     HELP_HEADER_TO_CARDS,
     HELP_HEADING_PX,
     HELP_OUTER_MARGINS,
+    HELP_RENAME_FOOTER_TOP,
     HELP_SECTION_TITLE_PX,
     HELP_SHELL_MARGINS,
     HELP_TITLE_TO_INTRO,
@@ -197,12 +197,14 @@ def show_rename_help_dialog(parent: Optional[QWidget] = None) -> None:
     layout.addWidget(_DocsLink(card))
 
     btn_row = QHBoxLayout()
-    btn_row.setContentsMargins(0, HELP_FOOTER_TOP, 0, 0)
+    btn_row.setContentsMargins(0, HELP_RENAME_FOOTER_TOP, 0, 0)
     btn_row.setSpacing(HELP_FOOTER_SPACING)
     note = CaptionLabel("Hover over individual controls for more detail.")
     style_help_label(note, HELP_FOOTER_PX, t["text_dim"])
     btn_row.addWidget(note, 1)
-    close_btn = action_button("Close", on_click=dlg.accept, accent=True, parent=card)
+    close_btn = action_button(
+        "Close", on_click=dlg.accept, accent=True, parent=card, tip="Close this dialog."
+    )
     close_btn.setMinimumWidth(72)
     btn_row.addWidget(close_btn)
     layout.addLayout(btn_row)

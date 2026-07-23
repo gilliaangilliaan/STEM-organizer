@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
+    FluentIcon,
     PushButton,
     ScrollArea,
     Slider,
@@ -555,6 +556,70 @@ def _shortcut_key_chip(text: str, parent: QWidget) -> QLabel:
     return chip
 
 
+class _FolderNameBar(BodyLabel):
+    """Header chip showing the loaded song folder; click opens it in Explorer."""
+
+    clicked = Signal()
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        # Parent-only super().__init__: FluentLabelBase's text overload does
+        # self.__init__(parent), which re-enters this subclass __init__ forever.
+        super().__init__(parent)
+        self.setText("(no folder loaded)")
+        self._interactive = False
+        self._hovered = False
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._apply_style()
+
+    def set_interactive(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if self._interactive == enabled:
+            return
+        self._interactive = enabled
+        if not enabled:
+            self._hovered = False
+        if enabled:
+            self.setCursor(Qt.PointingHandCursor)
+            self.setToolTip("Open folder in Explorer")
+        else:
+            self.unsetCursor()
+            self.setToolTip("")
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        if self._interactive and self._hovered:
+            bg = theme.CONTROL_BG_HOVER
+        elif self._interactive:
+            bg = theme.CONTROL_BG
+        else:
+            bg = "transparent"
+        self.setStyleSheet(
+            f"color: {theme.DARK['text']}; background-color: {bg}; "
+            f"padding: 4px 8px; border-radius: 4px;"
+        )
+
+    def enterEvent(self, event) -> None:
+        if self._interactive:
+            self._hovered = True
+            self._apply_style()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if self._hovered:
+            self._hovered = False
+            self._apply_style()
+        super().leaveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if (
+            self._interactive
+            and event.button() == Qt.LeftButton
+            and self.rect().contains(event.position().toPoint())
+        ):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
 class TrackRow(QWidget):
     """One stem row: label + S/M + volume + waveform."""
 
@@ -639,6 +704,13 @@ class StemPlayerWindow(QWidget):
         # creates a native child HWND that can cover the host 1:1 and leave the
         # OS pointing-hand cursor stuck on the main GUI after close.
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
+        # Before any resize/show-related work: changeEvent can fire during
+        # Qt construction (same pattern as MainWindow).
+        self._custom_maximized = False
+        self._restore_geometry: Optional[QRect] = None
+        self._was_minimized = False
+        self._default_w = theme.WIN_DEFAULT_W
+        self._default_h = theme.WIN_DEFAULT_H
         self.setWindowTitle("STEM Player")
         self._host = parent
         # Match main GUI size (host when available); safe now that we are not a
@@ -655,7 +727,10 @@ class StemPlayerWindow(QWidget):
                 pass
         self.resize(pw, ph)
         self.setMinimumSize(PLAYER_MIN_W, PLAYER_MIN_H)
-        
+        # Opening size used for minimize → taskbar restore (match main GUI).
+        self._default_w = pw
+        self._default_h = ph
+
         from ..widgets.titlebar import install_rounded_corner_watcher, install_frame_resize
         install_rounded_corner_watcher(self, radius=theme.WINDOW_CORNER_RADIUS)
         install_frame_resize(self)
@@ -734,11 +809,17 @@ class StemPlayerWindow(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(8)
-        self.load_btn = PushButton("📁  Load")
+        # FluentIcon (theme fg) — not 📁 emoji (Windows yellow color glyph).
+        self.load_btn = PushButton(FluentIcon.FOLDER, "Load")
+        self.load_btn.setToolTip(
+            theme.format_tooltip(
+                "Choose a song folder to load stems. Use [ and ] for prev/next song."
+            )
+        )
         self.load_btn.clicked.connect(self._load_folder_dialog)
         header.addWidget(self.load_btn)
-        self.title_lbl = BodyLabel("(no folder loaded)")
-        self.title_lbl.setStyleSheet(f"color: {theme.DARK['text']};")
+        self.title_lbl = _FolderNameBar(self)
+        self.title_lbl.clicked.connect(self._reveal_loaded_folder)
         header.addWidget(self.title_lbl, stretch=1)
         self.time_lbl = CaptionLabel("00:00:000")
         self.time_lbl.setStyleSheet(
@@ -907,8 +988,10 @@ class StemPlayerWindow(QWidget):
                 self._open_folder(self._song_folders[0], library_index=0)
             else:
                 self.title_lbl.setText(f"(no song folders under {library_root.name})")
+                self._sync_folder_name_bar()
         except Exception as exc:
             self.title_lbl.setText(f"library error: {exc}")
+            self._sync_folder_name_bar()
 
     def _load_folder_dialog(self) -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -917,6 +1000,25 @@ class StemPlayerWindow(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Open song folder", start)
         if folder:
             self._open_folder(Path(folder))
+
+    def _reveal_loaded_folder(self) -> None:
+        folder = self._folder
+        if folder is None or not folder.is_dir():
+            return
+        path = str(folder)
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.run(["open", path], check=False)
+            else:
+                subprocess.run(["xdg-open", path], check=False)
+        except Exception:
+            pass
+
+    def _sync_folder_name_bar(self) -> None:
+        folder = self._folder
+        self.title_lbl.set_interactive(folder is not None and folder.is_dir())
 
     def _open_folder(self, folder: Path, *, library_index: int = -1) -> None:
         if self._folder_job_active:
@@ -929,6 +1031,7 @@ class StemPlayerWindow(QWidget):
         if library_index >= 0:
             self._folder_index = library_index
         self.title_lbl.setText(folder.name)
+        self._sync_folder_name_bar()
         self._clear_track_rows()
 
         # Async load
@@ -1373,13 +1476,14 @@ class StemPlayerWindow(QWidget):
         except ValueError:
             new_idx = idx
         bg = "#7ee0a0" if verdict == "pass" else "#ff7a7a"
-        self.title_lbl.setStyleSheet(f"background: {bg}; color: #000; padding: 2px 6px;")
-        QTimer.singleShot(1500, lambda: self.title_lbl.setStyleSheet(f"color: {theme.DARK['text']};"))
+        self.title_lbl.setStyleSheet(f"background: {bg}; color: #000; padding: 4px 8px; border-radius: 4px;")
+        QTimer.singleShot(1500, self.title_lbl._apply_style)
         self._folder_job_active = False
         if 0 <= new_idx < len(self._song_folders):
             self._open_folder(self._song_folders[new_idx], library_index=new_idx)
         else:
             self.title_lbl.setText(self._folder.name)
+            self._sync_folder_name_bar()
 
     def _on_review_error(self, exc: Exception) -> None:
         self.title_lbl.setText(f"rename error: {exc}")
@@ -1473,6 +1577,16 @@ class StemPlayerWindow(QWidget):
             avail.y() + max(0, (avail.height() - fg.height()) // 2),
         )
 
+    def changeEvent(self, event) -> None:  # noqa: N802
+        # Same as MainWindow: minimize → taskbar restore → opening/default size.
+        from ..widgets.titlebar import note_minimize_restore_to_default
+
+        dw = getattr(self, "_default_w", None)
+        dh = getattr(self, "_default_h", None)
+        if dw is not None and dh is not None:
+            note_minimize_restore_to_default(self, event, width=dw, height=dh)
+        super().changeEvent(event)
+
     def nativeEvent(self, eventType, message):  # noqa: N802
         # Must match MainWindow: unpack MSG, then handle_native_frame_message(window, msg).
         # Passing (eventType, message) raises TypeError inside the Win32 callback and
@@ -1492,10 +1606,10 @@ class StemPlayerWindow(QWidget):
         return super().nativeEvent(eventType, message)
 
     def _toggle_maximize(self) -> None:
-        if self.isMaximized():
-            self.showNormal()
-        else:
-            self.showMaximized()
+        """CTk-style work-area fill — same path as MainWindow (not OS showMaximized)."""
+        from ..widgets.titlebar import toggle_work_area_maximize
+
+        toggle_work_area_maximize(self)
 
     def wheelEvent(self, event) -> None:  # noqa: N802
         if event.modifiers() & Qt.ControlModifier:

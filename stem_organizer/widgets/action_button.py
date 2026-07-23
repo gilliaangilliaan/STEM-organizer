@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Callable, Optional, Union
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QSizePolicy, QWidget
 from qfluentwidgets import PrimaryPushButton, PushButton, setCustomStyleSheet
 
 from .. import theme
@@ -53,6 +53,8 @@ def action_button(
                 f"PushButton:hover {{ background-color: {theme.DARK['danger']}; color: #ffffff; }}"
             )
     btn.setCursor(Qt.PointingHandCursor)
+    # Content-sized like Classify action bar — Fixed so Minimum policy cannot stretch.
+    btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     btn.setFixedHeight(height)
     btn.setFont(theme.F_ACTION)
     if width is not None:
@@ -60,5 +62,5 @@ def action_button(
     if on_click is not None:
         btn.clicked.connect(on_click)
     if tip:
-        btn.setToolTip(tip)
+        btn.setToolTip(theme.format_tooltip(tip))
     return btn

@@ -27,7 +27,7 @@ class InfoIcon(QWidget):
         self._size = size
         self.setFixedSize(size, size)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Help")
+        self.setToolTip("Open help for this panel.")
         self._on_click = on_click
         self._hover = False
 

@@ -14,10 +14,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, QTimer, Qt
+from PySide6.QtCore import QPoint, QRect, QSize, QTimer, Qt
 from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication,
     QHBoxLayout,
     QMainWindow,
     QSizePolicy,
@@ -32,7 +31,14 @@ from .settings_store import SettingsStore
 from .widgets.action_bar import ActionBarStack
 from .widgets.log_panel import LogPanel
 from .widgets.status_bar import StatusBar
-from .widgets.titlebar import CustomTitleBar, enable_win32_thick_frame, handle_native_frame_message
+from .widgets.titlebar import (
+    CustomTitleBar,
+    center_window_default_size,
+    enable_win32_thick_frame,
+    handle_native_frame_message,
+    note_minimize_restore_to_default,
+    toggle_work_area_maximize,
+)
 
 _ICON_PATH = Path(__file__).resolve().parent.parent / "logo.ico"
 
@@ -223,17 +229,7 @@ class MainWindow(QMainWindow):
 
     def _center_on_screen(self, width: int, height: int) -> None:
         """Size the window to fit the available screen area and center it."""
-        screen = self.screen() or QApplication.primaryScreen()
-        if screen is None:
-            self.resize(width, height)
-            return
-        avail = screen.availableGeometry()
-        w = min(width, avail.width())
-        h = min(height, avail.height())
-        self.resize(w, h)
-        x = avail.x() + (avail.width() - w) // 2
-        y = avail.y() + (avail.height() - h) // 2
-        self.move(x, y)
+        center_window_default_size(self, width, height)
 
     def _apply_window_flags(self) -> None:
         # Single atomic flags call — avoid sequential setWindowFlag recreates.
@@ -266,76 +262,14 @@ class MainWindow(QMainWindow):
     def changeEvent(self, event) -> None:  # noqa: N802
         # Minimize → taskbar restore: reset to default opening size so a prior
         # custom work-area fill does not come back as an awkward "max" window.
-        if event.type() == QEvent.Type.WindowStateChange:
-            if self.isMinimized():
-                self._was_minimized = True
-            elif self._was_minimized:
-                self._was_minimized = False
-                QTimer.singleShot(0, self._apply_default_size_after_unminimize)
+        note_minimize_restore_to_default(
+            self, event, width=theme.WIN_DEFAULT_W, height=theme.WIN_DEFAULT_H
+        )
         super().changeEvent(event)
 
-    def _apply_default_size_after_unminimize(self) -> None:
-        if self.isMinimized():
-            return
-        from .widgets.titlebar import apply_window_corner_preference
-
-        self._custom_maximized = False
-        self._restore_geometry = None
-        if self.isMaximized():
-            self.showNormal()
-        self._center_on_screen(theme.WIN_DEFAULT_W, theme.WIN_DEFAULT_H)
-        apply_window_corner_preference(self, theme.WINDOW_CORNER_RADIUS)
-        self.title_bar._sync_max_glyph()
-        handler = getattr(self, "_frame_resize_handler", None)
-        if handler is not None:
-            handler._layout_grips()
-            handler._raise_grips()
-
     def _toggle_maximize(self) -> None:
-        """Fill the monitor work area (CTk-style) — avoid OS showMaximized.
-
-        WS_THICKFRAME + Qt showMaximized leaves bright/white edges around the
-        client. Matching CTk, fill via SetWindowPos(rcWork) rather than
-        setGeometry(availableGeometry()), which fights Win32 frame margins and
-        spams QWindowsWindow::setGeometry warnings.
-        """
-        from .widgets.titlebar import (
-            apply_window_corner_preference,
-            apply_window_rect,
-            apply_work_area_fill,
-        )
-
-        if getattr(self, "_custom_maximized", False):
-            self._custom_maximized = False
-            geo = getattr(self, "_restore_geometry", None)
-            if geo is not None and geo.isValid():
-                apply_window_rect(self, geo)
-            else:
-                self.showNormal()
-            apply_window_corner_preference(self, theme.WINDOW_CORNER_RADIUS)
-            self.title_bar._sync_max_glyph()
-            handler = getattr(self, "_frame_resize_handler", None)
-            if handler is not None:
-                handler._layout_grips()
-                handler._raise_grips()
-            return
-
-        # If somehow OS-maximized, normalize first then treat as restore path.
-        if self.isMaximized():
-            self.showNormal()
-            apply_window_corner_preference(self, theme.WINDOW_CORNER_RADIUS)
-            self.title_bar._sync_max_glyph()
-            return
-
-        self._restore_geometry = self.geometry()
-        # Flag before move so NCCALCSIZE (if any) does not treat this as OS max.
-        self._custom_maximized = True
-        apply_work_area_fill(self)
-        apply_window_corner_preference(self, theme.WINDOW_CORNER_RADIUS)
-        self.title_bar._sync_max_glyph()
-        handler = getattr(self, "_frame_resize_handler", None)
-        if handler is not None:
-            handler._layout_grips()
+        """Fill the monitor work area (CTk-style) — avoid OS showMaximized."""
+        toggle_work_area_maximize(self)
 
     def nativeEvent(self, eventType, message):  # noqa: N802
         """Win32 edge resize via WM_NCHITTEST (+ WM_NCCALCSIZE for thick frame).

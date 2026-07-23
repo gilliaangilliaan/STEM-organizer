@@ -65,6 +65,54 @@ from ..workers.pair_worker import PairWorker
 
 PANEL_TITLE = "Match & Align"
 
+TIPS = {
+    "acapella": "Folder containing acapella FLAC or MP3 files.",
+    "instrumental": "Folder containing instrumental FLAC or MP3 files.",
+    "pairs_output": (
+        "Matched pairs are moved here (flat). Organize folder then groups them "
+        "into Artist - Title subfolders inside this same folder."
+    ),
+    "reference": (
+        "Matching starts from the reference folder; each file looks for a partner "
+        "in the other folder."
+    ),
+    "include_subfolders": "Scan every subfolder of Acapella / Instrumental recursively.",
+    "strictness": (
+        "Loose accepts minor tag differences (extra artists, & vs and, spacing).\n"
+        "Strict requires near-exact tags."
+    ),
+    "filename_fallback": (
+        'Parse artist/title from the filename only (e.g. Artist - Title (Acapella).mp3), '
+        "even when metadata tags exist. Off = use tags only."
+    ),
+    "ignore_parentheses": "Strip text inside (parentheses) before comparing tags.",
+    "ignore_square": "Strip text inside [square brackets] before comparing tags.",
+    "ignore_spaces": "Collapse repeated spaces and trim edges before comparing.",
+    "ignore_custom": "Remove these words or phrases from tags (case-insensitive) before comparing.",
+    "add_keyword": "Add a custom keyword to ignore.",
+    "remove_keyword": "Remove this custom keyword row.",
+    "align_stems_root": "Root folder with one subfolder per song (each contains acapella + instrumental).",
+    "align_inbox": "Folder where you drop downloaded originals before distributing.",
+    "align_export": "Text file listing subfolder names to look up on Soundiiz / YouTube / Deezer.",
+    "align_backup": "Copy the original stems into _backup_before_align before overwriting.",
+    "align_skip_existing": "Skip songs whose output already exists (resume mode).",
+    "align_analysis": (
+        "How many seconds of audio to analyze for offset detection. "
+        "Longer = more accurate but slower."
+    ),
+    "align_with_original": "Folders that received an original song (auto-filled as stems root / with_original).",
+    "align_without_original": "Folders still missing an original (auto-filled as stems root / without_original).",
+    "find_pairs": "Match acapellas to instrumentals by tags (or filename) and move pairs into Output.",
+    "organize": "Group matched files inside Output into Artist - Title song folders.",
+    "export_list_btn": "Write song-folder names from Stems root into the export list file.",
+    "distribute_btn": "Copy originals from the inbox into matching song folders under Stems root.",
+    "sort_folders_btn": "Move song folders into with_original / without_original based on whether an original exists.",
+    "align_stems_btn": "Align acapella and instrumental stems to the original song timeline.",
+    "play_stems": "Open the stem preview player on the current library.",
+}
+
+TIPS = {k: theme.format_tooltip(v) for k, v in TIPS.items()}
+
 
 class PairFinderTab(QWidget):
     """Match + Align sub-tabs and shared action bar."""
@@ -151,17 +199,23 @@ class PairFinderTab(QWidget):
         folders.body.layout().setSpacing(5)
         _path_lbl_w = 80  # fits "Instrumental" at body font
         self.acapella_row = PathRow(
-            folders.body, "Acapella", label_width=_path_lbl_w,
+            folders.body, "Acapella",
+            tip_text=TIPS["acapella"],
+            label_width=_path_lbl_w,
         )
         self.instrumental_row = PathRow(
-            folders.body, "Instrumental", label_width=_path_lbl_w,
+            folders.body, "Instrumental",
+            tip_text=TIPS["instrumental"],
+            label_width=_path_lbl_w,
         )
         self.pairs_output_row = PathRow(
-            folders.body, "Output", label_width=_path_lbl_w,
+            folders.body, "Output",
+            tip_text=TIPS["pairs_output"],
+            label_width=_path_lbl_w,
         )
         self._add_reference_row(folders.body, label_width=_path_lbl_w)
         self.include_subfolders_chk = CheckBox("Include subfolders")
-        self.include_subfolders_chk.setToolTip("Scan every subfolder of Acapella / Instrumental recursively.")
+        self.include_subfolders_chk.setToolTip(TIPS["include_subfolders"])
         folders.body.layout().addWidget(self.include_subfolders_chk)
         v.addWidget(folders)
 
@@ -177,14 +231,12 @@ class PairFinderTab(QWidget):
             label_width=90,
             readout_width=110,  # "Very loose (100%)" / "Balanced (84%)"
         )
-        self.strictness_slider.setToolTip(
-            "Loose accepts minor tag differences (extra artists, & vs and, spacing).\n"
-            "Strict requires near-exact tags."
-        )
+        self.strictness_slider.setToolTip(TIPS["strictness"])
         matching.body.layout().addWidget(self.strictness_slider)
 
         self.use_filename_fallback_chk = CheckBox('Use filename instead of tags ("Artist - Title.ext")')
         self.use_filename_fallback_chk.setChecked(True)
+        self.use_filename_fallback_chk.setToolTip(TIPS["filename_fallback"])
         matching.body.layout().addWidget(self.use_filename_fallback_chk)
         v.addWidget(matching)
 
@@ -195,10 +247,13 @@ class PairFinderTab(QWidget):
         ignore.body.layout().setSpacing(10)
         self.ignore_parens_chk = CheckBox("Ignore (parentheses)")
         self.ignore_parens_chk.setChecked(True)
+        self.ignore_parens_chk.setToolTip(TIPS["ignore_parentheses"])
         self.ignore_brackets_chk = CheckBox("Ignore [square brackets]")
         self.ignore_brackets_chk.setChecked(True)
+        self.ignore_brackets_chk.setToolTip(TIPS["ignore_square"])
         self.ignore_spaces_chk = CheckBox("Ignore extra spaces")
         self.ignore_spaces_chk.setChecked(True)
+        self.ignore_spaces_chk.setToolTip(TIPS["ignore_spaces"])
         for w in (self.ignore_parens_chk, self.ignore_brackets_chk, self.ignore_spaces_chk):
             ignore.body.layout().addWidget(w)
 
@@ -207,7 +262,9 @@ class PairFinderTab(QWidget):
         kw_lbl = BodyLabel("Custom keywords to ignore")
         kw_row.addWidget(kw_lbl)
         kw_row.addStretch(1)
-        add_kw = action_button("+ Add", on_click=lambda: self._add_custom_keyword_row())
+        add_kw = action_button(
+            "+ Add", on_click=lambda: self._add_custom_keyword_row(), tip=TIPS["add_keyword"]
+        )
         kw_row.addWidget(add_kw)
         ignore.body.layout().addLayout(kw_row)
 
@@ -244,10 +301,8 @@ class PairFinderTab(QWidget):
         row.addSpacing(theme.RADIO_OPTION_GAP)
         row.addWidget(self.ref_instrumental)
         row.addStretch(1)
-        self.ref_acapella.setToolTip(
-            "Matching starts from the reference folder; each file looks for a partner in the other folder."
-        )
-        self.ref_instrumental.setToolTip(self.ref_acapella.toolTip())
+        self.ref_acapella.setToolTip(TIPS["reference"])
+        self.ref_instrumental.setToolTip(TIPS["reference"])
         parent.layout().addLayout(row)
 
     def _build_align_tab(self) -> QWidget:
@@ -274,7 +329,9 @@ class PairFinderTab(QWidget):
         root_card = Section(inner, "Path")
         _align_lbl_w = 100  # fits "Without original" / "Originals inbox"
         self.stems_root_row = PathRow(
-            root_card.body, "Stems root", label_width=_align_lbl_w,
+            root_card.body, "Stems root",
+            tip_text=TIPS["align_stems_root"],
+            label_width=_align_lbl_w,
         )
         self.stems_root_row.entry.textChanged.connect(self._sync_align_sort_dirs)
         v.addWidget(root_card)
@@ -285,23 +342,30 @@ class PairFinderTab(QWidget):
             directory=False, save_dialog=True,
             filter_pattern="Text files (*.txt);;All files (*)",
             caption="Choose export list file",
+            tip_text=TIPS["align_export"],
             label_width=_align_lbl_w,
         )
         v.addWidget(step1)
 
         step2 = Section(inner, "2 · Distribute")
         self.originals_inbox_row = PathRow(
-            step2.body, "Originals inbox", label_width=_align_lbl_w,
+            step2.body, "Originals inbox",
+            tip_text=TIPS["align_inbox"],
+            label_width=_align_lbl_w,
         )
         v.addWidget(step2)
 
         step3 = Section(inner, "3 · Sort")
         step3.body.layout().setSpacing(5)
         self.with_original_row = PathRow(
-            step3.body, "With original", label_width=_align_lbl_w,
+            step3.body, "With original",
+            tip_text=TIPS["align_with_original"],
+            label_width=_align_lbl_w,
         )
         self.without_original_row = PathRow(
-            step3.body, "Without original", label_width=_align_lbl_w,
+            step3.body, "Without original",
+            tip_text=TIPS["align_without_original"],
+            label_width=_align_lbl_w,
         )
         v.addWidget(step3)
 
@@ -321,10 +385,8 @@ class PairFinderTab(QWidget):
         self.analysis_sec_spin.setDecimals(0)
         self.analysis_sec_spin.setValue(float(self.align_analysis_sec))
         self.analysis_sec_spin.setSuffix(" s")
-        self.analysis_sec_spin.setFixedWidth(88)
-        self.analysis_sec_spin.setToolTip(
-            "How many seconds of audio to analyze for offset detection. Longer = more accurate but slower."
-        )
+        self.analysis_sec_spin.setFixedWidth(theme.COMPACT_SPIN_WIDTH)
+        self.analysis_sec_spin.setToolTip(TIPS["align_analysis"])
         theme.sync_compact_spin_button(self.analysis_sec_spin, theme.COMPACT_SPIN_HEIGHT)
         theme._install_compact_spin_resize_sync(self.analysis_sec_spin)
         arow.addWidget(self.analysis_sec_spin)
@@ -332,10 +394,10 @@ class PairFinderTab(QWidget):
         step4.body.layout().addLayout(arow)
         self.align_backup_chk = CheckBox("Backup stems before align")
         self.align_backup_chk.setChecked(True)
-        self.align_backup_chk.setToolTip("Copy the original stems into _backup_before_align before overwriting.")
+        self.align_backup_chk.setToolTip(TIPS["align_backup"])
         self.align_skip_existing_chk = CheckBox("Skip if output already exists")
         self.align_skip_existing_chk.setChecked(True)
-        self.align_skip_existing_chk.setToolTip("Skip songs whose output already exists (resume mode).")
+        self.align_skip_existing_chk.setToolTip(TIPS["align_skip_existing"])
         step4.body.layout().addWidget(self.align_backup_chk)
         step4.body.layout().addWidget(self.align_skip_existing_chk)
         v.addWidget(step4)
@@ -367,6 +429,7 @@ class PairFinderTab(QWidget):
         edit.setPlaceholderText("keyword to ignore")
         edit.setFixedHeight(theme.PATH_FIELD_HEIGHT)
         edit.setClearButtonEnabled(False)
+        edit.setToolTip(TIPS["ignore_custom"])
         theme.style_line_edit(edit)
         edit.textChanged.connect(self._schedule_save)
         row.addWidget(edit, stretch=1)
@@ -376,6 +439,7 @@ class PairFinderTab(QWidget):
             on_click=lambda: self._remove_custom_keyword_row(edit),
             height=theme.PATH_FIELD_HEIGHT,
             width=36,
+            tip=TIPS["remove_keyword"],
         )
         remove.setObjectName("KeywordRemove")
         # Title-bar close hover: solid danger red fill
@@ -485,20 +549,32 @@ class PairFinderTab(QWidget):
 
     def attach_action_bar(self, page: ActionBarPage, window) -> None:
         self._action_page = page
-        self.find_btn = action_button("▶ Find pairs", on_click=self._start_find_pairs, accent=True)
-        self.find_btn.setFixedWidth(110)
-        self.organize_btn = action_button("▶ Organize folder", on_click=self._start_organize)
-        self.organize_btn.setFixedWidth(138)
-        self.export_list_btn = action_button("Export list", on_click=self._start_export_list)
-        self.export_list_btn.setFixedWidth(96)
-        self.distribute_btn = action_button("Distribute originals", on_click=self._start_distribute_originals)
-        self.distribute_btn.setFixedWidth(140)
-        self.sort_folders_btn = action_button("Sort folders", on_click=self._start_sort_folders)
-        self.sort_folders_btn.setFixedWidth(104)
-        self.align_btn = action_button("Align stems", on_click=self._start_align_stems)
-        self.align_btn.setFixedWidth(106)
-        self.play_stems_btn = action_button("♫ Play", on_click=lambda: self.request_open_player.emit())
-        self.play_stems_btn.setFixedWidth(80)
+        # Same metrics as Classify: action_button height/font + content width (no fixed widths).
+        self.find_btn = action_button(
+            "▶ Find pairs", on_click=self._start_find_pairs, accent=True, tip=TIPS["find_pairs"]
+        )
+        self.organize_btn = action_button(
+            "▶ Organize folder", on_click=self._start_organize, tip=TIPS["organize"]
+        )
+        self.export_list_btn = action_button(
+            "Export list", on_click=self._start_export_list, tip=TIPS["export_list_btn"]
+        )
+        self.distribute_btn = action_button(
+            "Distribute originals",
+            on_click=self._start_distribute_originals,
+            tip=TIPS["distribute_btn"],
+        )
+        self.sort_folders_btn = action_button(
+            "Sort folders", on_click=self._start_sort_folders, tip=TIPS["sort_folders_btn"]
+        )
+        self.align_btn = action_button(
+            "Align stems", on_click=self._start_align_stems, tip=TIPS["align_stems_btn"]
+        )
+        self.play_stems_btn = action_button(
+            "♫ Play",
+            on_click=lambda: self.request_open_player.emit(),
+            tip=TIPS["play_stems"],
+        )
         # Layout (left → right): primary actions, stretch, Play at far end.
         # Visibility per subtab:
         #   Match → [Find pairs] [Organize]            [stretch] [♫ Play]
