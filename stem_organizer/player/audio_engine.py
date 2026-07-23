@@ -8,6 +8,8 @@ from __future__ import annotations
 import threading
 from typing import List, Optional
 
+import numpy as np
+
 from .track_state import TrackState
 
 
@@ -57,19 +59,7 @@ class AudioEngine:
 
     # ----- mixing -----
 
-    def _any_solo(self) -> bool:
-        return any(t.solo for t in self.tracks)
-
-    def _track_audible(self, track: TrackState) -> bool:
-        if track.muted:
-            return False
-        if self._any_solo():
-            return track.solo
-        return True
-
     def _callback(self, outdata, frames, _time_info, _status) -> None:
-        import numpy as np
-
         with self._lock:
             pos = self._position
             playing = self._playing
@@ -82,10 +72,18 @@ class AudioEngine:
                 self._meter = 0.0
             return
 
-        end_pos = pos + frames
+        # Resolve solo once per block — not once per track.
+        any_solo = False
+        for t in self.tracks:
+            if t.solo:
+                any_solo = True
+                break
+
         peak = 0.0
         for track in self.tracks:
-            if not self._track_audible(track):
+            if track.muted:
+                continue
+            if any_solo and not track.solo:
                 continue
             audio = track.audio
             n = audio.shape[1]

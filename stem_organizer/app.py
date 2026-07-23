@@ -416,15 +416,23 @@ class MainWindow(QMainWindow):
                 pass
             return
         library_root = ""
-        # Try to read library root from the active tab (Classify output / pair-finder)
+        # Active tab supplies the library whose children are song folders
+        # (Classify: output_row; Align: with_original; Match: pairs output).
         widget = self.tabs.currentWidget()
         if widget is not None:
-            for attr in ("output_row", "stems_root_row"):
-                row = getattr(widget, attr, None)
-                if row is not None and hasattr(row, "text"):
-                    library_root = row.text().strip()
-                    if library_root:
-                        break
+            resolver = getattr(widget, "player_library_root", None)
+            if callable(resolver):
+                try:
+                    library_root = (resolver() or "").strip()
+                except Exception:
+                    library_root = ""
+            if not library_root:
+                for attr in ("output_row", "pairs_output_row", "with_original_row"):
+                    row = getattr(widget, attr, None)
+                    if row is not None and hasattr(row, "text"):
+                        library_root = row.text().strip()
+                        if library_root:
+                            break
         try:
             open_stem_player(self, library_root=library_root or None)
         except Exception as exc:

@@ -9,7 +9,7 @@ REM Double-click or run from project root / dist folder.
 REM
 REM PyTorch choice (same as CTk STEM-organizer):
 REM   1 = NVIDIA RTX 20/30/40  -> CUDA 12.4  (https://download.pytorch.org/whl/cu124)
-REM   2 = CPU only             -> CPU        (https://download.pytorch.org/whl/cpu)
+REM   2 = CPU only             -> CPU wheels (https://download.pytorch.org/whl/cpu)
 REM   3 = NVIDIA RTX 50-series -> CUDA 12.8  (https://download.pytorch.org/whl/cu128)
 REM
 REM =============================================================================

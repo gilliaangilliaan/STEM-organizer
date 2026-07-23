@@ -593,6 +593,10 @@ class ClassifyTab(QWidget):
         page.add_button(self.play_btn)
         self._update_action_buttons()
 
+    def player_library_root(self) -> str:
+        """Folder whose immediate children are song folders."""
+        return self.output_row.text().strip()
+
     def _update_action_buttons(self) -> None:
         if self._is_sdr_mode:
             self.start_btn.setText("▶ Start SI-SDR")

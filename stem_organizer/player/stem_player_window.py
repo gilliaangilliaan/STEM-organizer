@@ -83,7 +83,9 @@ WAVE_ZOOM_STEP = 1.22
 WAVE_PEAK_BINS_FULL = 4096  # full-zoom peak cache (load-time)
 WAVE_FOLLOW_POS = 0.22
 BACKUP_DIR_NAME = "_backup_before_align"
-FOLDER_CACHE_MAX = 8
+# Current song + prev/next neighbors. Larger caches hold multi-hundred-MB
+# float32 buffers and amplify GC pauses during the audio callback.
+FOLDER_CACHE_MAX = 3
 WAVEFORM_DIM_BLEND = 0.68
 
 STEM_COLORS = {
@@ -138,7 +140,10 @@ def _normalize_player_audio(audio, file_sr: int, sr: int, ch: int):
     elif audio.shape[0] > ch:
         audio = audio[:ch]
     if file_sr == sr:
-        return audio.astype(_np.float32)
+        # Contiguous RAM copy — never keep a soundfile mmap view on the
+        # mix hot path (page faults under a cold OS cache after listing
+        # thousands of sibling folders cause audible underruns).
+        return _np.ascontiguousarray(audio, dtype=_np.float32)
     try:
         import resampy
         audio = resampy.resample(audio, file_sr, sr, axis=1)
@@ -146,20 +151,18 @@ def _normalize_player_audio(audio, file_sr: int, sr: int, ch: int):
         raise RuntimeError(
             f"Sample rate mismatch ({file_sr} Hz vs {sr} Hz) and resampy is not installed."
         )
-    return audio.astype(_np.float32)
+    return _np.ascontiguousarray(audio, dtype=_np.float32)
 
 
 def _read_soundfile_player(path: str, sr: int, ch: int):
     _ensure_player_audio_deps()
+    # Read into RAM (no mmap). Playback must not depend on page faults from
+    # a library root that may contain thousands of sibling folders.
     try:
-        data, file_sr = _sf.read(path, dtype="float32", always_2d=True, mmap=True)
+        data, file_sr = _sf.read(path, dtype="float32", always_2d=True)
         return _normalize_player_audio(data.T, file_sr, sr, ch)
     except Exception:
-        try:
-            data, file_sr = _sf.read(path, dtype="float32", always_2d=True)
-            return _normalize_player_audio(data.T, file_sr, sr, ch)
-        except Exception:
-            return None
+        return None
 
 
 def _read_via_ffmpeg_player(path: str, sr: int, ch: int):
@@ -233,6 +236,32 @@ def compute_waveform_peaks(mono, num_bins: int):
     if count < num_bins:
         peaks = _np.pad(peaks, (0, num_bins - count))
     return peaks.astype(_np.float32)
+
+
+def resample_peak_bins(peaks, num_bins: int):
+    """Resample a peak envelope to ``num_bins``.
+
+    Downsample with per-column max (preserves spikes). Upsample with linear
+    interp when the visible window is denser than the load-time cache.
+    Linspace / plain interp on downsample drops peaks and draws chunky polygons.
+    """
+    _ensure_player_audio_deps()
+    bins = max(1, int(num_bins))
+    arr = _np.asarray(peaks, dtype=_np.float32).ravel()
+    n = int(arr.size)
+    if n == 0:
+        return _np.zeros(bins, dtype=_np.float32)
+    if n == bins:
+        return arr
+    if n < bins:
+        src_x = _np.arange(n, dtype=_np.float32)
+        dst_x = _np.linspace(0, n - 1, bins, dtype=_np.float32)
+        return _np.interp(dst_x, src_x, arr).astype(_np.float32)
+    # Max-pool each display column over its source span.
+    bucket = _np.minimum((_np.arange(n, dtype=_np.int64) * bins) // n, bins - 1)
+    out = _np.zeros(bins, dtype=_np.float32)
+    _np.maximum.at(out, bucket, arr)
+    return out
 
 
 def _compute_peaks_full_fast(mono):
@@ -366,13 +395,27 @@ def _strip_review_tag(name: str) -> str:
 
 
 def list_player_song_folders(library_root: Path) -> List[Path]:
-    if not library_root.is_dir():
+    """Immediate song-folder children of *library_root* (sorted, case-insensitive).
+
+    Uses ``os.scandir`` so ``is_dir`` is free on Windows (DirEntry cache) —
+    ``Path.iterdir`` + ``Path.is_dir`` costs an extra stat per entry and was
+    ~6× slower at ~4000 folders in local benchmarks.
+    """
+    root = os.fspath(library_root)
+    if not os.path.isdir(root):
         return []
-    folders = [
-        path for path in library_root.iterdir()
-        if path.is_dir() and path.name != BACKUP_DIR_NAME
-    ]
-    return sorted(folders, key=lambda path: _strip_review_tag(path.name).casefold())
+    folders: List[Path] = []
+    with os.scandir(root) as it:
+        for entry in it:
+            if entry.name == BACKUP_DIR_NAME:
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    folders.append(Path(entry.path))
+            except OSError:
+                continue
+    folders.sort(key=lambda path: _strip_review_tag(path.name).casefold())
+    return folders
 
 
 def rename_folder_review(folder: Path, verdict: str) -> Path:
@@ -430,6 +473,14 @@ class TimelineWidget(QWidget):
         self.update()
 
     def set_playhead(self, x: Optional[float]) -> None:
+        if x is self._playhead_x:
+            return
+        if (
+            x is not None
+            and self._playhead_x is not None
+            and abs(x - self._playhead_x) < 0.5
+        ):
+            return
         self._playhead_x = x
         self.update()
 
@@ -770,13 +821,27 @@ class StemPlayerWindow(QWidget):
         self._redraw_sig = None
         self._folder_job_active = False
         self._busy_generation = 0
+        # Library scans use a separate generation so folder loads (which bump
+        # _busy_generation) cannot mark a just-finished scan as stale and leave
+        # _song_folders empty — that permanently breaks [ ] / prev/next.
+        self._library_gen = 0
+        self._library_scan_pending = False
+        # Queued prev/next steps while a load is in flight or the library list
+        # is still scanning (sum of +1 / -1).
+        self._pending_folder_delta = 0
+        # Absolute library index to open once an in-flight load finishes
+        # (set when _apply_library_scan cannot call _open_folder yet).
+        self._pending_open_index: Optional[int] = None
         self._stop_after_load = False
         self._folder_cache: "dict[Path, List[TrackState]]" = {}
         self._cache_order: List[Path] = []
+        self._cache_lock = threading.Lock()
         self._executor: Optional[ThreadPoolExecutor] = None
         self._main_jobs: "queue.SimpleQueue" = __import__("queue").SimpleQueue()
         self._prefetch_lock = threading.Lock()
         self._prefetch_inflight: set = set()
+        self._prefetch_pending = False
+        self._shortcuts: List[QShortcut] = []
 
         self.review_done.connect(self._on_review_done)
         self.review_error.connect(self._on_review_error)
@@ -969,12 +1034,15 @@ class StemPlayerWindow(QWidget):
             shortcut = QShortcut(QKeySequence(seq), self)
             shortcut.setContext(Qt.WindowShortcut)
             shortcut.activated.connect(handler)
+            # Keep a Python ref — parented QObjects can still be GC'd in PySide.
+            self._shortcuts.append(shortcut)
 
         _sc(Qt.Key_Space, self._toggle_play)
         _sc(Qt.Key_Left, lambda: self._seek_relative(-SEEK_JUMP_SEC))
         _sc(Qt.Key_Right, lambda: self._seek_relative(SEEK_JUMP_SEC))
-        _sc("[", self._prev_song_folder)
-        _sc("]", self._next_song_folder)
+        # Prefer key enums — string "[" / "]" is unreliable across layouts.
+        _sc(Qt.Key_BracketLeft, self._prev_song_folder)
+        _sc(Qt.Key_BracketRight, self._next_song_folder)
         # Explicit letter sequences — Qt.Key_P alone can miss lowercase keypresses
         # when focus sits on Fluent controls.
         _sc("P", lambda: self._mark_folder_review("pass"))
@@ -995,26 +1063,136 @@ class StemPlayerWindow(QWidget):
     # ----- library -----
 
     def _prepare_library(self, library_root) -> None:
+        """Discover song folders off the UI thread, then open the first one."""
         try:
             library_root = Path(library_root)
-            self._library_root = library_root
-            self._song_folders = list_player_song_folders(library_root)
-            if self._song_folders:
-                self._open_folder(self._song_folders[0], library_index=0)
-            else:
-                self.title_lbl.setText(f"(no song folders under {library_root.name})")
-                self._sync_folder_name_bar()
         except Exception as exc:
             self.title_lbl.setText(f"library error: {exc}")
             self._sync_folder_name_bar()
+            return
+        self._library_root = library_root
+        self._song_folders = []
+        self._folder_index = -1
+        self._pending_folder_delta = 0
+        self._pending_open_index = None
+        self._library_gen += 1
+        self._library_scan_pending = True
+        # Invalidate any in-flight folder load from a previous library.
+        self._busy_generation += 1
+        self._folder_job_active = False
+        self.title_lbl.setText(f"Scanning {library_root.name}…")
+        self._sync_folder_name_bar()
+        if self._executor is None:
+            # Keep pool small: library scan + at most one neighbor prefetch.
+            self._executor = ThreadPoolExecutor(max_workers=2)
+        scan_gen = self._library_gen
+
+        def work():
+            try:
+                folders = list_player_song_folders(library_root)
+                self._main_jobs.put((scan_gen, "library", (library_root, folders, None)))
+            except Exception as exc:
+                self._main_jobs.put((scan_gen, "library", (library_root, [], str(exc))))
+
+        self._executor.submit(work)
+
+    def _apply_library_scan(self, library_root: Path, folders: List[Path], error) -> None:
+        self._library_scan_pending = False
+        if error:
+            self.title_lbl.setText(f"library error: {error}")
+            self._sync_folder_name_bar()
+            self._pending_folder_delta = 0
+            self._pending_open_index = None
+            return
+        if self._library_root is not None and Path(library_root) != self._library_root:
+            return
+        self._song_folders = folders
+        if not self._song_folders:
+            self.title_lbl.setText(f"(no song folders under {library_root.name})")
+            self._sync_folder_name_bar()
+            self._pending_folder_delta = 0
+            self._pending_open_index = None
+            return
+        # Prefer the already-open song if it belongs to this library; otherwise
+        # start at the first folder. Pending [ ] / arrow steps apply afterward.
+        idx = self._index_in_library(self._folder)
+        if idx < 0:
+            idx = 0
+        if self._pending_folder_delta:
+            idx = max(0, min(len(self._song_folders) - 1, idx + self._pending_folder_delta))
+            self._pending_folder_delta = 0
+        target = self._song_folders[idx]
+        # Manual Load may already be opening / displaying this song while the
+        # new parent library was scanning — sync index only, do not reload.
+        if self._same_path(self._folder, target):
+            self._folder_index = idx
+            self._pending_open_index = None
+            if self._folder_job_active:
+                return
+            QTimer.singleShot(200, self._schedule_prefetch_adjacent)
+            return
+        if self._folder_job_active:
+            # A different load is in flight. Open the resolved library slot as
+            # soon as that job clears.
+            self._pending_open_index = idx
+            return
+        self._pending_open_index = None
+        self._open_folder(target, library_index=idx)
+
+    def _same_path(self, a: Optional[Path], b: Optional[Path]) -> bool:
+        if a is None or b is None:
+            return False
+        if a == b:
+            return True
+        try:
+            return a.resolve() == b.resolve()
+        except OSError:
+            return False
+
+    def _index_in_library(self, folder: Optional[Path]) -> int:
+        if folder is None or not self._song_folders:
+            return -1
+        try:
+            return self._song_folders.index(folder)
+        except ValueError:
+            pass
+        try:
+            resolved = folder.resolve()
+        except OSError:
+            return -1
+        for i, cand in enumerate(self._song_folders):
+            try:
+                if cand.resolve() == resolved:
+                    return i
+            except OSError:
+                continue
+        return -1
 
     def _load_folder_dialog(self) -> None:
         from PySide6.QtWidgets import QFileDialog
 
         start = str(self._folder.parent) if self._folder else ""
         folder = QFileDialog.getExistingDirectory(self, "Open song folder", start)
-        if folder:
-            self._open_folder(Path(folder))
+        if not folder:
+            return
+        path = Path(folder)
+        new_root = path.parent
+        # Same parent library already scanned: open in place (prev/next unchanged).
+        if (
+            self._same_path(self._library_root, new_root)
+            and self._song_folders
+            and not self._library_scan_pending
+        ):
+            idx = self._index_in_library(path)
+            self._open_folder(path, library_index=idx)
+            return
+        # Manual Load of a song under a different parent (or no library yet):
+        # rebind library root to that parent, then open the chosen song.
+        # Scan uses self._folder to land on the loaded index without breaking
+        # Align/Classify initial Play (which still goes through _prepare_library alone).
+        self._folder = path
+        self._prepare_library(new_root)
+        self._open_folder(path)
 
     def _reveal_loaded_folder(self) -> None:
         folder = self._folder
@@ -1045,13 +1223,17 @@ class StemPlayerWindow(QWidget):
         self._folder = folder
         if library_index >= 0:
             self._folder_index = library_index
+        else:
+            # Manual Load / reopen: keep prev/next working when the path is in
+            # the already-scanned library list; otherwise clear the index.
+            self._folder_index = self._index_in_library(folder)
         self.title_lbl.setText(folder.name)
         self._sync_folder_name_bar()
         self._clear_track_rows()
 
         # Async load
         if self._executor is None:
-            self._executor = ThreadPoolExecutor(max_workers=4)
+            self._executor = ThreadPoolExecutor(max_workers=2)
 
         def work():
             try:
@@ -1064,8 +1246,9 @@ class StemPlayerWindow(QWidget):
                 self._main_jobs.put((gen, "error", str(exc)))
 
         self._executor.submit(work)
-        # Prefetch adjacent songs
-        QTimer.singleShot(200, self._prefetch_adjacent_songs)
+        # Prefetch neighbors only when not playing (avoids disk/GIL contention
+        # with the PortAudio callback on large libraries).
+        QTimer.singleShot(200, self._schedule_prefetch_adjacent)
 
     def _load_tracks_from_stems(self, folder: Path) -> List[TrackState]:
         _ensure_player_audio_deps()
@@ -1090,17 +1273,41 @@ class StemPlayerWindow(QWidget):
     # ----- folder cache -----
 
     def _get_folder_cache(self, folder: Path) -> Optional[List[TrackState]]:
-        return self._folder_cache.get(folder)
+        with self._cache_lock:
+            return self._folder_cache.get(folder)
 
     def _put_folder_cache(self, folder: Path, tracks: List[TrackState]) -> None:
-        self._folder_cache[folder] = tracks
-        self._cache_order.append(folder)
-        while len(self._cache_order) > FOLDER_CACHE_MAX:
-            oldest = self._cache_order.pop(0)
-            self._folder_cache.pop(oldest, None)
+        with self._cache_lock:
+            if folder in self._folder_cache:
+                try:
+                    self._cache_order.remove(folder)
+                except ValueError:
+                    pass
+            self._folder_cache[folder] = tracks
+            self._cache_order.append(folder)
+            guard = 0
+            while len(self._cache_order) > FOLDER_CACHE_MAX and guard < FOLDER_CACHE_MAX + 2:
+                guard += 1
+                oldest = self._cache_order.pop(0)
+                # Keep the currently displayed song resident.
+                if oldest == self._folder:
+                    self._cache_order.append(oldest)
+                    continue
+                self._folder_cache.pop(oldest, None)
+
+    def _schedule_prefetch_adjacent(self) -> None:
+        """Prefetch neighbors when idle; remember intent if currently playing."""
+        if self._engine is not None and self._engine.playing:
+            self._prefetch_pending = True
+            return
+        self._prefetch_pending = False
+        self._prefetch_adjacent_songs()
 
     def _prefetch_adjacent_songs(self) -> None:
         if self._executor is None or self._library_root is None:
+            return
+        if self._engine is not None and self._engine.playing:
+            self._prefetch_pending = True
             return
         idx = self._folder_index
         if idx < 0:
@@ -1109,12 +1316,17 @@ class StemPlayerWindow(QWidget):
             if 0 <= cand < len(self._song_folders):
                 folder = self._song_folders[cand]
                 with self._prefetch_lock:
-                    if folder in self._prefetch_inflight or folder in self._folder_cache:
+                    if folder in self._prefetch_inflight:
+                        continue
+                    if self._get_folder_cache(folder) is not None:
                         continue
                     self._prefetch_inflight.add(folder)
 
                 def work(f=folder):
                     try:
+                        if self._engine is not None and self._engine.playing:
+                            self._prefetch_pending = True
+                            return
                         tracks = self._load_tracks_from_stems(f)
                         self._put_folder_cache(f, tracks)
                     except Exception:
@@ -1159,6 +1371,9 @@ class StemPlayerWindow(QWidget):
         self._build_track_rows()
         self._populate_shortcuts_bar(stem_count=len(tracks))
         self._redraw_wave_view(force=True)
+        # Child layout can settle after this call without a window resizeEvent;
+        # debounce another pass so bins match the final pixel width.
+        self._redraw_timer.start()
 
     def _build_track_rows(self) -> None:
         stem_roles = {t.name for t in self._tracks}
@@ -1172,6 +1387,8 @@ class StemPlayerWindow(QWidget):
             row.mute_toggled.connect(self._toggle_mute)
             row.volume_changed.connect(self._on_track_volume)
             row.wave.clicked.connect(self._on_wave_click)
+            # Waveform width changes on row layout, not only window resize.
+            row.wave.width_changed.connect(self._redraw_timer.start)
             # Equal stretch → 50/50 for 2 stems, ~25% each for 4 (CTk uniform rows).
             self.tracks_layout.addWidget(row, stretch=1)
             track.row_widget = row
@@ -1196,6 +1413,8 @@ class StemPlayerWindow(QWidget):
             self._engine.set_playing(False)
             _set_transport_icon(self.play_btn, playing=False)
             self.play_btn._is_playing = False
+            if self._prefetch_pending:
+                QTimer.singleShot(0, self._schedule_prefetch_adjacent)
         else:
             if self._engine.position >= self._engine.duration - 0.01:
                 self._engine.position = 0.0
@@ -1212,6 +1431,8 @@ class StemPlayerWindow(QWidget):
         self.play_btn._is_playing = False
         self.time_lbl.setText("00:00:000")
         self._update_playhead(0.0)
+        if self._prefetch_pending:
+            QTimer.singleShot(0, self._schedule_prefetch_adjacent)
 
     def _seek_to(self, seconds: float) -> None:
         if self._engine is None:
@@ -1235,30 +1456,64 @@ class StemPlayerWindow(QWidget):
     # ----- mute / solo -----
 
     def _toggle_solo(self, track: TrackState) -> None:
-        track.solo = not track.solo
+        enabling = not track.solo
+        if enabling:
+            # Exclusive solo: only one stem can be solo at a time.
+            for t in self._tracks:
+                if t is track:
+                    continue
+                if t.solo:
+                    t.solo = False
+                    if t.solo_btn is not None:
+                        t.solo_btn.setChecked(False)
+                        t.solo_btn.setStyleSheet(_sm_button_style(active=False))
+            track.solo = True
+            # Solo and mute are mutually exclusive on a track.
+            if track.muted:
+                track.muted = False
+        else:
+            track.solo = False
         if track.solo_btn is not None:
             track.solo_btn.setChecked(track.solo)
             track.solo_btn.setStyleSheet(_sm_button_style(active=track.solo))
         self._refresh_waveform_colors()
 
     def _toggle_mute(self, track: TrackState) -> None:
-        track.muted = not track.muted
-        if track.mute_btn is not None:
-            track.mute_btn.setChecked(track.muted)
-            track.mute_btn.setStyleSheet(_sm_button_style(active=track.muted, danger=True))
+        enabling = not track.muted
+        track.muted = enabling
+        if enabling and track.solo:
+            # Solo and mute are mutually exclusive on a track.
+            track.solo = False
+            if track.solo_btn is not None:
+                track.solo_btn.setChecked(False)
+                track.solo_btn.setStyleSheet(_sm_button_style(active=False))
         self._refresh_waveform_colors()
 
-    def _waveform_dimmed(self, track: TrackState) -> bool:
+    def _effectively_muted(self, track: TrackState) -> bool:
+        """True if muted for audio: real mute, or silenced by another track's solo."""
         if track.muted:
             return True
         if any(t.solo for t in self._tracks) and not track.solo:
             return True
         return False
 
+    def _waveform_dimmed(self, track: TrackState) -> bool:
+        return self._effectively_muted(track)
+
+    def _refresh_mute_styles(self) -> None:
+        """Mute chrome follows effective mute; track.muted stays the stored state."""
+        for track in self._tracks:
+            if track.mute_btn is None:
+                continue
+            on = self._effectively_muted(track)
+            track.mute_btn.setChecked(on)
+            track.mute_btn.setStyleSheet(_sm_button_style(active=on, danger=True))
+
     def _refresh_waveform_colors(self) -> None:
         for track in self._tracks:
             if track.wave_widget is not None:
                 track.wave_widget.set_color(track.color, dimmed=self._waveform_dimmed(track))
+        self._refresh_mute_styles()
 
     # ----- view math -----
 
@@ -1314,11 +1569,7 @@ class StemPlayerWindow(QWidget):
         region = full[i0:i1]
         if region.size == 0:
             return _np.zeros(max(1, bins), dtype=_np.float32)
-        if region.size == bins:
-            return region
-        src_x = _np.arange(region.size, dtype=_np.float32)
-        dst_x = _np.linspace(0, region.size - 1, bins, dtype=_np.float32)
-        return _np.interp(dst_x, src_x, region).astype(_np.float32)
+        return resample_peak_bins(region, bins)
 
     def _follow_playhead(self, pos: float) -> bool:
         if self._view_zoom <= WAVE_ZOOM_MIN + 1e-9:
@@ -1360,7 +1611,10 @@ class StemPlayerWindow(QWidget):
         if not force and sig == self._redraw_sig:
             return
         self._redraw_sig = sig
-        bins = max(WAVE_PEAK_BINS_FULL, w)
+        # One display bin per pixel column; pixmap cache keeps playhead ticks
+        # from rebuilding paths. Max-pool from WAVE_PEAK_BINS_FULL in
+        # resample_peak_bins (not linspace/interp).
+        bins = max(1, int(w))
         for track in self._tracks:
             track.peaks = self._peaks_for_view(track, bins)
             if track.wave_widget is not None:
@@ -1405,24 +1659,37 @@ class StemPlayerWindow(QWidget):
                 gen, kind, payload = self._main_jobs.get_nowait()
             except Exception:
                 break
-            if gen == self._busy_generation:
+            if kind == "library":
+                # Library gen is independent of folder-load _busy_generation.
+                if gen != self._library_gen:
+                    drained += 1
+                    continue
+                root, folders, error = payload
+                self._apply_library_scan(root, folders, error)
+            elif gen == self._busy_generation:
                 if kind == "loaded":
                     self._apply_loaded(gen, payload)
                 elif kind == "error":
                     self.title_lbl.setText(f"load error: {payload}")
+                    self._sync_folder_name_bar()
+                    self._folder_job_active = False
+                    self._flush_pending_folder_nav()
             drained += 1
         self._ui_tick()
 
     def _apply_loaded(self, gen: int, payload) -> None:
         folder, tracks = payload
-        if not tracks:
-            self._clear_track_rows()
-            self._populate_shortcuts_bar(stem_count=0)
-            self.title_lbl.setText(f"(no stems in {folder.name})")
+        try:
+            if not tracks:
+                self._clear_track_rows()
+                self._populate_shortcuts_bar(stem_count=0)
+                self.title_lbl.setText(f"(no stems in {folder.name})")
+                self._sync_folder_name_bar()
+                return
+            self._install_loaded_folder(folder, tracks)
+        finally:
             self._folder_job_active = False
-            return
-        self._install_loaded_folder(folder, tracks)
-        self._folder_job_active = False
+            self._flush_pending_folder_nav()
 
     def _ui_tick(self) -> None:
         if self._engine is None:
@@ -1441,24 +1708,81 @@ class StemPlayerWindow(QWidget):
         if not self._engine.playing and getattr(self.play_btn, "_is_playing", False):
             _set_transport_icon(self.play_btn, playing=False)
             self.play_btn._is_playing = False
+            if self._prefetch_pending:
+                QTimer.singleShot(0, self._schedule_prefetch_adjacent)
 
     # ----- song navigation -----
 
-    def _prev_song_folder(self) -> None:
-        if self._folder_job_active or self._folder_index <= 0:
+    def _queue_folder_step(self, delta: int) -> None:
+        """Remember a prev/next intent until the library list / load is ready."""
+        self._pending_folder_delta += int(delta)
+        if self._pending_folder_delta == 0:
             return
-        self._open_folder(self._song_folders[self._folder_index - 1], library_index=self._folder_index - 1)
+        if self._library_scan_pending or self._folder_job_active:
+            return
+        self._flush_pending_folder_nav()
+
+    def _flush_pending_folder_nav(self) -> None:
+        if self._library_scan_pending or self._folder_job_active:
+            return
+        if self._pending_open_index is not None:
+            target = self._pending_open_index
+            self._pending_open_index = None
+            if self._song_folders and 0 <= target < len(self._song_folders):
+                if self._pending_folder_delta:
+                    target = max(
+                        0,
+                        min(len(self._song_folders) - 1, target + self._pending_folder_delta),
+                    )
+                    self._pending_folder_delta = 0
+                self._open_folder(self._song_folders[target], library_index=target)
+                return
+        if self._pending_folder_delta == 0:
+            return
+        if not self._song_folders:
+            self._pending_folder_delta = 0
+            return
+        idx = self._folder_index
+        if idx < 0:
+            idx = self._index_in_library(self._folder)
+        if idx < 0:
+            idx = 0
+        target = max(0, min(len(self._song_folders) - 1, idx + self._pending_folder_delta))
+        self._pending_folder_delta = 0
+        if target == self._folder_index and self._folder is not None:
+            return
+        self._open_folder(self._song_folders[target], library_index=target)
+
+    def _prev_song_folder(self) -> None:
+        if self._library_scan_pending or not self._song_folders:
+            self._queue_folder_step(-1)
+            return
+        if self._folder_job_active:
+            self._queue_folder_step(-1)
+            return
+        if self._folder_index <= 0:
+            return
+        self._open_folder(
+            self._song_folders[self._folder_index - 1],
+            library_index=self._folder_index - 1,
+        )
 
     def _next_song_folder(self) -> None:
+        if self._library_scan_pending or not self._song_folders:
+            self._queue_folder_step(+1)
+            return
         if self._folder_job_active:
+            self._queue_folder_step(+1)
             return
         if self._folder_index < 0:
-            if self._song_folders:
-                self._open_folder(self._song_folders[0], library_index=0)
+            self._open_folder(self._song_folders[0], library_index=0)
             return
         if self._folder_index >= len(self._song_folders) - 1:
             return
-        self._open_folder(self._song_folders[self._folder_index + 1], library_index=self._folder_index + 1)
+        self._open_folder(
+            self._song_folders[self._folder_index + 1],
+            library_index=self._folder_index + 1,
+        )
 
     def _mark_folder_review(self, verdict: str) -> None:
         if self._folder_job_active or self._folder is None:
@@ -1478,18 +1802,38 @@ class StemPlayerWindow(QWidget):
         threading.Thread(target=work, daemon=True).start()
 
     def _on_review_done(self, new_path: Path, idx: int, verdict: str) -> None:
-        # Refresh library and re-open this index
+        # Update the in-memory library slot in place — do NOT rescan thousands
+        # of sibling folders on the UI thread (blocks the audio callback GIL).
         old_path = self._folder
-        self._folder = Path(new_path)
-        if old_path is not None:
-            self._folder_cache.pop(old_path, None)
-        self._folder_cache.pop(self._folder, None)
-        if self._library_root is not None:
-            self._song_folders = list_player_song_folders(self._library_root)
-        try:
-            new_idx = self._song_folders.index(self._folder)
-        except ValueError:
+        new_path = Path(new_path)
+        self._folder = new_path
+        with self._cache_lock:
+            if old_path is not None:
+                self._folder_cache.pop(old_path, None)
+                try:
+                    self._cache_order.remove(old_path)
+                except ValueError:
+                    pass
+            self._folder_cache.pop(new_path, None)
+            try:
+                self._cache_order.remove(new_path)
+            except ValueError:
+                pass
+        new_idx = idx
+        if 0 <= idx < len(self._song_folders):
+            self._song_folders[idx] = new_path
             new_idx = idx
+        else:
+            # Fallback: locate by path without a full directory re-list.
+            try:
+                new_idx = self._song_folders.index(new_path)
+            except ValueError:
+                if old_path is not None:
+                    try:
+                        new_idx = self._song_folders.index(old_path)
+                        self._song_folders[new_idx] = new_path
+                    except ValueError:
+                        new_idx = idx
         bg = "#7ee0a0" if verdict == "pass" else "#ff7a7a"
         self.title_lbl.setStyleSheet(
             f"QLabel#StemFolderChip {{ background: {bg}; color: #000; "

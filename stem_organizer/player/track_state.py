@@ -46,4 +46,4 @@ def _to_stereo(audio):
         a = np.repeat(a, 2, axis=0)
     elif a.shape[0] > 2:
         a = a[:2]
-    return a.astype(np.float32)
+    return np.ascontiguousarray(a, dtype=np.float32)

@@ -108,7 +108,10 @@ TIPS = {
     "distribute_btn": "Copy originals from the inbox into matching song folders under Stems root.",
     "sort_folders_btn": "Move song folders into with_original / without_original based on whether an original exists.",
     "align_stems_btn": "Align acapella and instrumental stems to the original song timeline.",
-    "play_stems": "Open the stem preview player on the current library.",
+    "play_stems": (
+        "Open the stem preview player on the current library "
+        "(Match: Output; Align: With original)."
+    ),
 }
 
 TIPS = {k: theme.format_tooltip(v) for k, v in TIPS.items()}
@@ -510,6 +513,25 @@ class PairFinderTab(QWidget):
             self.with_original_row.set_text(with_default)
         if not cur_without:
             self.without_original_row.set_text(without_default)
+
+    def player_library_root(self) -> str:
+        """Folder whose immediate children are song folders (Classify-style).
+
+        Align → With original (song dirs with vocals/instrumental/original).
+        Match → Pairs Output.
+        """
+        if getattr(self, "_tabview", None) is not None and self._tabview.currentIndex() == 1:
+            with_dir = self.with_original_row.text().strip()
+            if with_dir:
+                return with_dir
+            root = self.stems_root_row.text().strip()
+            if root:
+                try:
+                    return str(default_with_original_dir(Path(root)))
+                except Exception:
+                    return ""
+            return ""
+        return self.pairs_output_row.text().strip()
 
     def _on_subtab_changed(self, idx: int) -> None:
         if not hasattr(self, "_action_page"):
