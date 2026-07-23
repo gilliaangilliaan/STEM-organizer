@@ -223,14 +223,14 @@ if not exist "%DEST%" (
 )
 
 if "%USE_SITE%"=="1" (
-    echo Mode: frozen / dist - install into site-packages
+REM    echo Mode: frozen / dist - install into site-packages
 ) else (
-    echo Mode: source - install into .venv
+REM    echo Mode: source - install into .venv
 )
-echo Install into: %DEST%
-echo Python: %HOST_PY%  ^(%HOST_VER% detected^)
-if /I not "%USE_SITE%"=="1" echo Venv: %PY%
-echo.
+REM echo Install into: %DEST%
+REM echo Python: %HOST_PY%  ^(%HOST_VER% detected^)
+REM if /I not "%USE_SITE%"=="1" echo Venv: %PY%
+REM echo.
 goto dest_ok
 
 :bad_dest
