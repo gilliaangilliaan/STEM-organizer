@@ -11,7 +11,7 @@ Automatically create 2- or 4-stems, identify genre/style + vocal gender/reverb, 
 
 **By:** Gilliaan & Bas Curtiz  
 **Repo:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  
-**Video:** [How to install & use](https://youtu.be/Zqj6thKYrUs)
+**Video:** [How to install & use](https://youtu.be/L-KZmIthER4)
 
 </div>
 

@@ -837,10 +837,17 @@ class ClassifyTab(QWidget):
     # ----- settings ----------------------------------------------------
 
     def settings_snapshot(self) -> dict:
+        # When CUDA is unavailable the box is force-unchecked for display only —
+        # do not persist that as a user "off" preference (keeps default-on when
+        # CUDA later becomes usable). Respect a prior saved False if present.
+        if getattr(self, "_cuda_enabled", False):
+            use_cuda_pref = bool(self.use_cuda.isChecked())
+        else:
+            use_cuda_pref = bool(self._settings.get("use_cuda", True))
         snap = {
             "input_dir": display_path(self.input_row.text()),
             "output_dir": display_path(self.output_row.text()),
-            "use_cuda": bool(self.use_cuda.isChecked()),
+            "use_cuda": use_cuda_pref,
             "model_label": self.model_combo.currentText(),
             "stem_mode": self.stem_combo.currentText(),
             "quality": self.quality_combo.currentText(),
