@@ -867,7 +867,8 @@ class ClassifyTab(QWidget):
             "skip_existing": bool(self.skip_existing.isChecked()),
             "sdr_delete_folder": bool(self.sdr_delete_folder.isChecked()),
             "sdr_thresholds": dict(self._sdr_thresholds),
-            "classify_mode": "sdr" if self._is_sdr_mode else "rms",
+            # Always reopen on RMS — do not restore last SI-SDR session.
+            "classify_mode": "rms",
         }
         return snap
 
@@ -921,13 +922,9 @@ class ClassifyTab(QWidget):
                     if cat in stored:
                         self._sdr_thresholds[cat] = int(stored[cat])
             self._rebuild_sdr_thresholds()
-            mode = d.get("classify_mode", "rms")
-            if mode == "sdr":
-                self._cls_seg.setCurrentItem("sdr")
-                self._on_cls_seg_changed("sdr")
-            else:
-                self._cls_seg.setCurrentItem("rms")
-                self._on_cls_seg_changed("rms")
+            # Always start on RMS regardless of last session (SI-SDR is session-only).
+            self._cls_seg.setCurrentItem("rms")
+            self._on_cls_seg_changed("rms")
         finally:
             self._loading = False
 

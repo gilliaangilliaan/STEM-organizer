@@ -48,6 +48,7 @@ else:
 
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWA_BORDER_COLOR = 34
+DWMWA_CAPTION_COLOR = 35
 DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 DWMWCP_DONOTROUND = 1
 DWMWCP_ROUND = 2
@@ -55,6 +56,8 @@ DWMWCP_ROUND = 2
 # WM_NCHITTEST results — native edge resize for frameless windows
 WM_NCHITTEST = 0x0084
 WM_NCCALCSIZE = 0x0083
+WM_NCPAINT = 0x0085
+WM_NCACTIVATE = 0x0086
 WM_NCLBUTTONDBLCLK = 0x00A3  # caption double-click → OS maximize
 WVR_REDRAW = 0x0100
 HTCLIENT = 1
@@ -409,6 +412,63 @@ def note_minimize_restore_to_default(
         )
 
 
+def refresh_frameless_chrome(window: QWidget) -> None:
+    """Force re-apply rounded region + dark DWM after focus/activation glitches.
+
+    Alt-Tab / Explorer focus return can make WS_THICKFRAME paint light NC
+    borders; clearing the region cache and re-clipping closes those seams.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        # Never touch Win32 chrome while the HWND is going away — that path
+        # raises STATUS_FATAL_USER_CALLBACK_EXCEPTION inside nativeEvent.
+        if not window.isVisible() or window.isMinimized():
+            return
+        if not getattr(window, "_win32_thick_frame", False):
+            return
+        wh = window.windowHandle()
+        if wh is None or not wh.isValid():
+            return
+    except RuntimeError:
+        return
+    except Exception:
+        return
+    try:
+        window._round_corner_key = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    apply_window_corner_preference(window, theme.WINDOW_CORNER_RADIUS)
+    try:
+        window.update()
+    except Exception:
+        pass
+
+
+def note_activation_chrome_refresh(window: QWidget, event) -> None:
+    """Hook for ``changeEvent``: re-paint chrome when the window gains focus."""
+    try:
+        et = event.type()
+    except Exception:
+        return
+    # WindowActivate = this window; ActivationChange fires on app-level switches.
+    if et not in (
+        QEvent.Type.WindowActivate,
+        QEvent.Type.ApplicationActivate,
+        QEvent.Type.ActivationChange,
+    ):
+        return
+    if not getattr(window, "_win32_thick_frame", False):
+        return
+    if not window.isVisible() or window.isMinimized():
+        return
+    # ActivationChange also fires on deactivate — only refresh when active.
+    if et == QEvent.Type.ActivationChange and not window.isActiveWindow():
+        return
+    # Defer so Windows finishes its own NC paint first, then we overwrite it.
+    QTimer.singleShot(0, lambda w=window: refresh_frameless_chrome(w))
+
+
 def handle_native_frame_message(window: QWidget, msg) -> Optional[tuple]:
     """Handle WM_NCHITTEST / WM_NCCALCSIZE for frameless + thick-frame resize.
 
@@ -422,6 +482,17 @@ def handle_native_frame_message(window: QWidget, msg) -> Optional[tuple]:
         return None
     if not getattr(window, "_win32_thick_frame", False):
         return None
+    try:
+        # Destroy / recreate in progress — never intercept NC messages.
+        if window.testAttribute(Qt.WA_DeleteOnClose) and not window.isVisible():
+            return None
+        wh = window.windowHandle()
+        if wh is None or not wh.isValid():
+            return None
+    except RuntimeError:
+        return None
+    except Exception:
+        pass
     try:
         message = int(msg.message)
     except Exception:
@@ -455,6 +526,16 @@ def handle_native_frame_message(window: QWidget, msg) -> Optional[tuple]:
             return True, WVR_REDRAW
         except Exception:
             return True, 0
+
+    # Suppress default thick-frame NC painting on activate/deactivate — that is
+    # what flashes light/unpainted edges when focus returns from Explorer.
+    # Do NOT schedule chrome refresh from inside nativeEvent (can re-enter Win32
+    # during destroy and fatal-crash the callback). Qt changeEvent covers focus.
+    if message == WM_NCACTIVATE:
+        return True, 1  # TRUE → we handled activation chrome
+
+    # Do not swallow WM_NCPAINT — returning handled here has caused
+    # CreateWindowEx / fatal callback failures on HWND recreate.
 
     if message == WM_NCHITTEST:
         try:
@@ -605,6 +686,12 @@ def apply_window_corner_preference(window: QWidget, radius: int = 12) -> None:
     """Apply CTk-style rounded clip + dark DWM border on Win11."""
     if sys.platform != "win32":
         return
+    # winId() before the first successful show() can poison CreateWindowEx.
+    try:
+        if not window.isVisible():
+            return
+    except Exception:
+        return
     is_max = is_window_filled(window)
     apply_rounded_window_region(window, maximized=is_max, radius=radius)
     if _dwmapi is None:
@@ -630,6 +717,14 @@ def apply_window_corner_preference(window: QWidget, radius: int = 12) -> None:
             ctypes.byref(border),
             ctypes.sizeof(border),
         )
+        # Caption color (Win11) — match client bg so activate NC flash stays dark.
+        caption = ctypes.c_uint(_win_colorref_from_hex(theme.COLORS["bg"]))
+        _dwmapi.DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CAPTION_COLOR,
+            ctypes.byref(caption),
+            ctypes.sizeof(caption),
+        )
         dark = ctypes.c_int(1)
         _dwmapi.DwmSetWindowAttribute(
             hwnd,
@@ -637,6 +732,14 @@ def apply_window_corner_preference(window: QWidget, radius: int = 12) -> None:
             ctypes.byref(dark),
             ctypes.sizeof(dark),
         )
+    except Exception:
+        pass
+
+
+def disarm_win32_thick_frame(window: QWidget) -> None:
+    """Stop NC message handling before HWND teardown / recreate."""
+    try:
+        window._win32_thick_frame = False  # type: ignore[attr-defined]
     except Exception:
         pass
 
@@ -656,6 +759,11 @@ def install_rounded_corner_watcher(
     def _apply() -> None:
         if getattr(window, "_rounding_corners", False):
             return
+        try:
+            if not window.isVisible():
+                return
+        except RuntimeError:
+            return
         apply_window_corner_preference(window, radius)
 
     timer.timeout.connect(_apply)
@@ -663,10 +771,32 @@ def install_rounded_corner_watcher(
     class CornerFilter(QObject):
         def eventFilter(self, obj, event):  # noqa: N802
             et = event.type()
-            if et in (QEvent.Resize, QEvent.WindowStateChange, QEvent.Show):
+            if et in (
+                QEvent.Resize,
+                QEvent.WindowStateChange,
+                QEvent.Show,
+                QEvent.WindowActivate,
+                QEvent.ActivationChange,
+            ):
                 # Skip while the user is mid-drag — region lag makes resize feel wonky.
                 if getattr(window, "_resize_active", False):
                     return False
+                try:
+                    if not window.isVisible() and et != QEvent.Show:
+                        return False
+                except RuntimeError:
+                    return False
+                if et in (QEvent.WindowActivate, QEvent.ActivationChange):
+                    # Force region rebuild — Windows may have painted light NC edges.
+                    try:
+                        if not window.isActiveWindow():
+                            return False
+                        window._round_corner_key = None  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    timer.setInterval(0)
+                else:
+                    timer.setInterval(80)
                 timer.start()
             return False
 
@@ -674,9 +804,7 @@ def install_rounded_corner_watcher(
     window.installEventFilter(filt)
     window._corner_filter = filt  # type: ignore[attr-defined]
     window._corner_timer = timer  # type: ignore[attr-defined]
-    # Immediate pass once the HWND exists
-    QTimer.singleShot(0, _apply)
-    QTimer.singleShot(120, _apply)
+    # Only after Show — eager winId() here caused CreateWindowEx failures.
 
 
 def nchittest_resize(

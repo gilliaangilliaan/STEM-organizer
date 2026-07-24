@@ -1856,6 +1856,9 @@ class StemPlayerWindow(QWidget):
     def closeEvent(self, event) -> None:  # noqa: N802
         # Drop resize mouse-grab before hide — otherwise the grip's cursor can
         # stick on the host window underneath.
+        from ..widgets.titlebar import disarm_win32_thick_frame
+
+        disarm_win32_thick_frame(self)
         handler = getattr(self, "_frame_resize_handler", None)
         if handler is not None and getattr(handler, "is_resizing", False):
             try:
@@ -1941,12 +1944,16 @@ class StemPlayerWindow(QWidget):
 
     def changeEvent(self, event) -> None:  # noqa: N802
         # Same as MainWindow: minimize → taskbar restore → opening/default size.
-        from ..widgets.titlebar import note_minimize_restore_to_default
+        from ..widgets.titlebar import (
+            note_activation_chrome_refresh,
+            note_minimize_restore_to_default,
+        )
 
         dw = getattr(self, "_default_w", None)
         dh = getattr(self, "_default_h", None)
         if dw is not None and dh is not None:
             note_minimize_restore_to_default(self, event, width=dw, height=dh)
+        note_activation_chrome_refresh(self, event)
         super().changeEvent(event)
 
     def nativeEvent(self, eventType, message):  # noqa: N802
@@ -2081,6 +2088,15 @@ def close_stem_player() -> None:
 
 def _PLAYER_Window_visible(win: StemPlayerWindow) -> bool:
     try:
-        return win.isVisible()
+        from shiboken6 import isValid
+
+        if not isValid(win):
+            return False
+    except Exception:
+        pass
+    try:
+        return bool(win.isVisible()) and win.windowHandle() is not None
+    except RuntimeError:
+        return False
     except Exception:
         return False

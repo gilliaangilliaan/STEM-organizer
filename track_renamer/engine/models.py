@@ -236,6 +236,9 @@ class PreviewRow:
     original_name: str
     new_name: str
     changed: bool
+    # Category Macro keyword that selected the prefix (filename/combo), or
+    # "<audio-determined>" when the prefix came from ML; empty when no category match.
+    matched_keyword: str = ""
 
     @property
     def original_display(self) -> str:

@@ -226,6 +226,48 @@ def applied_category_colors(rules: list[Rule]) -> dict[str, str]:
     return colors
 
 
+def list_category_rules(rules: list[Rule]) -> list:
+    """Flatten Category Macro rows from the rule stack (first bundle wins).
+
+    Returns ``CategoryRule`` instances in display order for preview menus.
+    Disabled rows are included so callers can filter; empty-name rows are skipped.
+    """
+    from track_renamer.engine.models import CategoryRule, ConditionGroup, OpRule
+
+    found: list[CategoryRule] = []
+
+    def add_category(cat: CategoryRule) -> None:
+        name = (cat.name or "").strip()
+        if not name:
+            return
+        found.append(cat)
+
+    def walk(rule: Rule) -> bool:
+        """Return True once a categoryBundle (or CategoryRule) has been collected."""
+        if isinstance(rule, CategoryRule):
+            add_category(rule)
+            return True
+        if isinstance(rule, OpRule) and rule.op == "categoryBundle":
+            for raw in rule.params.get("categories", []):
+                add_category(
+                    CategoryRule.from_dict(raw) if isinstance(raw, dict) else raw
+                )
+            return True
+        if isinstance(rule, ConditionGroup):
+            for child in rule.children:
+                if walk(child):
+                    return True
+            for branch in rule.branches:
+                if walk(branch):
+                    return True
+        return False
+
+    for rule in rules:
+        if walk(rule):
+            break
+    return found
+
+
 def affix_prefix_token(affix: str) -> str:
     """Extract the badge/prefix token from an affix like 'ELSE - '."""
     text = (affix or "").strip()

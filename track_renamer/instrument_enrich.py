@@ -487,5 +487,32 @@ def clear_instrument_cache() -> None:
     _CACHE.clear()
 
 
+def relocate_instrument_cache(old_path: Path, new_path: Path) -> None:
+    """Move a cache entry when a file is renamed or moved on disk."""
+    try:
+        old_key = str(Path(old_path).resolve())
+    except OSError:
+        old_key = str(old_path)
+    try:
+        new_key = str(Path(new_path).resolve())
+    except OSError:
+        new_key = str(new_path)
+    if old_key == new_key:
+        return
+    entry = _CACHE.pop(old_key, None)
+    if entry is None:
+        return
+    unpacked = _unpack_cache(entry)
+    if unpacked is None:
+        _CACHE[new_key] = entry
+        return
+    _mtime, label, score, second = unpacked
+    try:
+        mtime = _mtime_ns(Path(new_path))
+    except OSError:
+        mtime = _mtime
+    _CACHE[new_key] = (mtime, label, score, second, _CACHE_MODEL)
+
+
 def tagger_available() -> bool:
     return resolve_tagger_python() is not None and _tagger_script().is_file()

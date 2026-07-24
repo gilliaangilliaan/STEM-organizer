@@ -64,9 +64,14 @@ _NUMERIC_SUFFIX_RE = re.compile(r"(\D)(\d+)\s*$")
 
 @dataclass(frozen=True, slots=True)
 class CompiledKeyword:
+    text: str  # original keyword as configured (display / preview)
     variants: frozenset[str]
     boundary_patterns: tuple[re.Pattern[str], ...]
     length: int
+
+
+# (match_length, keyword_order, category_index, keyword_text)
+_KeywordCandidate = tuple[int, int, int, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,9 +88,9 @@ class CompiledCategory:
 @dataclass(frozen=True, slots=True)
 class CompiledCategoryBundle:
     categories: tuple[CompiledCategory, ...]
-    token_candidates: dict[str, tuple[tuple[int, int, int], ...]]
-    boundary_candidates: tuple[tuple[re.Pattern[str], int, int, int], ...]
-    contains_candidates: tuple[tuple[str, int, int, int], ...]
+    token_candidates: dict[str, tuple[_KeywordCandidate, ...]]
+    boundary_candidates: tuple[tuple[re.Pattern[str], int, int, int, str], ...]
+    contains_candidates: tuple[tuple[str, int, int, int, str], ...]
 
 
 def _keyword_variants(keyword: str) -> frozenset[str]:
@@ -162,9 +167,9 @@ def compile_category_bundle(raw_categories: Any) -> CompiledCategoryBundle:
         return raw_categories
 
     compiled: list[CompiledCategory] = []
-    token_candidates: dict[str, list[tuple[int, int, int]]] = {}
-    boundary_candidates: list[tuple[re.Pattern[str], int, int, int]] = []
-    contains_candidates: list[tuple[str, int, int, int]] = []
+    token_candidates: dict[str, list[_KeywordCandidate]] = {}
+    boundary_candidates: list[tuple[re.Pattern[str], int, int, int, str]] = []
+    contains_candidates: list[tuple[str, int, int, int, str]] = []
     keyword_order = 0
     for raw in raw_categories or ():
         cat = CategoryRule.from_dict(raw) if isinstance(raw, dict) else raw
@@ -187,20 +192,38 @@ def compile_category_bundle(raw_categories: Any) -> CompiledCategoryBundle:
                     patterns.append(
                         re.compile(rf"(?<![a-z0-9]){body}(?![a-z0-9])")
                     )
-                    candidate = (keyword_length, keyword_order, category_index)
+                    candidate: _KeywordCandidate = (
+                        keyword_length,
+                        keyword_order,
+                        category_index,
+                        keyword,
+                    )
                     if variant.isalnum():
                         token_candidates.setdefault(variant, []).append(candidate)
                     else:
                         boundary_candidates.append(
-                            (patterns[-1], keyword_length, keyword_order, category_index)
+                            (
+                                patterns[-1],
+                                keyword_length,
+                                keyword_order,
+                                category_index,
+                                keyword,
+                            )
                         )
             else:
                 for variant in variants:
                     contains_candidates.append(
-                        (variant, keyword_length, keyword_order, category_index)
+                        (
+                            variant,
+                            keyword_length,
+                            keyword_order,
+                            category_index,
+                            keyword,
+                        )
                     )
             keywords.append(
                 CompiledKeyword(
+                    text=keyword,
                     variants=variants,
                     boundary_patterns=tuple(patterns),
                     length=keyword_length,
@@ -252,15 +275,87 @@ def _apply_category_affix(name: str, category: CompiledCategory) -> str:
     return f"{name}{affix}"
 
 
-def _find_keyword_category_index(name: str, bundle: CompiledCategoryBundle) -> int:
-    haystack = name.lower()
-    tokens = _filename_tokens(name)
+def _category_affix_fields(category: Any) -> tuple[str, str]:
+    """Return (affix, affix_position) from CategoryRule / CompiledCategory / dict."""
+    if isinstance(category, dict):
+        affix = str(category.get("affix") or "")
+        position = str(category.get("affixPosition") or category.get("affix_position") or "prefix")
+        return affix, position
+    affix = str(getattr(category, "affix", "") or "")
+    position = str(getattr(category, "affix_position", "prefix") or "prefix")
+    return affix, position
+
+
+def strip_known_category_affix(name: str, categories: Any) -> str:
+    """Remove a leading/trailing category affix if it matches any known category.
+
+    Longest affix wins so partial overlaps (e.g. PERC vs PERCUSSION) resolve
+    correctly. Falls back to a ``TOKEN - `` head when no configured affix matches.
+    """
+    text = name or ""
+    if not text:
+        return text
+
+    candidates: list[tuple[int, str, str]] = []
+    for cat in categories or ():
+        affix, position = _category_affix_fields(cat)
+        if affix:
+            candidates.append((len(affix), affix, position))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    lower = text.lower()
+    for _length, affix, position in candidates:
+        needle = affix.lower()
+        if position == "suffix":
+            if lower.endswith(needle):
+                return text[: -len(affix)]
+        elif lower.startswith(needle):
+            return text[len(affix) :]
+
+    # Fallback: standard "CATEGORY - rest" head (badge-style prefixes).
+    if " - " in text:
+        head, tail = text.split(" - ", 1)
+        if head.strip():
+            return tail
+    return text
+
+
+def override_category_affix(name: str, target: Any, categories: Any) -> str:
+    """Strip any known category affix from *name*, then apply *target*'s affix.
+
+    Used by the preview context-menu override — always replaces, ignoring the
+    target's ``existingAffixPolicy``.
+    """
+    base = strip_known_category_affix(name, categories)
+    affix, position = _category_affix_fields(target)
+    if not affix:
+        return base
+    if position == "suffix":
+        return f"{base}{affix}"
+    return f"{affix}{base}"
+
+
+def _find_keyword_match(
+    name: str, bundle: CompiledCategoryBundle
+) -> tuple[int, str]:
+    """Best Category Macro keyword match: (category_index, keyword_text).
+
+    index is -1 and keyword "" when nothing matched.
+
+    Known category affixes (e.g. ``PERCUSSION - ``) are stripped before
+    matching so an applied prefix cannot outrank stem keywords such as
+    ``Groove`` when the category name itself is also a configured keyword.
+    """
+    stem = strip_known_category_affix(name, bundle.categories)
+    haystack = stem.lower()
+    tokens = _filename_tokens(stem)
     best_length = 0
     best_order = 1 << 30
     best_category_index = -1
+    best_keyword = ""
 
-    def consider(length: int, order: int, category_index: int) -> None:
-        nonlocal best_length, best_order, best_category_index
+    def consider(length: int, order: int, category_index: int, keyword: str) -> None:
+        nonlocal best_length, best_order, best_category_index, best_keyword
         category = bundle.categories[category_index]
         if not category.enabled:
             return
@@ -268,17 +363,24 @@ def _find_keyword_category_index(name: str, bundle: CompiledCategoryBundle) -> i
             best_length = length
             best_order = order
             best_category_index = category_index
+            best_keyword = keyword
 
     for token in tokens:
         for candidate in bundle.token_candidates.get(token, ()):
             consider(*candidate)
-    for pattern, length, order, category_index in bundle.boundary_candidates:
+    for pattern, length, order, category_index, keyword in bundle.boundary_candidates:
         if length >= best_length and pattern.search(haystack):
-            consider(length, order, category_index)
-    for variant, length, order, category_index in bundle.contains_candidates:
+            consider(length, order, category_index, keyword)
+    for variant, length, order, category_index, keyword in bundle.contains_candidates:
         if length >= best_length and variant in haystack:
-            consider(length, order, category_index)
-    return best_category_index
+            consider(length, order, category_index, keyword)
+    return best_category_index, best_keyword
+
+
+def _find_keyword_category_index(name: str, bundle: CompiledCategoryBundle) -> int:
+    """Return winning category index, or -1. Kept for callers that only need index."""
+    index, _keyword = _find_keyword_match(name, bundle)
+    return index
 
 
 def _compiled_keyword_matches(
@@ -298,6 +400,7 @@ def _apply_ml_category(
     name: str,
     bundle: CompiledCategoryBundle,
     track: Track,
+    ctx: dict[str, Any] | None = None,
 ) -> str:
     if _ml_should_apply(track) != "apply":
         return name
@@ -309,6 +412,9 @@ def _apply_ml_category(
     index = _category_index_by_name(bundle, mapped)
     if index < 0:
         return name
+    if ctx is not None:
+        # Keyword column: mark Audio-sourced tags (vs filename keyword matches).
+        ctx["matched_keyword"] = "<audio-determined>"
     return _apply_category_affix(name, bundle.categories[index])
 
 
@@ -318,20 +424,34 @@ def _apply_compiled_category(
     *,
     track: Track | None = None,
     source: str = DEFAULT_CATEGORY_SOURCE,
+    ctx: dict[str, Any] | None = None,
 ) -> str:
     mode = (source or DEFAULT_CATEGORY_SOURCE).strip().lower()
     if mode not in ("filename", "model", "combo"):
         mode = DEFAULT_CATEGORY_SOURCE
 
     if mode in ("filename", "combo"):
-        keyword_index = _find_keyword_category_index(name, bundle)
+        keyword_index, matched_keyword = _find_keyword_match(name, bundle)
         if keyword_index >= 0:
+            if ctx is not None and matched_keyword:
+                ctx["matched_keyword"] = matched_keyword
             return _apply_category_affix(name, bundle.categories[keyword_index])
         if mode == "filename":
             return name
 
     if mode in ("model", "combo") and track is not None:
-        return _apply_ml_category(name, bundle, track)
+        out = _apply_ml_category(name, bundle, track, ctx)
+        # After rename/organize, tracks often lack ML fields (cache keyed by
+        # old path). If the name already carries a category prefix and the
+        # stem has no filename keyword, attribute Keyword as <audio-determined>.
+        if (
+            ctx is not None
+            and not (ctx.get("matched_keyword") or "").strip()
+            and strip_known_category_affix(name, bundle.categories) != name
+            and _find_keyword_match(name, bundle)[0] < 0
+        ):
+            ctx["matched_keyword"] = "<audio-determined>"
+        return out
     return name
 
 
@@ -350,13 +470,14 @@ def _resolve(text: str, ctx: dict[str, Any]) -> str:
 def _apply_category(name: str, categories: list[CategoryRule]) -> str:
     best_cat: CategoryRule | None = None
     best_kw_len = 0
+    stem = strip_known_category_affix(name, categories)
 
     for cat in categories:
         if not cat.enabled:
             continue
         keywords = [k.strip() for k in cat.keywords.split(",") if k.strip()]
         for kw in keywords:
-            if not _match_keyword(name, kw, cat.match_mode):
+            if not _match_keyword(stem, kw, cat.match_mode):
                 continue
             kw_len = _keyword_match_length(kw)
             if kw_len > best_kw_len:
@@ -488,6 +609,7 @@ def apply_op(name: str, op: str, params: dict[str, Any], ctx: dict[str, Any]) ->
             compile_category_bundle(raw),
             track=ctx.get("track"),
             source=str(p.get("source", DEFAULT_CATEGORY_SOURCE)),
+            ctx=ctx,
         )
 
     if op == "padNumericSuffix":

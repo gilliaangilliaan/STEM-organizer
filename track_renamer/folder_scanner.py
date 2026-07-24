@@ -227,6 +227,12 @@ def apply_file_renames_detailed(
             _rename_with_retry(temporary, target)
             success += 1
             renamed_paths.append(target)
+            try:
+                from track_renamer.instrument_enrich import relocate_instrument_cache
+
+                relocate_instrument_cache(source, target)
+            except Exception:
+                pass
         except OSError as exc:
             errors.append(f"{source.name}: {exc}")
             try:
@@ -295,6 +301,12 @@ def move_files_to_prefix_folders(
         try:
             _move_with_retry(source, candidate)
             moved += 1
+            try:
+                from track_renamer.instrument_enrich import relocate_instrument_cache
+
+                relocate_instrument_cache(source, candidate)
+            except Exception:
+                pass
         except OSError as exc:
             errors.append(f"{source.name}: {exc}")
 

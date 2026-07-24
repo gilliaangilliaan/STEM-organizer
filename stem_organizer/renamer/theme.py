@@ -43,6 +43,11 @@ TIPS = {
     "deselect_all": "Deselect every file in the preview.",
     "only_changed": "Show only files that will be modified by the current rules.",
     "file_checkbox": "Include or exclude this file when applying renames.",
+    "detected_keyword": "Filename keyword that matched, or <audio-determined> when the category came from ML listening.",
+    "change_prefix": (
+        "Shift-click or Ctrl-click to multi-select rows,\n"
+        "then right-click → Change to: to replace the category prefix and rename on disk."
+    ),
     "cancel": "Stop Analyze (Auto-detect) or clear the active preview selection.",
     "rename": "Permanently rename the selected files on disk.",
     "analyze": (

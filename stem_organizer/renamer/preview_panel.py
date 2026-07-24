@@ -3,9 +3,12 @@
 Replaces the hand-rolled virtualized canvas list from
 track_renamer.gui.preview_panel with idiomatic Qt model/view.
 
-Columns: ✓ | Category | Original | New
+Columns: ✓ | Category | Keyword | Original | New
 ANALYZE LOG (instrument ML output) lives in a hidden QTextEdit swapped in via
 QStackedLayout during an enrich run.
+
+Folder section headers (CTk port): when scanned paths include relative folders,
+the view interleaves non-selectable folder bars above the tracks in each folder.
 """
 from __future__ import annotations
 
@@ -14,31 +17,42 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from pathlib import Path
+from typing import Callable, Iterable, List, Optional, Union
 
 from PySide6.QtCore import (
     QAbstractTableModel,
     QEvent,
     QModelIndex,
-    QPersistentModelIndex,
     QRect,
     Qt,
     QTimer,
-    Signal,
 )
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QShortcut, QTextCursor
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QKeySequence,
+    QPainter,
+    QShortcut,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QHBoxLayout,
     QHeaderView,
     QStackedLayout,
     QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
+    Action,
     CaptionLabel,
     PushButton,
+    RoundMenu,
     TableItemDelegate,
     TableView,
     TextEdit,
@@ -46,7 +60,8 @@ from qfluentwidgets import (
 )
 
 from track_renamer.category_palette import default_category_color, parse_category_prefix_display
-from track_renamer.engine.models import PreviewRow, Rule, Track
+from track_renamer.engine.models import CategoryRule, PreviewRow, Track
+from track_renamer.engine.ops import override_category_affix
 from track_renamer.engine.processor import compute_preview_row, prepare_rules
 
 from .. import theme
@@ -54,16 +69,31 @@ from ..widgets.log_panel import LOG_INDENT
 from .theme import TIPS
 
 
-# Columns: ✓ | Category | Original | New
+# Columns: ✓ | Category | Keyword | Original | New
 COL_CHECK = 0
 COL_CATEGORY = 1
-COL_ORIGINAL = 2
-COL_NEW = 3
-N_COLS = 4
+COL_KEYWORD = 2
+COL_ORIGINAL = 3
+COL_NEW = 4
+N_COLS = 5
+
+KEYWORD_COL_WIDTH = 100
+EMPTY_KEYWORD = "—"
 
 RESULT_BATCH_SIZE = 64
 RESULT_POLL_MS = 40
 LAZY_BUFFER_ROWS = 60
+FOLDER_HEADER_FONT_PX = 10
+
+
+@dataclass(frozen=True)
+class _FolderHeader:
+    """Non-track display row: folder section bar (matches CTk _FolderHeader)."""
+
+    label: str
+
+
+_ViewEntry = Union[int, _FolderHeader]
 
 
 @dataclass
@@ -77,66 +107,253 @@ class _PreviewJob:
     requested: set = field(default_factory=set)
 
 
+def _build_folder_view(
+    tracks: List[Track],
+    source_indices: Iterable[int],
+    root_label: str,
+) -> List[_ViewEntry]:
+    """Interleave folder headers with track indices — port of CTk _build_folder_view."""
+    indices = list(source_indices)
+    if not indices or not any(tracks[i].relative_path for i in indices):
+        return list(indices)
+
+    entries: List[_ViewEntry] = []
+    previous_folder: Optional[str] = None
+    for index in indices:
+        relative_path = tracks[index].relative_path
+        parent = Path(relative_path).parent
+        if str(parent) == ".":
+            folder = root_label or "ROOT"
+        else:
+            folder = " › ".join(parent.parts)
+        if folder != previous_folder:
+            entries.append(_FolderHeader(folder))
+            previous_folder = folder
+        entries.append(index)
+    return entries
+
+
 class PreviewModel(QAbstractTableModel):
-    """Table model: one row per Track, lazily filled with PreviewRow."""
+    """Table model: display rows = folder headers + tracks; previews keyed by track index."""
 
     def __init__(self) -> None:
         super().__init__()
         self._tracks: List[Track] = []
         self._rows: List[Optional[PreviewRow]] = []
+        self._view: List[_ViewEntry] = []
+        self._track_to_display: dict[int, int] = {}
+        self._root_label: str = "ROOT"
         self._category_colors: dict = {}
+        self._sort_column: Optional[int] = None
+        self._sort_order: Qt.SortOrder = Qt.AscendingOrder
 
     # ----- model API -----
 
-    def set_tracks(self, tracks: List[Track]) -> None:
+    def set_tracks(self, tracks: List[Track], root_label: str = "") -> None:
         self.beginResetModel()
         self._tracks = list(tracks)
         self._rows = [None] * len(self._tracks)
+        self._root_label = root_label or "ROOT"
+        self._sort_column = None
+        self._sort_order = Qt.AscendingOrder
+        self._set_view(_build_folder_view(self._tracks, range(len(self._tracks)), self._root_label))
         self.endResetModel()
+
+    @property
+    def sort_column(self) -> Optional[int]:
+        return self._sort_column
+
+    @property
+    def sort_order(self) -> Qt.SortOrder:
+        return self._sort_order
+
+    def sort_by(self, column: int) -> None:
+        """Sort tracks within each folder group by *column*; toggle order on re-click.
+
+        Folder header rows stay interleaved via ``_build_folder_view`` — never
+        sorted as data rows (QSortFilterProxy would break that).
+        """
+        if not (0 <= column < N_COLS):
+            return
+        if self._sort_column == column:
+            self._sort_order = (
+                Qt.DescendingOrder
+                if self._sort_order == Qt.AscendingOrder
+                else Qt.AscendingOrder
+            )
+        else:
+            self._sort_column = column
+            self._sort_order = Qt.AscendingOrder
+
+        indices = [e for e in self._view if isinstance(e, int)]
+        if not indices:
+            return
+
+        # Keep folder groups contiguous; sort only inside each group.
+        groups: List[List[int]] = []
+        previous_folder: Optional[str] = None
+        for track_idx in indices:
+            folder = self._folder_key(track_idx)
+            if not groups or folder != previous_folder:
+                groups.append([])
+                previous_folder = folder
+            groups[-1].append(track_idx)
+
+        reverse = self._sort_order == Qt.DescendingOrder
+        sorted_indices: List[int] = []
+        for group in groups:
+            group.sort(key=lambda i: self._sort_key(i, column), reverse=reverse)
+            sorted_indices.extend(group)
+
+        self.beginResetModel()
+        self._set_view(
+            _build_folder_view(self._tracks, sorted_indices, self._root_label)
+        )
+        self.endResetModel()
+
+    def _folder_key(self, track_idx: int) -> str:
+        """Same folder label as ``_build_folder_view`` for a track index."""
+        relative_path = self._tracks[track_idx].relative_path
+        parent = Path(relative_path).parent
+        if str(parent) == ".":
+            return self._root_label or "ROOT"
+        return " › ".join(parent.parts)
+
+    def _sort_key(self, track_idx: int, column: int):
+        """Stable, case-insensitive key matching the visible cell value."""
+        track = self._tracks[track_idx]
+        preview = self._rows[track_idx] if 0 <= track_idx < len(self._rows) else None
+
+        if column == COL_CHECK:
+            return (0 if track.selected else 1,)
+
+        if column == COL_CATEGORY:
+            if preview is None:
+                return ("",)
+            known = {k: k for k in self._category_colors} or None
+            parsed = parse_category_prefix_display(preview.new_display, known=known)
+            return ((parsed[0] if parsed else "").lower(),)
+
+        if column == COL_KEYWORD:
+            if preview is None:
+                return ("",)
+            return ((preview.matched_keyword or "").strip().lower(),)
+
+        if column == COL_ORIGINAL:
+            return (track.display_name.lower(),)
+
+        if column == COL_NEW:
+            # Display shows "unchanged" when deselected or not changing — use
+            # empty key so those rows cluster together (not mixed with real names).
+            if preview is None or not track.selected or not preview.changed:
+                return ("",)
+            return (preview.new_display.lower(),)
+
+        return ("",)
 
     def set_category_colors(self, colors: dict) -> None:
         self._category_colors = dict(colors or {})
-        if self._rows:
+        n = self.rowCount()
+        if n:
             # Repaint Category badges when palette changes (Apply / live refresh).
             top = self.index(0, COL_CATEGORY)
-            bottom = self.index(len(self._rows) - 1, COL_CATEGORY)
+            bottom = self.index(n - 1, COL_CATEGORY)
             self.dataChanged.emit(top, bottom, [Qt.DisplayRole, Qt.BackgroundRole])
 
-    def track_at(self, row: int) -> Optional[Track]:
-        if 0 <= row < len(self._tracks):
-            return self._tracks[row]
+    def is_folder_header(self, display_row: int) -> bool:
+        if 0 <= display_row < len(self._view):
+            return isinstance(self._view[display_row], _FolderHeader)
+        return False
+
+    def folder_label_at(self, display_row: int) -> str:
+        if 0 <= display_row < len(self._view):
+            entry = self._view[display_row]
+            if isinstance(entry, _FolderHeader):
+                return entry.label
+        return ""
+
+    def track_index_at(self, display_row: int) -> Optional[int]:
+        if 0 <= display_row < len(self._view):
+            entry = self._view[display_row]
+            if isinstance(entry, int):
+                return entry
         return None
 
-    def row_at(self, row: int) -> Optional[PreviewRow]:
-        if 0 <= row < len(self._rows):
-            return self._rows[row]
+    def display_row_for_track(self, track_idx: int) -> Optional[int]:
+        return self._track_to_display.get(track_idx)
+
+    def track_at(self, display_row: int) -> Optional[Track]:
+        track_idx = self.track_index_at(display_row)
+        if track_idx is None:
+            return None
+        if 0 <= track_idx < len(self._tracks):
+            return self._tracks[track_idx]
         return None
 
-    def set_row(self, row: int, preview: PreviewRow) -> None:
-        if 0 <= row < len(self._rows):
-            self._rows[row] = preview
-            ix = self.index(row, 0)
-            ix2 = self.index(row, N_COLS - 1)
-            self.dataChanged.emit(ix, ix2, [Qt.DisplayRole, Qt.BackgroundRole, Qt.FontRole])
+    def row_at(self, display_row: int) -> Optional[PreviewRow]:
+        track_idx = self.track_index_at(display_row)
+        if track_idx is None:
+            return None
+        if 0 <= track_idx < len(self._rows):
+            return self._rows[track_idx]
+        return None
 
-    def update_selection(self, row: int, value: bool) -> None:
-        track = self.track_at(row)
+    def preview_for_track(self, track_idx: int) -> Optional[PreviewRow]:
+        if 0 <= track_idx < len(self._rows):
+            return self._rows[track_idx]
+        return None
+
+    def set_row(self, track_idx: int, preview: PreviewRow) -> None:
+        """Store a computed preview by track index (not display row)."""
+        if not (0 <= track_idx < len(self._rows)):
+            return
+        self._rows[track_idx] = preview
+        display = self._track_to_display.get(track_idx)
+        if display is None:
+            return
+        ix = self.index(display, 0)
+        ix2 = self.index(display, N_COLS - 1)
+        self.dataChanged.emit(ix, ix2, [Qt.DisplayRole, Qt.BackgroundRole, Qt.FontRole])
+
+    def update_selection(self, display_row: int, value: bool) -> None:
+        track = self.track_at(display_row)
         if track is None:
             return
         track.selected = bool(value)
         # CheckState + name styling (strikethrough clears when deselected)
-        left = self.index(row, COL_CHECK)
-        right = self.index(row, COL_NEW)
+        left = self.index(display_row, COL_CHECK)
+        right = self.index(display_row, COL_NEW)
         self.dataChanged.emit(
             left,
             right,
             [Qt.CheckStateRole, Qt.FontRole, Qt.ForegroundRole, Qt.DisplayRole],
         )
 
+    def update_selection_for_track(self, track_idx: int, value: bool) -> None:
+        if not (0 <= track_idx < len(self._tracks)):
+            return
+        self._tracks[track_idx].selected = bool(value)
+        display = self._track_to_display.get(track_idx)
+        if display is None:
+            return
+        left = self.index(display, COL_CHECK)
+        right = self.index(display, COL_NEW)
+        self.dataChanged.emit(
+            left,
+            right,
+            [Qt.CheckStateRole, Qt.FontRole, Qt.ForegroundRole, Qt.DisplayRole],
+        )
+
+    def _set_view(self, entries: List[_ViewEntry]) -> None:
+        self._view = entries
+        self._track_to_display = {
+            entry: i for i, entry in enumerate(entries) if isinstance(entry, int)
+        }
+
     # ----- QAbstractTableModel -----
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
-        return 0 if parent.isValid() else len(self._tracks)
+        return 0 if parent.isValid() else len(self._view)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else N_COLS
@@ -151,16 +368,36 @@ class PreviewModel(QAbstractTableModel):
         if role == Qt.ToolTipRole:
             if section == COL_CHECK:
                 return TIPS["file_checkbox"]
+            if section == COL_KEYWORD:
+                return TIPS.get("detected_keyword", "Keyword that triggered the category match.")
             return None
         if role != Qt.DisplayRole:
             return None
-        return ("✓", "Category", "Original", "New")[section]
+        return ("✓", "Category", "Keyword", "Original", "New")[section]
 
     def data(self, index, role=Qt.DisplayRole):  # noqa: N802
         if not index.isValid():
             return None
         row = index.row()
         col = index.column()
+
+        if self.is_folder_header(row):
+            if role == Qt.BackgroundRole:
+                return QColor(theme.DARK["panel_2"])
+            if role == Qt.ForegroundRole:
+                return QColor(theme.DARK["text_mute"])
+            if role == Qt.FontRole:
+                font = QFont(theme.FONT_FAMILY)
+                font.setPixelSize(FOLDER_HEADER_FONT_PX)
+                font.setBold(True)
+                return font
+            if role == Qt.TextAlignmentRole:
+                return Qt.AlignLeft | Qt.AlignVCenter
+            if role == Qt.DisplayRole and col == COL_CHECK:
+                # Spanned across all columns; text lives in the first cell.
+                return f"  {self.folder_label_at(row)}"
+            return None
+
         track = self.track_at(row)
         if track is None:
             return None
@@ -195,6 +432,8 @@ class PreviewModel(QAbstractTableModel):
             if col == COL_NEW:
                 # Deselected or not changing — same dim as former "unchanged" status
                 return QColor(theme.DARK["unchanged"])
+            if col == COL_KEYWORD:
+                return QColor(theme.DARK["text_mute"])
             if col == COL_ORIGINAL:
                 return QColor("#ffffff")
             return QColor(theme.DARK["text"])
@@ -225,16 +464,27 @@ class PreviewModel(QAbstractTableModel):
                 if not preview.changed:
                     return "unchanged"
                 return preview.new_display
+            if col == COL_KEYWORD:
+                if preview is None:
+                    return ""
+                kw = (preview.matched_keyword or "").strip()
+                return kw if kw else EMPTY_KEYWORD
             if col == COL_CATEGORY:
                 if preview is None:
                     return ""
-                parsed = parse_category_prefix_display(preview.new_display)
+                known = {k: k for k in self._category_colors} or None
+                parsed = parse_category_prefix_display(
+                    preview.new_display, known=known
+                )
                 return parsed[0].upper() if parsed else ""
         return None
 
     def flags(self, index):  # noqa: N802
         if not index.isValid():
             return Qt.NoItemFlags
+        if self.is_folder_header(index.row()):
+            # Visible but not selectable / checkable — skip with keyboard & click.
+            return Qt.ItemIsEnabled
         # Check column is toggled by PreviewPanel click handler — Fluent's painted
         # checkbox sits outside Qt's ItemIsUserCheckable hit box, so relying on
         # setData alone makes uncheck work and re-check fail.
@@ -242,6 +492,8 @@ class PreviewModel(QAbstractTableModel):
 
     def setData(self, index, value, role=Qt.EditRole):  # noqa: N802
         if role == Qt.CheckStateRole and index.column() == COL_CHECK:
+            if self.is_folder_header(index.row()):
+                return False
             checked = value in (
                 Qt.Checked,
                 getattr(Qt.CheckState, "Checked", Qt.Checked),
@@ -257,7 +509,29 @@ class _CenteredCheckDelegate(TableItemDelegate):
 
     Active-row left indicator is white (Fluent default falls back to accent).
     Checkbox checked fill stays theme accent via light/darkCheckedColor.
+    Folder header rows paint as a full-width muted bar (CTk panel_2).
     """
+
+    def paint(self, painter: QPainter, option, index) -> None:  # noqa: N802
+        model = index.model()
+        if model is not None and getattr(model, "is_folder_header", lambda _r: False)(index.row()):
+            self._paint_folder_header(painter, option, index)
+            return
+        super().paint(painter, option, index)
+
+    @staticmethod
+    def _paint_folder_header(painter: QPainter, option, index) -> None:
+        rect = option.rect
+        painter.save()
+        painter.fillRect(rect, QColor(theme.DARK["panel_2"]))
+        text = index.data(Qt.DisplayRole) or ""
+        font = QFont(theme.FONT_FAMILY)
+        font.setPixelSize(FOLDER_HEADER_FONT_PX)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor(theme.DARK["text_mute"]))
+        painter.drawText(rect.adjusted(6, 0, -4, 0), Qt.AlignLeft | Qt.AlignVCenter, str(text))
+        painter.restore()
 
     def _drawIndicator(self, painter: QPainter, option, index) -> None:  # noqa: N802
         # Thin left bar for the focused/selected row — white, not accent lavender.
@@ -267,9 +541,6 @@ class _CenteredCheckDelegate(TableItemDelegate):
         painter.drawRoundedRect(4, ph + y, 3, h - 2 * ph, 1.5, 1.5)
 
     def _drawCheckBox(self, painter: QPainter, option, index) -> None:  # noqa: N802
-        from PySide6.QtCore import QRect
-        from PySide6.QtWidgets import QStyleOptionViewItem
-
         size = 19
         # Fluent draws at option.rect.x() + 15 — shift rect so that lands centered.
         centered = option.rect.x() + (option.rect.width() - size) / 2.0
@@ -314,15 +585,20 @@ class _CategoryBadgeDelegate(QStyledItemDelegate):
         return font
 
     def paint(self, painter: QPainter, option, index) -> None:  # noqa: N802
+        model = index.model()
+        if model is not None and getattr(model, "is_folder_header", lambda _r: False)(index.row()):
+            return
         label = (index.data(Qt.DisplayRole) or "").strip()
         if not label:
             return
-        model = index.model()
         color_hex = ""
         if hasattr(model, "_category_colors"):
             preview = model.row_at(index.row())
             if preview is not None:
-                parsed = parse_category_prefix_display(preview.new_display)
+                known = {k: k for k in model._category_colors} or None
+                parsed = parse_category_prefix_display(
+                    preview.new_display, known=known
+                )
                 if parsed:
                     cat = parsed[0]
                     color_hex = model._category_colors.get(cat) or default_category_color(cat)
@@ -369,6 +645,8 @@ class PreviewPanel(QWidget):
     on_active: Optional[Callable[[Optional[Track], Optional[PreviewRow]], None]] = None
     on_play_pause: Optional[Callable[[], None]] = None
     on_seek: Optional[Callable[[float], None]] = None
+    # Fired after Change to: prefix override with {track_id: new_stem} to rename on disk.
+    on_override_rename: Optional[Callable[[dict], None]] = None
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -384,6 +662,8 @@ class PreviewPanel(QWidget):
         self._only_changed = False
         self._active_index: Optional[int] = None
         self._pending_state = False
+        self._name_cols_balanced = False
+        self._category_options: List[CategoryRule] = []
 
         self._build_ui()
 
@@ -457,29 +737,42 @@ class PreviewPanel(QWidget):
         self.table.setItemDelegate(_CenteredCheckDelegate(self.table))
         # TableView subclasses QTableView; prefer TableView enums when present
         _select_rows = getattr(TableView, "SelectRows", QAbstractItemView.SelectRows)
-        _single = getattr(TableView, "SingleSelection", QAbstractItemView.SingleSelection)
+        _extended = getattr(
+            TableView, "ExtendedSelection", QAbstractItemView.ExtendedSelection
+        )
         _no_edit = getattr(TableView, "NoEditTriggers", QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(_select_rows)
-        self.table.setSelectionMode(_single)
+        # Shift = contiguous range; Ctrl = toggle individual rows (Windows/Linux).
+        self.table.setSelectionMode(_extended)
         self.table.setEditTriggers(_no_edit)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_context_menu)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # QTableView.wordWrap defaults True: names wrap at " - " and only the first
+        # line is visible in our single-line row height → looks like early truncate.
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.ElideRight)
         self.table.verticalHeader().setVisible(False)
         hdr = self.table.horizontalHeader()
         hdr.setSectionsClickable(True)
         hdr.setMinimumSectionSize(48)
-        # Check Fixed; Category + Original Interactive (drag handles); New Stretch
+        # Check Fixed; Category + Keyword + Original Interactive; New Stretch
         # fills leftover so viewport stays full without a horizontal scrollbar.
         # Dragging Original|New resizes both (Interactive next to Stretch).
         hdr.setSectionResizeMode(QHeaderView.Interactive)
         hdr.setSectionResizeMode(COL_CHECK, QHeaderView.Fixed)
         hdr.resizeSection(COL_CHECK, 34)
         hdr.resizeSection(COL_CATEGORY, 80)
-        hdr.resizeSection(COL_ORIGINAL, 240)  # seed; New Stretch takes remaining
+        hdr.resizeSection(COL_KEYWORD, KEYWORD_COL_WIDTH)
+        hdr.resizeSection(COL_ORIGINAL, 240)  # seed; balanced to ~½ remaining on first layout
         hdr.setSectionResizeMode(COL_CATEGORY, QHeaderView.Interactive)
+        hdr.setSectionResizeMode(COL_KEYWORD, QHeaderView.Interactive)
         hdr.setSectionResizeMode(COL_ORIGINAL, QHeaderView.Interactive)
         hdr.setSectionResizeMode(COL_NEW, QHeaderView.Stretch)
         hdr.setStretchLastSection(False)
         hdr.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        hdr.setSortIndicatorShown(False)
+        hdr.sectionClicked.connect(self._on_header_clicked)
         hdr.sectionDoubleClicked.connect(self._on_header_double_clicked)
         self.table.verticalHeader().setDefaultSectionSize(26)
         # Category cell → log-style chip fill (inset so row lines show)
@@ -489,8 +782,10 @@ class PreviewPanel(QWidget):
         self.table.setMouseTracking(True)
         self.table.viewport().setMouseTracking(True)
         self.table.viewport().installEventFilter(self)
+        self.table.setToolTip(TIPS.get("change_prefix", ""))
         self._stack.addWidget(self.table)
         QTimer.singleShot(0, self._fit_category_column)
+        QTimer.singleShot(0, self._balance_filename_columns)
 
         # Auto-detect log — TextEdit (not PlainTextEdit) so painted chip images
         # render (QPlainTextEdit only shows a placeholder glyph for insertImage).
@@ -559,11 +854,32 @@ class PreviewPanel(QWidget):
     # ----- public API (port method names) -----
 
     def set_rows(self, rows: List[PreviewRow]) -> None:
-        self.model.set_tracks([r.track for r in rows])
+        self.model.set_tracks([r.track for r in rows], self._root_label)
         for i, r in enumerate(rows):
             self.model.set_row(i, r)
+        self._sync_folder_spans()
+        self._apply_only_changed_filter()
+        self._clear_sort_indicator()
         self._update_stats()
         self._fit_category_column()
+
+    def _sync_folder_spans(self) -> None:
+        """Span folder header rows across all columns (full-width bar)."""
+        try:
+            self.table.clearSpans()
+        except RuntimeError:
+            return
+        for i in range(self.model.rowCount()):
+            if self.model.is_folder_header(i):
+                self.table.setSpan(i, COL_CHECK, 1, N_COLS)
+
+    def _clear_sort_indicator(self) -> None:
+        """Hide header sort arrow after a full track reload (sort state reset)."""
+        try:
+            hdr = self.table.horizontalHeader()
+        except RuntimeError:
+            return
+        hdr.setSortIndicatorShown(False)
 
     def _fit_category_column(self) -> None:
         """Widen Category so the longest chip label (and header) fit."""
@@ -574,6 +890,8 @@ class PreviewPanel(QWidget):
         for name in DEFAULT_CATEGORY_COLORS:
             labels.add(name.lower())
         for i in range(self.model.rowCount()):
+            if self.model.is_folder_header(i):
+                continue
             preview = self.model.row_at(i)
             if preview is None:
                 continue
@@ -590,6 +908,38 @@ class PreviewPanel(QWidget):
         chip_w = max(getattr(self._chips, "chip_width_px", 0), text_w + 16)
         width = max(chip_w + 2 * _CategoryBadgeDelegate._BADGE_INSET_H, header_w + 20, 56)
         hdr.resizeSection(COL_CATEGORY, width)
+        # Category width changed remaining space — re-split Original/New once if needed.
+        if not self._name_cols_balanced:
+            self._balance_filename_columns()
+
+    def _balance_filename_columns(self) -> None:
+        """Give Original ~half of space after ✓+Category+Keyword; New Stretch takes the rest.
+
+        Runs once so user drag-resizes are not overwritten on later data updates.
+        """
+        if self._name_cols_balanced:
+            return
+        try:
+            hdr = self.table.horizontalHeader()
+            vw = self.table.viewport().width()
+        except RuntimeError:
+            return
+        if vw < 120:
+            return
+        fixed = (
+            hdr.sectionSize(COL_CHECK)
+            + hdr.sectionSize(COL_CATEGORY)
+            + hdr.sectionSize(COL_KEYWORD)
+        )
+        remaining = max(0, vw - fixed)
+        # Half for Original; Stretch New fills the other half (and any slack).
+        orig = max(160, remaining // 2)
+        hdr.resizeSection(COL_ORIGINAL, orig)
+        self._name_cols_balanced = True
+
+    def set_category_options(self, categories: List[CategoryRule]) -> None:
+        """Category Macro rows for the right-click 'Change to:' override menu."""
+        self._category_options = list(categories or [])
 
     def set_loading(self, loading: bool) -> None:
         # Simple: just dim the stats label
@@ -615,7 +965,7 @@ class PreviewPanel(QWidget):
     def begin_viewport_lazy(self, tracks: List[Track], rules: List[Rule], root_label: str = "") -> None:
         self.cancel_preview_work()
         self._tracks = list(tracks)
-        self._root_label = root_label
+        self._root_label = root_label or "ROOT"
         self._lazy_generation += 1
         gen = self._lazy_generation
         self._lazy_done = 0
@@ -628,7 +978,10 @@ class PreviewPanel(QWidget):
         except Exception:
             prepared = rules
 
-        self.model.set_tracks(tracks)
+        self.model.set_tracks(tracks, self._root_label)
+        self._sync_folder_spans()
+        self._apply_only_changed_filter()
+        self._clear_sort_indicator()
         self._fit_category_column()
 
         # Seed priority with first ~LAZY_BUFFER_ROWS
@@ -654,7 +1007,7 @@ class PreviewPanel(QWidget):
             return {}
         result = {}
         for i, track in enumerate(self._tracks):
-            row = self.model.row_at(i)
+            row = self.model.preview_for_track(i)
             if row is None or not row.changed or not track.selected:
                 continue
             result[track.id] = row.new_name
@@ -665,7 +1018,7 @@ class PreviewPanel(QWidget):
             return self._lazy_selected_changed
         n = 0
         for i, track in enumerate(self._tracks):
-            row = self.model.row_at(i)
+            row = self.model.preview_for_track(i)
             if row is not None and row.changed and track.selected:
                 n += 1
         return n
@@ -824,6 +1177,8 @@ class PreviewPanel(QWidget):
                 # Active-row callback: deliver the freshly-computed PreviewRow
                 if idx == self._active_index and self.on_active is not None:
                     self.on_active(row.track, row)
+        if self._only_changed and drained:
+            self._apply_only_changed_filter()
         # Re-seed priority for the visible viewport
         self._seed_visible_priority()
         self._update_stats()
@@ -839,6 +1194,8 @@ class PreviewPanel(QWidget):
         if finished or self._lazy_done >= self._lazy_total:
             self._poll_timer.stop()
             self._fit_category_column()
+            if self._only_changed:
+                self._apply_only_changed_filter()
             # Worker finished but some rows were skipped — treat as complete for UI
             if self._lazy_done < self._lazy_total and finished:
                 self._lazy_done = self._lazy_total
@@ -852,8 +1209,13 @@ class PreviewPanel(QWidget):
         if first < 0:
             first = 0
         if last < 0:
-            last = min(first + LAZY_BUFFER_ROWS, len(self._tracks))
-        for i in range(max(0, first - 5), min(len(self._tracks), last + LAZY_BUFFER_ROWS)):
+            last = min(first + LAZY_BUFFER_ROWS, self.model.rowCount())
+        track_indices: List[int] = []
+        for display in range(max(0, first - 5), min(self.model.rowCount(), last + LAZY_BUFFER_ROWS)):
+            track_idx = self.model.track_index_at(display)
+            if track_idx is not None:
+                track_indices.append(track_idx)
+        for i in track_indices:
             if i not in self._job.requested:
                 self._job.priority.put(i)
                 # requested is filled by the worker when it actually computes the row
@@ -863,7 +1225,7 @@ class PreviewPanel(QWidget):
             total = len(self._tracks)
             changed = sum(
                 1 for i in range(total)
-                if self.model.row_at(i) is not None and self.model.row_at(i).changed
+                if (p := self.model.preview_for_track(i)) is not None and p.changed
             )
             self.stats_label.setText(
                 f"{changed} will change · {total - changed} unchanged"
@@ -883,11 +1245,36 @@ class PreviewPanel(QWidget):
 
         if obj is viewport and event.type() == QEvent.Type.MouseMove:
             idx = self.table.indexAt(event.pos())
-            if idx.isValid() and idx.column() == COL_CHECK:
+            if (
+                idx.isValid()
+                and idx.column() == COL_CHECK
+                and not self.model.is_folder_header(idx.row())
+            ):
                 viewport.setCursor(Qt.CursorShape.PointingHandCursor)
             else:
                 viewport.unsetCursor()
+        elif obj is viewport and event.type() == QEvent.Type.Resize:
+            # First real width may arrive after the post-build singleShot.
+            if not self._name_cols_balanced:
+                self._balance_filename_columns()
         return super().eventFilter(obj, event)
+
+    def _on_header_clicked(self, logical_index: int) -> None:
+        """Sort tracks within each folder group by the clicked column (toggle asc/desc)."""
+        if not (0 <= logical_index < N_COLS):
+            return
+        self.model.sort_by(logical_index)
+        self._sync_folder_spans()
+        self._apply_only_changed_filter()
+        hdr = self.table.horizontalHeader()
+        order = self.model.sort_order
+        hdr.setSortIndicator(logical_index, order)
+        hdr.setSortIndicatorShown(True)
+        # Keep active track selection / highlight after model reset.
+        if self._active_index is not None:
+            display = self.model.display_row_for_track(self._active_index)
+            if display is not None and not self.table.isRowHidden(display):
+                self.table.selectRow(display)
 
     def _on_header_double_clicked(self, logical_index: int) -> None:
         """Auto-fit column to contents (Excel-style double-click on header)."""
@@ -900,19 +1287,25 @@ class PreviewPanel(QWidget):
     def _on_table_clicked(self, index) -> None:
         if not index.isValid():
             return
+        if self.model.is_folder_header(index.row()):
+            return
         if index.column() == COL_CHECK:
             self._toggle_row_selected(index.row())
             return
-        self._set_active(index.row())
+        # ExtendedSelection already updated the highlight; don't wipe multi-select
+        # with selectRow when Ctrl/Shift is held.
+        mods = QApplication.keyboardModifiers()
+        multi = bool(mods & (Qt.ControlModifier | Qt.ShiftModifier | Qt.MetaModifier))
+        self._set_active_display(index.row(), sync_selection=not multi)
 
-    def _toggle_row_selected(self, row: int) -> None:
-        track = self.model.track_at(row)
+    def _toggle_row_selected(self, display_row: int) -> None:
+        track = self.model.track_at(display_row)
         if track is None:
             return
-        preview = self.model.row_at(row)
+        preview = self.model.row_at(display_row)
         was = bool(track.selected)
         now = not was
-        self.model.update_selection(row, now)
+        self.model.update_selection(display_row, now)
         if preview is not None and preview.changed:
             if now and not was:
                 self._lazy_selected_changed += 1
@@ -921,20 +1314,139 @@ class PreviewPanel(QWidget):
         if self.on_change:
             self.on_change()
 
-    def _set_active(self, row: int) -> None:
-        if row < 0 or row >= len(self._tracks):
+    def _set_active_display(
+        self, display_row: int, *, sync_selection: bool = True
+    ) -> None:
+        track_idx = self.model.track_index_at(display_row)
+        if track_idx is None:
             return
-        self._active_index = row
-        track = self._tracks[row]
-        preview = self.model.row_at(row)
+        self._active_index = track_idx
+        track = self._tracks[track_idx]
+        preview = self.model.preview_for_track(track_idx)
+        if sync_selection:
+            self.table.selectRow(display_row)
         if self.on_active is not None:
             self.on_active(track, preview)
+
+    def _selected_track_display_rows(self) -> List[int]:
+        """Display rows for selected track entries (skips folder headers / hidden)."""
+        sm = self.table.selectionModel()
+        if sm is None:
+            return []
+        rows: List[int] = []
+        for index in sm.selectedRows():
+            row = index.row()
+            if self.model.is_folder_header(row):
+                continue
+            if self.table.isRowHidden(row):
+                continue
+            if self.model.track_index_at(row) is None:
+                continue
+            rows.append(row)
+        return rows
+
+    def _on_context_menu(self, pos) -> None:
+        index = self.table.indexAt(pos)
+        if not index.isValid() or self.model.is_folder_header(index.row()):
+            return
+        if self.model.track_index_at(index.row()) is None:
+            return
+
+        sm = self.table.selectionModel()
+        if sm is not None and not sm.isSelected(index):
+            # Right-click outside the current selection → select only this row.
+            self.table.selectRow(index.row())
+        self._set_active_display(index.row(), sync_selection=False)
+
+        categories = [c for c in self._category_options if getattr(c, "enabled", True)]
+        if not categories:
+            return
+
+        menu = RoundMenu(parent=self)
+        # Use a disabled Action as the header — RoundMenu.addWidget() sizes
+        # unshown widgets via widget.size(), which can be huge and stretches
+        # the menu (empty gap under "Change to:").
+        header = Action("Change to:")
+        header.setEnabled(False)
+        menu.addAction(header)
+        for cat in categories:
+            label = (cat.name or "").strip() or (cat.affix or "").strip()
+            if not label:
+                continue
+            action = Action(label, self)
+            action.triggered.connect(
+                lambda checked=False, c=cat: self._override_selected_category(c)
+            )
+            menu.addAction(action)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _override_selected_category(self, category: CategoryRule) -> None:
+        """Strip existing category affix and apply *category* on selected rows.
+
+        Then rename those files on disk immediately (via ``on_override_rename``).
+        """
+        display_rows = self._selected_track_display_rows()
+        if not display_rows:
+            return
+        options = self._category_options or [category]
+        touched = False
+        renames: dict = {}
+        for display_row in display_rows:
+            track_idx = self.model.track_index_at(display_row)
+            if track_idx is None:
+                continue
+            track = self._tracks[track_idx]
+            preview = self.model.preview_for_track(track_idx)
+            source_name = preview.new_name if preview is not None else track.name
+            new_name = override_category_affix(source_name, category, options)
+            original = preview.original_name if preview is not None else track.name
+            changed = new_name != original
+            new_preview = PreviewRow(
+                track=track,
+                original_name=original,
+                new_name=new_name,
+                changed=changed,
+                matched_keyword="",  # manual override — clear keyword match
+            )
+            self.model.set_row(track_idx, new_preview)
+            if not track.selected:
+                self.model.update_selection_for_track(track_idx, True)
+            # Keep Track.category in sync for audio-player / organize helpers.
+            track.category = (category.name or "").strip()
+            touched = True
+            if changed:
+                renames[track.id] = new_name
+            if track_idx == self._active_index and self.on_active is not None:
+                self.on_active(track, new_preview)
+
+        if not touched:
+            return
+        self._recount_change_stats()
+        if self._only_changed:
+            self._apply_only_changed_filter()
+        self._update_stats()
+        self._fit_category_column()
+        if self.on_change:
+            self.on_change()
+        if renames and self.on_override_rename is not None:
+            self.on_override_rename(renames)
+
+    def _recount_change_stats(self) -> None:
+        changed = 0
+        selected_changed = 0
+        for i, track in enumerate(self._tracks):
+            preview = self.model.preview_for_track(i)
+            if preview is not None and preview.changed:
+                changed += 1
+                if track.selected:
+                    selected_changed += 1
+        self._lazy_changed = changed
+        self._lazy_selected_changed = selected_changed
 
     def _select_all(self) -> None:
         for i, track in enumerate(self._tracks):
             if not track.selected:
-                track.selected = True
-                self.model.update_selection(i, True)
+                self.model.update_selection_for_track(i, True)
         self._lazy_selected_changed = self._lazy_changed
         if self.on_change:
             self.on_change()
@@ -942,32 +1454,61 @@ class PreviewPanel(QWidget):
     def _deselect_all(self) -> None:
         for i, track in enumerate(self._tracks):
             if track.selected:
-                track.selected = False
-                self.model.update_selection(i, False)
+                self.model.update_selection_for_track(i, False)
         self._lazy_selected_changed = 0
         if self.on_change:
             self.on_change()
 
     def _on_only_changed_toggled(self, checked: bool) -> None:
-        # Simple row hide for unchanged
-        for i in range(len(self._tracks)):
+        self._only_changed = bool(checked)
+        self._apply_only_changed_filter()
+
+    def _apply_only_changed_filter(self) -> None:
+        """Hide unchanged track rows; hide folder headers with no visible children."""
+        checked = self._only_changed
+        current_header: Optional[int] = None
+        header_has_visible: dict[int, bool] = {}
+        for i in range(self.model.rowCount()):
+            if self.model.is_folder_header(i):
+                current_header = i
+                header_has_visible[i] = False
+                self.table.setRowHidden(i, False)
+                continue
             preview = self.model.row_at(i)
             hide = checked and preview is not None and not preview.changed
             self.table.setRowHidden(i, hide)
+            if not hide and current_header is not None:
+                header_has_visible[current_header] = True
+        for header_row, visible in header_has_visible.items():
+            self.table.setRowHidden(header_row, checked and not visible)
 
     # ----- keyboard -----
     # Handled via QShortcut (see _build_ui) — the panel's keyPressEvent never
     # fires because the embedded QTableView consumes navigation keys first.
 
     def _kb_step(self, delta: int) -> None:
-        base = self._active_index if self._active_index is not None else -1 if delta > 0 else 0
-        new_idx = base + delta
-        if 0 <= new_idx < len(self._tracks):
-            self._set_active(new_idx)
-            self.table.selectRow(new_idx)
-            self.table.scrollTo(self.model.index(new_idx, 0))
-            # So Enter (table-scoped) can toggle ✓ after arrow navigation.
+        total = self.model.rowCount()
+        if total <= 0:
+            return
+        # Start from the display row of the active track (skip folder headers).
+        if self._active_index is not None:
+            base = self.model.display_row_for_track(self._active_index)
+            if base is None:
+                base = -1 if delta > 0 else total
+        else:
+            base = -1 if delta > 0 else total
+        target = base + delta
+        while 0 <= target < total:
+            if self.table.isRowHidden(target):
+                target += 1 if delta > 0 else -1
+                continue
+            if self.model.is_folder_header(target):
+                target += 1 if delta > 0 else -1
+                continue
+            self._set_active_display(target)
+            self.table.scrollTo(self.model.index(target, 0))
             self.table.setFocus(Qt.ShortcutFocusReason)
+            return
 
     def _kb_prev(self) -> None:
         self._kb_step(-1)
@@ -990,13 +1531,15 @@ class PreviewPanel(QWidget):
 
     def _kb_toggle_check(self) -> None:
         """Toggle include/✓ for the current preview row (Enter / Return)."""
-        row = self._active_index
-        if row is None:
+        display_row: Optional[int] = None
+        if self._active_index is not None:
+            display_row = self.model.display_row_for_track(self._active_index)
+        if display_row is None:
             idx = self.table.currentIndex()
-            if not idx.isValid():
+            if not idx.isValid() or self.model.is_folder_header(idx.row()):
                 return
-            row = idx.row()
-        self._toggle_row_selected(row)
+            display_row = idx.row()
+        self._toggle_row_selected(display_row)
 
     def _kb_seek_back(self) -> None:
         if self.on_seek is not None:

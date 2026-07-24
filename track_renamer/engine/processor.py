@@ -65,9 +65,11 @@ def _apply_rules_to_name(
     original_name: str,
     index: int,
     variables: dict[str, str] | None = None,
+    match_info: dict[str, str] | None = None,
 ) -> str:
     current = name
     variables = variables or {}
+    match_info = match_info if match_info is not None else {}
 
     for rule in rules:
         if not getattr(rule, "enabled", True):
@@ -90,6 +92,7 @@ def _apply_rules_to_name(
                     original_name=original_name,
                     index=index,
                     variables=variables,
+                    match_info=match_info,
                 )
             else:
                 for branch in rule.branches:
@@ -114,6 +117,7 @@ def _apply_rules_to_name(
                             original_name=original_name,
                             index=index,
                             variables=variables,
+                            match_info=match_info,
                         )
                         break
             continue
@@ -134,10 +138,14 @@ def _apply_rules_to_name(
                 {"categories": [rule.to_dict()]},
                 ctx,
             )
+            if kw := ctx.get("matched_keyword"):
+                match_info["matched_keyword"] = kw
             continue
 
         if isinstance(rule, OpRule):
             current = apply_op(current, rule.op, rule.params, ctx)
+            if kw := ctx.get("matched_keyword"):
+                match_info["matched_keyword"] = kw
 
     return current
 
@@ -150,18 +158,21 @@ def compute_preview_row(
 ) -> PreviewRow:
     """Compute a single PreviewRow (used for viewport-priority lazy preview)."""
     original = track.name
+    match_info: dict[str, str] = {}
     new_name = _apply_rules_to_name(
         original,
         _rule_sequence(rules),
         track=track,
         original_name=original,
         index=index,
+        match_info=match_info,
     )
     return PreviewRow(
         track=track,
         original_name=original,
         new_name=new_name,
         changed=new_name != original,
+        matched_keyword=match_info.get("matched_keyword", ""),
     )
 
 

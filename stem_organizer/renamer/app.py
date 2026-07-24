@@ -36,6 +36,7 @@ from qfluentwidgets import (
 
 from track_renamer.category_palette import (
     applied_category_colors,
+    list_category_rules,
     normalize_rules_category_colors,
     sort_rule_category_keywords,
     sync_category_names_from_affix,
@@ -338,6 +339,7 @@ class TrackRenamerApp(QWidget):
         self.preview_panel.on_active = self._on_active_preview
         self.preview_panel.on_play_pause = self._toggle_audio_preview
         self.preview_panel.on_seek = self._seek_audio_preview
+        self.preview_panel.on_override_rename = self._rename_from_prefix_override
         right_lay.addWidget(self.preview_panel, stretch=1)
 
         self._body_lay.addWidget(self.left_panel, stretch=1)
@@ -467,6 +469,10 @@ class TrackRenamerApp(QWidget):
             colors = {}
         self.audio_player.set_category_colors(colors)
         self.preview_panel.model.set_category_colors(colors)
+        try:
+            self.preview_panel.set_category_options(list_category_rules(self.rules))
+        except Exception:
+            self.preview_panel.set_category_options([])
         root_label = self.folder_path.name if self.folder_path else "ROOT"
         self.preview_panel.begin_viewport_lazy(self.tracks, self.rules, root_label)
         self._update_footer()
@@ -535,6 +541,12 @@ class TrackRenamerApp(QWidget):
         self.demo_mode = False
         self._set_source_path(self.folder_path)
         try:
+            from track_renamer.instrument_enrich import apply_cached_labels
+
+            apply_cached_labels(self.tracks)
+        except Exception:
+            pass
+        try:
             self._apply_preview()
         finally:
             # Always clear busy — even if preview setup raises — so elapsed stops.
@@ -574,6 +586,15 @@ class TrackRenamerApp(QWidget):
             return
         n = len(renames)
         if not ask_yes_no(self, "Rename Files", f"Rename {n} file(s)?"):
+            return
+        self._start_rename_job(renames)
+
+    def _rename_from_prefix_override(self, renames: dict) -> None:
+        """Immediate disk rename after preview Change to: (no second confirm)."""
+        if self._busy or not renames:
+            return
+        if self.demo_mode:
+            show_info(self, "Rename Files", "Browse & select a folder first.")
             return
         self._start_rename_job(renames)
 
@@ -694,6 +715,8 @@ class TrackRenamerApp(QWidget):
             return
         self.preview_panel.append_analyze_summary(elapsed_sec=elapsed, total=total)
         renames = self._compute_selected_renames()
+        # Refresh table so Keyword shows <audio-determined> while ML fields are live.
+        self._refresh_preview()
         self._set_busy(False, "Idle")
         # Defer so busy UI settles before the modal (same as Classify post-RMS).
         QTimer.singleShot(

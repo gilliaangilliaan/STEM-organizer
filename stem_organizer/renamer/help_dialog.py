@@ -183,6 +183,7 @@ def show_rename_help_dialog(parent: Optional[QWidget] = None) -> None:
         ("Enter", "Toggle include ✓"),
         ("Space", "Play / pause"),
         ("← / →", "Seek 3 seconds"),
+        ("Shift / Ctrl-click", "Multi-select (then right-click → Change to:)"),
     )):
         column = (index % 2) * 2
         row = 1 + index // 2

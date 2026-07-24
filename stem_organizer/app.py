@@ -36,6 +36,7 @@ from .widgets.titlebar import (
     center_window_default_size,
     enable_win32_thick_frame,
     handle_native_frame_message,
+    note_activation_chrome_refresh,
     note_minimize_restore_to_default,
     prepare_dark_frameless_chrome,
     toggle_work_area_maximize,
@@ -269,6 +270,8 @@ class MainWindow(QMainWindow):
         note_minimize_restore_to_default(
             self, event, width=theme.WIN_DEFAULT_W, height=theme.WIN_DEFAULT_H
         )
+        # Focus return (Explorer/Alt-Tab) can flash light thick-frame edges.
+        note_activation_chrome_refresh(self, event)
         super().changeEvent(event)
 
     def _toggle_maximize(self) -> None:
@@ -462,6 +465,9 @@ class MainWindow(QMainWindow):
     # ----- close -------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 Qt naming
+        from .widgets.titlebar import disarm_win32_thick_frame
+
+        disarm_win32_thick_frame(self)
         # Flush pending debounced settings from every tab before exit.
         for widget in self._tabs_registered.values():
             flush = getattr(widget, "flush_settings", None)
