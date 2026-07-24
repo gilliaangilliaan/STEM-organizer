@@ -16,7 +16,7 @@ Automatically create 2- or 4-stems, identify genre/style + vocal gender/reverb, 
 </div>
 
 <p align="center">
-  <img src="screenshots.gif" alt="STEM organizer screenshot" width="800">
+  <img src="screenshots-animated.gif" alt="STEM organizer screenshots" width="800">
 </p>
 
 ## Tabs
