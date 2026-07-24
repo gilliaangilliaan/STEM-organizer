@@ -565,7 +565,6 @@ if exist "%~dp0genre_gender_tagger\requirements.txt" (
 echo.
 echo All done (%TORCH_LABEL%).
 if "%USE_SITE%"=="1" (
-    echo Start STEM-organizer.exe in this folder.
     if "%PASST_INSTALLED%"=="1" (
         echo Rename Auto-detect: OK ^(hear21passt + torchvision^).
     ) else (
@@ -573,6 +572,8 @@ if "%USE_SITE%"=="1" (
         echo Re-run install-deps.bat ^(Keep PyTorch = N is fine^) and confirm
         echo "OK hear21passt" and "OK torchvision" appear.
     )
+    echo.
+    echo Start STEM-organizer.exe in this folder.
 ) else (
     echo Run from source:
     echo     .venv\Scripts\python.exe run_stem_organizer.py
