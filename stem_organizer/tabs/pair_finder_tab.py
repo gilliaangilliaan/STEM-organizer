@@ -66,6 +66,7 @@ from ..workers.pair_worker import PairWorker
 
 
 PANEL_TITLE = "Match & Align"
+DEFAULT_PAIRS_OUTPUT = r"C:\Pairs"
 
 TIPS = {
     "acapella": "Folder containing acapella FLAC or MP3 files.",
@@ -1145,8 +1146,34 @@ class PairFinderTab(QWidget):
             if d.get("align_without_original_dir"):
                 self.without_original_row.set_text(d["align_without_original_dir"])
             self._sync_align_sort_dirs()
+            self._apply_cross_tab_paths(d)
         finally:
             self._loading = False
+
+    def on_tab_shown(self) -> None:
+        """Pull Genre / Gender / Output takeovers when visiting Match & Align."""
+        self._loading = True
+        try:
+            self._apply_cross_tab_paths(self._settings.data)
+        finally:
+            self._loading = False
+        self._flush_settings()
+
+    def _apply_cross_tab_paths(self, d: dict | None = None) -> None:
+        """Instrumental←Genre, Vocal←Gender, Output default, Stems←Output."""
+        d = d if d is not None else self._settings.data
+        genre = (d.get("gg_genre_input_dir") or "").strip()
+        gender = (d.get("gg_gender_input_dir") or "").strip()
+        if genre:
+            self.instrumental_row.set_text(genre)
+        if gender:
+            self.acapella_row.set_text(gender)
+        if not self.pairs_output_row.text().strip():
+            self.pairs_output_row.set_text(DEFAULT_PAIRS_OUTPUT)
+        pairs_out = self.pairs_output_row.text().strip()
+        if pairs_out:
+            self.stems_root_row.set_text(pairs_out)
+            self._sync_align_sort_dirs()
 
     def _autofill_from_instrumental(self, text: str) -> None:
         if self._loading:
@@ -1154,11 +1181,8 @@ class PairFinderTab(QWidget):
         text = text.strip()
         if not text:
             return
-        p = Path(text)
-        if not self.acapella_row.text().strip():
-            self.acapella_row.set_text(str(p.parent / "Vocals"))
         if not self.pairs_output_row.text().strip():
-            self.pairs_output_row.set_text(str(p.parent / "Pairs"))
+            self.pairs_output_row.set_text(DEFAULT_PAIRS_OUTPUT)
 
     def _autofill_align_from_output(self, text: str) -> None:
         if self._loading:
@@ -1166,8 +1190,9 @@ class PairFinderTab(QWidget):
         text = text.strip()
         if not text:
             return
-        if not self.stems_root_row.text().strip():
-            self.stems_root_row.set_text(text)
+        # Stems root takes over Match Output.
+        self.stems_root_row.set_text(text)
+        self._sync_align_sort_dirs()
 
     def _bind_autosave(self) -> None:
         self._autosave_timer = QTimer(self)

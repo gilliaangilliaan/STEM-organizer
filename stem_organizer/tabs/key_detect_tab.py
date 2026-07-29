@@ -402,8 +402,24 @@ class KeyDetectTab(QWidget):
             self.overwrite_tags.setChecked(
                 bool(d.get("key_detect_overwrite", False))
             )
+            # Take over Classify output when Key input is empty.
+            if not self.input_row.text().strip():
+                classify_out = (d.get("output_dir") or "").strip()
+                if classify_out:
+                    self.input_row.set_text(display_path(classify_out))
         finally:
             self._loading = False
+
+    def on_tab_shown(self) -> None:
+        """Key input takes over Classify output path."""
+        classify_out = (self._settings.data.get("output_dir") or "").strip()
+        if classify_out:
+            self._loading = True
+            try:
+                self.input_row.set_text(display_path(classify_out))
+            finally:
+                self._loading = False
+            self._flush_settings()
 
     def _flush_settings(self) -> None:
         if self._loading:

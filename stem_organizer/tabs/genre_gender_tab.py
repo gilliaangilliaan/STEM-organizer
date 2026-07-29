@@ -535,6 +535,19 @@ class GenreGenderTab(QWidget):
         self.genre_btn.setVisible(idx == 0)
         self.gender_btn.setVisible(idx == 1)
         self.vocal_btn.setVisible(idx == 2)
+        # Vocal type input follows Gender path.
+        if idx == 2:
+            self._sync_vocal_from_gender()
+
+    def _sync_vocal_from_gender(self, *_args) -> None:
+        """Vocal type uses the same input folder as Gender."""
+        if self._loading:
+            return
+        gender = self.gender_input_row.text().strip()
+        if not gender:
+            return
+        if self.vocal_input_row.text().strip() != gender:
+            self.vocal_input_row.set_text(gender)
 
     # ----- action bar -----
 
@@ -966,15 +979,17 @@ class GenreGenderTab(QWidget):
             self.vocal_tag_field.set_value(d.get("gg_vocal_tag_field", "vocal"))
             self.vocal_write_meta.setChecked(bool(d.get("gg_vocal_write_meta", True)))
             self.vocal_overwrite_tags.setChecked(bool(d.get("gg_vocal_overwrite_tags", False)))
-            # Auto-fill from Classify output if own fields are empty
-            classify_out = d.get("output_dir", "")
+            # Genre / Gender: fall back to Classify output when empty.
+            # Vocal type: always follow Gender (not Classify).
+            classify_out = (d.get("output_dir") or "").strip()
             if classify_out:
-                if not d.get("gg_genre_input_dir"):
+                if not self.genre_input_row.text().strip():
                     self.genre_input_row.set_text(classify_out)
-                if not d.get("gg_gender_input_dir"):
+                if not self.gender_input_row.text().strip():
                     self.gender_input_row.set_text(classify_out)
-                if not d.get("gg_vocal_input_dir"):
-                    self.vocal_input_row.set_text(classify_out)
+            gender_path = self.gender_input_row.text().strip()
+            if gender_path:
+                self.vocal_input_row.set_text(gender_path)
         finally:
             self._loading = False
 
@@ -983,6 +998,7 @@ class GenreGenderTab(QWidget):
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.setInterval(200)
         self._autosave_timer.timeout.connect(self._flush_settings)
+        self.gender_input_row.entry.textChanged.connect(self._sync_vocal_from_gender)
         for sig in (
             self.genre_input_row.entry.textChanged,
             self.genre_include_subfolders.toggled,

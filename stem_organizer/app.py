@@ -439,11 +439,19 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index: int) -> None:
         widget = self.tabs.widget(index)
         prev = self._prev_tab_widget
-        if prev is not None and prev is not widget and hasattr(prev, "on_tab_hidden"):
-            try:
-                prev.on_tab_hidden()
-            except Exception:
-                pass
+        if prev is not None and prev is not widget:
+            # Persist paths before the next tab reads cross-tab takeovers.
+            flush = getattr(prev, "flush_settings", None)
+            if callable(flush):
+                try:
+                    flush()
+                except Exception:
+                    pass
+            if hasattr(prev, "on_tab_hidden"):
+                try:
+                    prev.on_tab_hidden()
+                except Exception:
+                    pass
         self._prev_tab_widget = widget
 
         for name, w in self._tabs_registered.items():
