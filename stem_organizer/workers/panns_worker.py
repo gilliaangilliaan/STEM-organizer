@@ -297,7 +297,7 @@ class PannsWorker(QThread):
 
         if payload.get("skipped"):
             self.log_line.emit(header, "info")
-            self.log_line.emit("  Skipped (already tagged)", "warn")
+            self.log_line.emit("  [skip] already tagged", "warn")
             return
 
         label = str(payload.get("label", "?"))

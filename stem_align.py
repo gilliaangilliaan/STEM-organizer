@@ -370,7 +370,7 @@ def distribute_originals(
             for src, score in group:
                 _report_log(
                     on_log,
-                    f'· Skipped (folder already has original) {folder.name} ← {src.name} ({score:.0%})',
+                    f'  [skip] folder already has original ← {src.name} ({score:.0%})',
                     'warn',
                 )
             continue
@@ -393,11 +393,11 @@ def distribute_originals(
         _report_log(on_log, _progress_header(src.name, idx + 1, plan_total), 'info')
         if dest.exists():
             skipped += 1
-            _report_log(
-                on_log,
-                f'  skipped (exists) {dest_folder.name}/{dest_name}',
-                'warn',
-            )
+                _report_log(
+                    on_log,
+                    f'  [skip] exists {dest_folder.name}/{dest_name}',
+                    'warn',
+                )
         else:
             shutil.move(str(src), str(dest))
             moved += 1
@@ -466,7 +466,7 @@ def sort_folders_by_original(
         dest = dest_parent / folder.name
         if dest.exists():
             skipped += 1
-            _report_log(on_log, f'  skipped (exists) in {label}', 'warn')
+            _report_log(on_log, f'  [skip] exists in {label}', 'warn')
         else:
             shutil.move(str(folder), str(dest))
             tag = 'ok' if song.original is not None else 'info'
@@ -1115,7 +1115,7 @@ def align_all_songs(
                     _progress_header(song.name, idx + 1, total),
                     'info',
                 )
-                _report_log(on_log, '  skipped (already aligned)', 'warn')
+                _report_log(on_log, '  [skip] already aligned', 'warn')
             else:
                 try:
                     result = align_song_folder(

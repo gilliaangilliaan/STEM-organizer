@@ -757,6 +757,8 @@ class LogPanel(QWidget):
             return "warn"
         if "[skip existing]" in low or "[skip]" in low:
             return "warn"
+        if "[fail]" in low:
+            return "err"
         if s.startswith("Done") or "    wrote " in line or line.lstrip().startswith("wrote "):
             return "ok"
         if line.startswith("  Successful"):

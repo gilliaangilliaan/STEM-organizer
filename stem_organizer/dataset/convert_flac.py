@@ -479,13 +479,20 @@ def _log_file_result(
     index: int | None = None,
     total: int | None = None,
 ) -> None:
-    """Compression-style LOG: === [i/n] file === + status + detail (log_fg)."""
+    """=== [i/n] file === + Classify-style ``[skip]/detail`` (yellow) / fail / ok."""
     from ..run_summary import file_progress_header
 
     log(file_progress_header(path.name, index, total), "info")
-    tag = "warn" if status == "skip" else ("err" if status == "fail" else "info")
-    log(f"  {status}", tag)
     detail = (action or "").strip()
+    label = str(status or "").strip().lower() or "ok"
+    if label == "skip":
+        log(f"  [skip] {detail}" if detail else "  [skip]", "warn")
+        return
+    if label == "fail":
+        log(f"  [fail] {detail}" if detail else "  [fail]", "err")
+        return
+    # ok — status + detail (log_fg), same as before for successful converts
+    log(f"  {label}", "info")
     if detail:
         log(f"  {detail}", "detail")
 

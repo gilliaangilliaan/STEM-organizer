@@ -472,7 +472,7 @@ def scan_library(
                 from ..run_summary import file_progress_header
 
                 log(file_progress_header(path.name, done, total), "info")
-                log("  skip · need instrumental + vocal", "detail")
+                log("  [skip] need instrumental + vocal", "warn")
                 continue
             tags_i = _read_file_tags(inst_f)
             tags_v = _read_file_tags(voc_f)
