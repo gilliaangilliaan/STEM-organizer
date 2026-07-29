@@ -57,11 +57,11 @@ MAEST_GENRES = (
 # Saturated for dark UI — bumped from bright-bg palette.
 MAEST_GENRE_COLORS: dict[str, str] = {
     "Blues": "#2D53D3",
-    "Brass & Military": "#95763D",
+    "Brass & Military": "#4F6224",
     "Children's": "#FFD415",
     "Classical": "#A8A8B0",
     "Electronic": "#00E8CC",
-    "Folk, World, & Country": "#3D6C77",
+    "Folk, World, & Country": "#40A3CF",
     "Funk / Soul": "#FF9900",
     "Hip Hop": "#FF7040",
     "Jazz": "#FFFF5C",
