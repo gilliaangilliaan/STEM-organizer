@@ -263,7 +263,7 @@ echo   1 = NVIDIA RTX 20/30/40  ^(CUDA 12.4^)
 echo   2 = CPU only
 echo   3 = NVIDIA RTX 50-series ^(CUDA 12.8^)
 echo.
-echo NOTE: Full installation incl. all dependencies should take ~9-13 minutes,
+echo NOTE: Full installation incl. all dependencies should take ~10-15 minutes,
 echo depending on your hardware ^& internet connection.
 echo.
 choice /C 123 /N /M "Enter 1, 2, or 3: "
@@ -737,9 +737,7 @@ if errorlevel 1 (
 echo.
 echo All done (%TORCH_LABEL%).
 if "%USE_SITE%"=="1" (
-    if "%PASST_INSTALLED%"=="1" (
-        echo Rename Auto-detect: OK ^(hear21passt + torchvision^).
-    ) else (
+    if not "%PASST_INSTALLED%"=="1" (
         echo Rename Auto-detect: NOT READY - hear21passt and/or torchvision missing.
         echo Re-run install-deps.bat ^(Keep PyTorch = N is fine^) and confirm
         echo "OK hear21passt" and "OK torchvision" appear.
