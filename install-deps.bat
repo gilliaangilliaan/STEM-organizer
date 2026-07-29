@@ -22,7 +22,6 @@ echo   - Python 3.10 or 3.11 on PATH ^(same version as the .exe if present^)
 echo   - Internet ^(PyTorch, demucs, ffmpeg, mp3val, flac, tagger models^)
 echo.
 echo You choose once: GPU or CPU PyTorch.
-echo Genre ^& Gender, Rename Auto-detect, PANNs, and Key Detect deps will also be installed.
 echo.
 
 where python >nul 2>&1
