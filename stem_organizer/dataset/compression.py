@@ -164,9 +164,17 @@ def _log_compression_summary(
     elapsed: float,
 ) -> None:
     stat_lines: list[tuple[str, str]] = [
-        (f"Tagged: {written:,} | Skipped: {skipped:,}", "info"),
-        (f"Lossless: {lossless_n:,} | Lossy: {lossy_n:,}", "info"),
+        (f"Tagged: {written:,}", "info"),
     ]
+    if lossless_n:
+        stat_lines.append((f"Lossless: {lossless_n:,}", "ok"))
+    if lossy_n:
+        stat_lines.append((f"Lossy: {lossy_n:,}", "err"))
+    if skipped:
+        # Own line so log_panel paints "  Skipped…" yellow (same as Corruption).
+        stat_lines.append(
+            (f"Skipped (COMPRESSION=lossless or lossy): {skipped:,}", "info")
+        )
     if errors:
         stat_lines.append((f"Errors: {errors:,}", "err"))
         for name in error_files:

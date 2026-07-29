@@ -393,11 +393,11 @@ def distribute_originals(
         _report_log(on_log, _progress_header(src.name, idx + 1, plan_total), 'info')
         if dest.exists():
             skipped += 1
-                _report_log(
-                    on_log,
-                    f'  [skip] exists {dest_folder.name}/{dest_name}',
-                    'warn',
-                )
+            _report_log(
+                on_log,
+                f'  [skip] exists {dest_folder.name}/{dest_name}',
+                'warn',
+            )
         else:
             shutil.move(str(src), str(dest))
             moved += 1
