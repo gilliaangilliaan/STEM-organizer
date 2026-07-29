@@ -1479,6 +1479,21 @@ class StemPlayerWindow(QWidget):
         self._refresh_waveform_colors()
 
     def _toggle_mute(self, track: TrackState) -> None:
+        any_solo = any(t.solo for t in self._tracks)
+        if any_solo:
+            # While solo is active, M toggles membership in the audible solo group
+            # (add/remove stems alongside the soloed track(s)).
+            if track.solo:
+                track.solo = False
+            else:
+                track.solo = True
+                track.muted = False
+            if track.solo_btn is not None:
+                track.solo_btn.setChecked(track.solo)
+                track.solo_btn.setStyleSheet(_sm_button_style(active=track.solo))
+            self._refresh_waveform_colors()
+            return
+
         enabling = not track.muted
         track.muted = enabling
         if enabling and track.solo:
