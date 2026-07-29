@@ -9,25 +9,30 @@ from typing import Optional
 VOCAL_TYPES = ("Singing", "Speech", "Rapping", "Humming", "Choir")
 GENDERS = ("female", "male")
 REVERBS = ("dry", "wet")
-# Discogs-ish sample genre set (~16) for demo charts
-DEMO_GENRES = (
-    "Electronic",
-    "Hip Hop",
-    "Rock",
-    "Pop",
-    "R&B",
-    "Jazz",
-    "Classical",
-    "Folk",
-    "Metal",
-    "Reggae",
-    "Blues",
-    "Country",
-    "Latin",
-    "Soundtrack",
-    "World",
-    "Other",
-)
+# Demo charts use the same 15 top-level genres as MAEST (Genre tab output).
+DEMO_STYLES_BY_GENRE: dict[str, tuple[str, ...]] = {
+    "Blues": ("Chicago Blues", "Delta Blues", "Electric Blues", "Texas Blues"),
+    "Brass & Military": ("Marches", "Brass Band", "Military"),
+    "Children's": ("Educational", "Lullaby", "Story"),
+    "Classical": ("Baroque", "Romantic", "Modern Classical", "Opera"),
+    "Electronic": ("House", "Techno", "Trance", "Drum and Bass", "Dubstep"),
+    "Folk, World, & Country": (
+        "Indie Folk",
+        "Americana",
+        "Country",
+        "Afrobeat",
+        "Celtic",
+    ),
+    "Funk / Soul": ("Contemporary R&B", "Neo Soul", "P-Funk", "Motown"),
+    "Hip Hop": ("Trap", "Boom Bap", "UK Drill", "Lo-Fi"),
+    "Jazz": ("Bebop", "Fusion", "Smooth Jazz", "Nu Jazz"),
+    "Latin": ("Reggaeton", "Salsa", "Latin Pop", "Cumbia"),
+    "Non-Music": ("Spoken Word", "Field Recording", "Interview"),
+    "Pop": ("Dance Pop", "Synth Pop", "Indie Pop", "Electropop"),
+    "Reggae": ("Roots", "Dancehall", "Dub", "Ska"),
+    "Rock": ("Indie Rock", "Alternative", "Punk", "Progressive", "Hard Rock"),
+    "Stage & Screen": ("Film Score", "Game Score", "Musical", "TV Soundtrack"),
+}
 
 # MAEST Discogs519 top-level genres (Genre tab output).
 MAEST_GENRES = (
@@ -66,26 +71,6 @@ MAEST_GENRE_COLORS: dict[str, str] = {
     "Reggae": "#66C137",
     "Rock": "#F04545",
     "Stage & Screen": "#5C5D5F",
-}
-
-# Styles nested under each of the 16 genres (demo + chart template).
-DEMO_STYLES_BY_GENRE: dict[str, tuple[str, ...]] = {
-    "Electronic": ("House", "Techno", "Trance", "Drum and Bass", "Dubstep"),
-    "Hip Hop": ("Trap", "Boom Bap", "UK Drill", "Lo-Fi", "Phonk"),
-    "Rock": ("Indie Rock", "Alternative", "Punk", "Progressive"),
-    "Pop": ("Dance Pop", "Synth Pop", "Indie Pop", "Electropop"),
-    "R&B": ("Contemporary R&B", "Neo Soul", "Quiet Storm"),
-    "Jazz": ("Bebop", "Fusion", "Smooth Jazz", "Nu Jazz"),
-    "Classical": ("Baroque", "Romantic", "Modern Classical", "Opera"),
-    "Folk": ("Indie Folk", "Traditional", "Folk Rock"),
-    "Metal": ("Death Metal", "Black Metal", "Metalcore", "Doom"),
-    "Reggae": ("Roots", "Dancehall", "Dub", "Ska"),
-    "Blues": ("Delta Blues", "Electric Blues", "Blues Rock"),
-    "Country": ("Outlaw", "Americana", "Country Pop"),
-    "Latin": ("Reggaeton", "Salsa", "Latin Pop", "Cumbia"),
-    "Soundtrack": ("Film Score", "Game Score", "Trailer"),
-    "World": ("Afrobeat", "Celtic", "Balkan", "Middle Eastern"),
-    "Other": ("Experimental", "Noise", "Spoken Word"),
 }
 
 
@@ -241,8 +226,8 @@ def make_demo_overview() -> OverviewStats:
     _fill(GENDERS, (54, 46), stats.gender, scale=voc_extra + pair_n)
     _fill(REVERBS, (42, 58), stats.reverb, scale=voc_extra + pair_n)
     _fill(
-        DEMO_GENRES,
-        (14, 11, 10, 9, 8, 6, 5, 5, 5, 4, 4, 4, 4, 4, 4, 3),
+        MAEST_GENRES,
+        (12, 10, 9, 8, 7, 6, 6, 5, 5, 5, 4, 4, 4, 4, 3),
         stats.genre,
         scale=n_files,
     )
