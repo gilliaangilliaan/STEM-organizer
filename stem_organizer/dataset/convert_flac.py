@@ -491,10 +491,10 @@ def _log_file_result(
     if label == "fail":
         log(f"  [fail] {detail}" if detail else "  [fail]", "err")
         return
-    # ok — status + detail (log_fg), same as before for successful converts
+    # ok — green badge + description in same green (LOG_OK_COLOR)
     log(f"  {label}", "info")
     if detail:
-        log(f"  {detail}", "detail")
+        log(f"  {detail}", "ok")
 
 
 def _cpu_core_count() -> int:
