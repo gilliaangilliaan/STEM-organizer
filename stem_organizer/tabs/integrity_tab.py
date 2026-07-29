@@ -47,6 +47,31 @@ class IntegrityTab(QWidget):
         self.cmp_btn.setVisible(idx == 0)
         self.cor_btn.setVisible(idx == 1)
         self.cvt_btn.setVisible(idx == 2)
+        # Corruption / Convert input follows Compression.
+        if idx in (1, 2):
+            self._sync_input_from_compression()
+
+    def _sync_input_from_compression(self) -> None:
+        """Corruption + Convert take over Compression's input folder."""
+        try:
+            self.compression.flush_settings()
+        except Exception:
+            pass
+        path = self.compression.input_row.text().strip()
+        if not path:
+            return
+        idx = self._tabview.currentIndex()
+        if idx == 1:
+            if self.corruption.input_row.text().strip() != path:
+                self.corruption.input_row.set_text(path)
+        elif idx == 2:
+            if self.convert.input_row.text().strip() != path:
+                self.convert.input_row.set_text(path)
+
+    def on_tab_shown(self) -> None:
+        """Pull Compression → Corruption/Convert when visiting Integrity."""
+        if self._tabview.currentIndex() in (1, 2):
+            self._sync_input_from_compression()
 
     def attach_action_bar(self, page: ActionBarPage, window) -> None:
         self._window = window

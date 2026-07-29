@@ -51,7 +51,31 @@ def _startup_error_report(exc: BaseException) -> str:
     return "\n".join(parts)
 
 
+def _is_multiprocessing_child() -> bool:
+    """True when this process is a ProcessPool / mp worker (frozen .exe re-exec)."""
+    try:
+        import multiprocessing as mp
+
+        if mp.current_process().name != "MainProcess":
+            return True
+    except Exception:
+        pass
+    joined = " ".join(sys.argv).lower()
+    if "--multiprocessing" in joined:
+        return True
+    if "multiprocessing.spawn" in joined or "multiprocessing.forking" in joined:
+        return True
+    return False
+
+
 def run(argv: list[str] | None = None) -> int:
+    # Pool workers (frozen .exe) re-exec this entry — handle them before Qt / mutex.
+    import multiprocessing as mp
+
+    mp.freeze_support()
+    if _is_multiprocessing_child():
+        return 0
+
     argv = list(sys.argv if argv is None else argv)
     # Quiet Qt font fallback spam (OpenType support missing for Consolas/Arial/…).
     # Must be set before QApplication is constructed.
