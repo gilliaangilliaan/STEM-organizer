@@ -130,7 +130,7 @@ class CompressionTab(QWidget):
         note_lay = note.body.layout()
         note_lay.setSpacing(10)
         for paragraph in (
-            "Lossless containers (FLAC, WAV) are scored with FLAC Detective’s "
+            "Lossless contains (WAV/FLAC/AIFF) are scored with FLAC Detective’s "
             "11-rule spectral analysis.",
             "AUTHENTIC → lossless.",
             "WARNING / SUSPICIOUS / FAKE_CERTAIN → lossy.",

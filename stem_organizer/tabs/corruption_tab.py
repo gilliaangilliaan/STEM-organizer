@@ -191,8 +191,8 @@ class CorruptionTab(QWidget):
         note_lay = note.body.layout()
         note_lay.setSpacing(10)
         for paragraph in (
-            "Fast checks MP3 structure. Deep fully decodes the file.",
-            "Both runs both. Results show as OK, WARNING, or FAILED.",
+            "Fast - checks MP3 structure. Deep - Fully decodes the audio file.",
+            "Results show as OK, WARNING, or FAILED.",
             "Fix rebuilds WARNING and FAILED files and replaces the original. "
             "Unfixable files go to {input}_CORRUPT.",
         ):
