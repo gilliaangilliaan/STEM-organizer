@@ -225,9 +225,27 @@ def make_demo_overview() -> OverviewStats:
     )
     _fill(GENDERS, (54, 46), stats.gender, scale=voc_extra + pair_n)
     _fill(REVERBS, (42, 58), stats.reverb, scale=voc_extra + pair_n)
+    # Stem-library skew: Rock / Electronic / Hip Hop / Pop dominate;
+    # niche genres stay present but much smaller.
     _fill(
         MAEST_GENRES,
-        (12, 10, 9, 8, 7, 6, 6, 5, 5, 5, 4, 4, 4, 4, 3),
+        (
+            4,   # Blues
+            1,   # Brass & Military
+            1,   # Children's
+            5,   # Classical
+            22,  # Electronic
+            6,   # Folk, World, & Country
+            5,   # Funk / Soul
+            18,  # Hip Hop
+            4,   # Jazz
+            5,   # Latin
+            1,   # Non-Music
+            16,  # Pop
+            3,   # Reggae
+            24,  # Rock
+            2,   # Stage & Screen
+        ),
         stats.genre,
         scale=n_files,
     )
