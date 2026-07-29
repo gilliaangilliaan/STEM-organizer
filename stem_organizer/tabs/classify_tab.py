@@ -399,7 +399,7 @@ class ClassifyTab(QWidget):
             )
         )
         self.sdr_write_tags = CheckBox("Write SI-SDR to SDR metadata tag")
-        self.sdr_write_tags.setChecked(False)
+        self.sdr_write_tags.setChecked(True)
         self.sdr_write_tags.setToolTip(
             theme.format_tooltip(
                 "Write each stem's SI-SDR score (dB) into the SDR tag "
@@ -1048,7 +1048,7 @@ class ClassifyTab(QWidget):
             self.delete_if_incomplete.setChecked(bool(d.get("delete_if_incomplete", False)))
             self.skip_existing.setChecked(bool(d.get("skip_existing", True)))
             self.sdr_delete_folder.setChecked(bool(d.get("sdr_delete_folder", True)))
-            self.sdr_write_tags.setChecked(bool(d.get("write_sdr_tags", False)))
+            self.sdr_write_tags.setChecked(bool(d.get("write_sdr_tags", True)))
             stored = d.get("sdr_thresholds")
             if isinstance(stored, dict):
                 for cat in cb.SDR_DEFAULT_THRESHOLDS:
