@@ -1355,7 +1355,7 @@ def single_stem_process_all_message(hint: dict) -> str:
         f'Found {int(hint["keyword_matches"]):,} files with {kind} keywords\n'
         f'({hint["patterns"]})\n'
         f'out of {int(hint["total_audio"]):,} audio files in this folder.\n\n'
-        f'Process all {int(hint["total_audio"]):,} files as {kind} for SI-SDR?'
+        f'Process all {int(hint["total_audio"]):,} files as {kind}?'
     )
 
 
