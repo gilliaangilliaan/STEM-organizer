@@ -106,6 +106,7 @@ mkdir "%OUT%\genre_gender_tagger" >nul
 mkdir "%OUT%\genre_gender_tagger\models" >nul
 copy /Y "genre_gender_tagger\genre_gender_tagger.py" "%OUT%\genre_gender_tagger\" >nul
 if exist "genre_gender_tagger\vocal_reverb.py" copy /Y "genre_gender_tagger\vocal_reverb.py" "%OUT%\genre_gender_tagger\" >nul
+if exist "genre_gender_tagger\file_writable.py" copy /Y "genre_gender_tagger\file_writable.py" "%OUT%\genre_gender_tagger\" >nul
 if exist "genre_gender_tagger\install-deps.bat" copy /Y "genre_gender_tagger\install-deps.bat" "%OUT%\genre_gender_tagger\" >nul
 if exist "genre_gender_tagger\run.bat" copy /Y "genre_gender_tagger\run.bat" "%OUT%\genre_gender_tagger\" >nul
 if exist "genre_gender_tagger\requirements.txt" copy /Y "genre_gender_tagger\requirements.txt" "%OUT%\genre_gender_tagger\" >nul
@@ -125,6 +126,7 @@ if exist "%OUT%\panns_tagger" rmdir /S /Q "%OUT%\panns_tagger"
 mkdir "%OUT%\panns_tagger" >nul
 mkdir "%OUT%\panns_tagger\models" >nul
 copy /Y "panns_tagger\panns_tagger.py" "%OUT%\panns_tagger\" >nul
+if exist "panns_tagger\file_writable.py" copy /Y "panns_tagger\file_writable.py" "%OUT%\panns_tagger\" >nul
 if exist "panns_tagger\install-deps.bat" copy /Y "panns_tagger\install-deps.bat" "%OUT%\panns_tagger\" >nul
 if exist "panns_tagger\readme.md" copy /Y "panns_tagger\readme.md" "%OUT%\panns_tagger\" >nul
 if exist "panns_tagger\models\*.pth" copy /Y "panns_tagger\models\*.pth" "%OUT%\panns_tagger\models\" >nul

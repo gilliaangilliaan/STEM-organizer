@@ -24,6 +24,7 @@ datas += [('logo.ico', '.')]
 # ffmpeg is installed next to the exe by install-deps.bat; do not bundle.
 datas += [('genre_gender_tagger/genre_gender_tagger.py', 'genre_gender_tagger')]
 datas += [('genre_gender_tagger/vocal_reverb.py', 'genre_gender_tagger')]
+datas += [('genre_gender_tagger/file_writable.py', 'genre_gender_tagger')]
 datas += [('genre_gender_tagger/requirements.txt', 'genre_gender_tagger')]
 # Prefer offline gender tagging; download is SSL-fragile on some Win11 VMs.
 import os as _os
@@ -36,6 +37,7 @@ if _os.path.isdir(_gg_models):
 datas += [('instrument_tagger/instrument_tagger.py', 'instrument_tagger')]
 datas += [('instrument_tagger/passt_mel.py', 'instrument_tagger')]
 datas += [('panns_tagger/panns_tagger.py', 'panns_tagger')]
+datas += [('panns_tagger/file_writable.py', 'panns_tagger')]
 datas += [('panns_tagger/readme.md', 'panns_tagger')]
 datas += [('key_tagger/key_tagger.py', 'key_tagger')]
 datas += [('key_tagger/inference.py', 'key_tagger')]
