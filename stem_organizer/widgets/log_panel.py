@@ -113,17 +113,19 @@ for _short, _disp in SHORT_TO_DISPLAY.items():
     LOG_GG_COLORS.setdefault(_short.lower(), CHART_KEY_COLORS[_disp])
     _KEY_CHIP_DISPLAY.setdefault(_short.lower(), _disp)
 
+_CHIP_FG_LIGHT = "#FFFFFF"
+
 LOG_GG_FG = {
     "dry": "#262833",
-    "wet": theme.COLORS["log_fg"],
+    "wet": _CHIP_FG_LIGHT,
     "lossless": "#262833",
     "lossy": "#262833",
-    # AUTHENTIC / FAKE_CERTAIN: default light text (no tint).
+    # AUTHENTIC / FAKE_CERTAIN: white text on dark badges.
     # WARNING: dark text on yellow badge.
-    "authentic": theme.COLORS["log_fg"],
+    "authentic": _CHIP_FG_LIGHT,
     "warning": "#262833",
     "suspicious": "#262833",
-    "fake_certain": theme.COLORS["log_fg"],
+    "fake_certain": _CHIP_FG_LIGHT,
     "ok": "#262833",
     "minor": "#262833",
     "failed": "#262833",
@@ -145,9 +147,9 @@ _GENRE_CHIP_LIGHT_TEXT = frozenset({"stage & screen", "non-music"})
 
 
 def _genre_chip_fg(genre: str) -> str:
-    """Genre badge text — dark by default; light on very dark fills only."""
+    """Genre badge text — dark by default; white on very dark fills only."""
     if (genre or "").strip().casefold() in _GENRE_CHIP_LIGHT_TEXT:
-        return theme.COLORS["log_fg"]
+        return _CHIP_FG_LIGHT
     return "#262833"
 
 
@@ -286,7 +288,7 @@ class ChipRenderer:
 
     def chip_fg(self, label: str) -> str:
         key = label.strip().lower()
-        return LOG_GG_FG.get(key, theme.COLORS["log_fg"])
+        return LOG_GG_FG.get(key, _CHIP_FG_LIGHT)
 
     def chip_pixmap(self, label: str) -> QPixmap:
         """Paint a chip (min width = shared stem width; longer labels grow)."""
@@ -321,7 +323,7 @@ class ChipRenderer:
         """Chip painted in an arbitrary category color (Rename auto-detect).
 
         min width = shared chip width so it lines up with stem/skip chips; longer
-        labels grow. Text is soft log_fg (category badges use soft-on-color).
+        labels grow. Text is white on colored category badges.
         """
         display = (label or "?").strip().lower() or "?"
         cache_key = f"cat:{display}:{bg_hex}"
@@ -337,7 +339,7 @@ class ChipRenderer:
         painter = QPainter(img)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
         painter.setFont(self.chip_font)
-        painter.setPen(QColor(theme.COLORS["log_fg"]))
+        painter.setPen(QColor(_CHIP_FG_LIGHT))
         painter.drawText(img.rect(), int(Qt.AlignCenter), display)
         painter.end()
         pix = QPixmap.fromImage(img)
