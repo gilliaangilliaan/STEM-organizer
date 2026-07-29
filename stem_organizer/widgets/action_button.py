@@ -54,6 +54,11 @@ def action_button(
                 f"color: {theme.COLORS['log_fg']}; }}"
             )
     btn.setCursor(Qt.PointingHandCursor)
+    # Prevent Enter/Return after dialogs from activating Stop / other actions.
+    if hasattr(btn, "setAutoDefault"):
+        btn.setAutoDefault(False)
+    if hasattr(btn, "setDefault"):
+        btn.setDefault(False)
     # Content-sized like Classify action bar — Fixed so Minimum policy cannot stretch.
     btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     btn.setFixedHeight(height)

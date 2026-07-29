@@ -178,7 +178,16 @@ def _construct_and_show(
 
         from .tabs import register_all_tabs
 
-        register_all_tabs(window, settings)
+        tab_errors = register_all_tabs(window, settings)
+        if tab_errors:
+            # Frozen builds have no console — surface failures in the LOG panel.
+            window.append_log(
+                "Some tabs failed to load (see tab_errors.log beside the exe):",
+                "warn",
+            )
+            for line in tab_errors:
+                first = (line.splitlines() or [line])[0]
+                window.append_log(f"  {first}", "err")
 
         theme.polish_fluent_controls(window)
         # Rename Apply clones Clear width after Clear gets polished fonts/padding

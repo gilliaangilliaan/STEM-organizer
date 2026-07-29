@@ -411,8 +411,8 @@ class KeyDetectTab(QWidget):
             field = str(d.get("key_detect_tag_field", "key") or "key")
             self.tag_field.set_value(field if field in ("comment", "key") else "key")
             self.write_meta.setChecked(bool(d.get("key_detect_write_meta", True)))
-            self.overwrite_tags.setChecked(
-                bool(d.get("key_detect_overwrite", False))
+            self.skip_existing.setChecked(
+                _load_skip_existing(d, "key_detect_skip_existing", "key_detect_overwrite")
             )
             # Take over Classify output when Key input is empty.
             if not self.input_row.text().strip():
@@ -443,7 +443,7 @@ class KeyDetectTab(QWidget):
                 "key_detect_batch_mode": self.run_mode.value() == "batch",
                 "key_detect_tag_field": self.tag_field.value() or "key",
                 "key_detect_write_meta": self.write_meta.isChecked(),
-                "key_detect_overwrite": self.overwrite_tags.isChecked(),
+                "key_detect_skip_existing": self.skip_existing.isChecked(),
             }
         )
         self._settings.flush()
@@ -463,7 +463,7 @@ class KeyDetectTab(QWidget):
         self.run_mode.valueChanged.connect(bump)
         self.tag_field.valueChanged.connect(bump)
         self.write_meta.toggled.connect(bump)
-        self.overwrite_tags.toggled.connect(bump)
+        self.skip_existing.toggled.connect(bump)
 
     def flush_settings(self) -> None:
         if hasattr(self, "_autosave_timer"):

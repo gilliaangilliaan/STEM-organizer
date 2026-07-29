@@ -144,6 +144,19 @@ if exist "key_tagger\install-deps.bat" copy /Y "key_tagger\install-deps.bat" "%O
 if exist "key_tagger\requirements.txt" copy /Y "key_tagger\requirements.txt" "%OUT%\key_tagger\" >nul
 if exist "key_tagger\checkpoints\*.pt" copy /Y "key_tagger\checkpoints\*.pt" "%OUT%\key_tagger\checkpoints\" >nul
 
+if not exist "%OUT%\key_tagger\key_tagger.py" (
+    echo ERROR: key_tagger\key_tagger.py missing from dist — Key Detect will not run.
+    goto failed
+)
+if not exist "%OUT%\panns_tagger\panns_tagger.py" (
+    echo ERROR: panns_tagger\panns_tagger.py missing from dist — Vocal type will not run.
+    goto failed
+)
+if not exist "%OUT%\genre_gender_tagger\genre_gender_tagger.py" (
+    echo ERROR: genre_gender_tagger\genre_gender_tagger.py missing from dist.
+    goto failed
+)
+
 REM ffmpeg is NOT bundled by the .spec - install-deps.bat downloads it next to the exe after build.
 REM If a local ffmpeg\ already exists (dev machine), copy it for convenience:
 if exist "ffmpeg\ffmpeg.exe" if not exist "%OUT%\ffmpeg\ffmpeg.exe" (

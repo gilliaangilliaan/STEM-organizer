@@ -12,6 +12,7 @@ Action buttons: ▶ Tag genre / ▶ Tag gender / ▶ Tag vocal type / ■ Stop.
 from __future__ import annotations
 
 import classify_backend as cb
+import time
 from pathlib import Path
 from typing import Optional, Union
 
@@ -256,6 +257,7 @@ class GenreGenderTab(QWidget):
         self._worker: Optional[Union[TaggerWorker, PannsWorker]] = None
         self._busy = False
         self._busy_panel: Optional[str] = None  # "genre" | "gender" | "vocal"
+        self._busy_since = 0.0
         self._loading = False
 
         self._build_ui()
@@ -631,6 +633,7 @@ class GenreGenderTab(QWidget):
         """Lock only the started sub-tab's settings; other Genre/Gender/Vocal panels stay editable."""
         self._busy = busy
         self._busy_panel = panel if busy else None
+        self._busy_since = time.monotonic() if busy else 0.0
         self.genre_btn.setEnabled(not busy)
         self.gender_btn.setEnabled(not busy)
         self.vocal_btn.setEnabled(not busy)
@@ -651,6 +654,10 @@ class GenreGenderTab(QWidget):
 
     def _stop(self) -> None:
         if self._worker is None:
+            return
+        # Ignore Enter/Return that was meant for the layout dialog and arrives
+        # just after Stop becomes enabled.
+        if self._busy_since and (time.monotonic() - self._busy_since) < 0.45:
             return
         self._worker.stop()
         self.request_log.emit("[stopping] ...", "warn")
