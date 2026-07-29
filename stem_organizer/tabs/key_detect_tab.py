@@ -50,13 +50,23 @@ TIPS = {
         "(ID3 TKEY / Vorbis INITIALKEY / iTunes initialkey)."
     ),
     "write_meta": "Write detected keys to metadata. Turn off to preview in the LOG only.",
-    "overwrite": (
-        "Replace existing Comment / Initial key values. Off = skip already-tagged files."
+    "skip_existing": (
+        "On (default): skip files that already have a key tag (resume-friendly). "
+        "Off: re-tag every file."
     ),
     "detect": "Detect musical key with the in-house KeyNet model and write tags.",
     "stop": "Stop the running key-detect job.",
 }
 TIPS = {k: theme.format_tooltip(v) for k, v in TIPS.items()}
+
+
+def _load_skip_existing(d: dict, skip_key: str, overwrite_key: str) -> bool:
+    """Prefer skip_existing; migrate legacy overwrite (inverted). Default on."""
+    if skip_key in d:
+        return bool(d[skip_key])
+    if overwrite_key in d:
+        return not bool(d[overwrite_key])
+    return True
 
 
 class _RadioRow(QWidget):
@@ -231,10 +241,11 @@ class KeyDetectTab(QWidget):
         self.write_meta = CheckBox("Write metadata tags")
         self.write_meta.setChecked(True)
         self.write_meta.setToolTip(TIPS["write_meta"])
-        self.overwrite_tags = CheckBox("Overwrite existing tags")
-        self.overwrite_tags.setToolTip(TIPS["overwrite"])
+        self.skip_existing = CheckBox("Skip if already tagged")
+        self.skip_existing.setChecked(True)
+        self.skip_existing.setToolTip(TIPS["skip_existing"])
         opts_lay.addWidget(self.write_meta)
-        opts_lay.addWidget(self.overwrite_tags)
+        opts_lay.addWidget(self.skip_existing)
         v.addWidget(opts_card)
         v.addStretch(1)
 
@@ -274,7 +285,7 @@ class KeyDetectTab(QWidget):
             self.run_mode,
             self.tag_field,
             self.write_meta,
-            self.overwrite_tags,
+            self.skip_existing,
             self.detect_btn,
         )
         if hasattr(self, "stop_btn"):
@@ -303,7 +314,7 @@ class KeyDetectTab(QWidget):
         self.request_log.emit(f"  {folder}", "info")
         self.request_log.emit(
             f"  Mode: {mode}  ·  Write to: {field}  ·  "
-            f"Overwrite: {'on' if self.overwrite_tags.isChecked() else 'off'}",
+            f"Skip if already tagged: {'on' if self.skip_existing.isChecked() else 'off'}",
             "info",
         )
         self.request_log.emit("  Loading model (first run can take a moment)…", "info")
@@ -313,7 +324,7 @@ class KeyDetectTab(QWidget):
             folder,
             include_subfolders=self.include_subfolders.isChecked(),
             write_meta=self.write_meta.isChecked(),
-            overwrite_tags=self.overwrite_tags.isChecked(),
+            overwrite_tags=not self.skip_existing.isChecked(),
             tag_field=self.tag_field.value() or "key",
             batch_mode=self.run_mode.value() == "batch",
             parent=self,
@@ -368,7 +379,8 @@ class KeyDetectTab(QWidget):
                     [
                         "Short keys only (C, Am, Db, Gbm, …) — Charts show enharmonic "
                         "labels (Db/C#, Abm/G#m).",
-                        "Comment or Initial key (TKEY). Skip already-tagged when Overwrite is off.",
+                        "Comment or Initial key (TKEY). Skip if already tagged "
+                        "(default on) is resume-friendly.",
                     ],
                 ),
                 (

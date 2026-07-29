@@ -40,7 +40,7 @@ TIPS = {
     ),
     "include_subfolders": "Scan nested folders under the input root.",
     "skip_existing": (
-        "Skip files already tagged CORRUPTION=ok "
+        "On (default): skip files already tagged CORRUPTION=ok "
         "(WARNING and FAILED are always re-checked). "
         "Corruption tag is read by Charts."
     ),

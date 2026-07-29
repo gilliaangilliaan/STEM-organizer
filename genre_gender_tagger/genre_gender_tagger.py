@@ -2075,18 +2075,15 @@ def has_gender_tags(filename) -> bool:
 def filter_untagged_files(files, *, kind: str):
     """Drop already-tagged files unless OVERWRITE_TAGS. Returns (kept, skipped)."""
     if OVERWRITE_TAGS:
-        print(
-            "Overwrite existing tags is on — tagging all files "
-            "(not checking for existing tags).",
-            flush=True,
+        _log_intro(
+            "Skip if already tagged is off — tagging all files "
+            "(not checking for existing tags)."
         )
         return list(files), 0
     label = "gender" if kind == "gender" else "genre"
-    print(
+    _log_intro(
         f"Checking existing {label} tags "
-        f"({len(files):,} file(s)) — already tagged files will be skipped "
-        "(Overwrite existing tags is off)…",
-        flush=True,
+        f"({len(files):,} file(s)) — already tagged files will be skipped…"
     )
     check = has_gender_tags if kind == "gender" else has_genre_tags
     kept = []
@@ -2201,7 +2198,7 @@ if CONTENT_TYPE == "acapella":
     if skipped_tagged:
         _log_intro(
             f"Skipping {skipped_tagged} already tagged "
-            "(Overwrite existing tags is off)"
+            "(Skip if already tagged is on)"
         )
     _log_intro(f"To process: {len(files)}")
     print()
@@ -2210,7 +2207,7 @@ if CONTENT_TYPE == "acapella":
 
         _log_intro(
             "No untagged audio files left. "
-            "Enable overwrite to re-tag, or pick another folder."
+            "Turn off Skip if already tagged to re-tag, or pick another folder."
         )
         sys.exit(0)
 
@@ -3063,7 +3060,7 @@ _log_intro(
 if skipped_tagged:
     _log_intro(
         f"Skipping {skipped_tagged} already tagged "
-        "(Overwrite existing tags is off)"
+        "(Skip if already tagged is on)"
     )
 _log_intro(f"To process: {len(files)}")
 print()
@@ -3071,7 +3068,7 @@ print()
 if not files:
     _log_intro(
         "No untagged audio files left. "
-        "Enable overwrite to re-tag, or pick another folder."
+        "Turn off Skip if already tagged to re-tag, or pick another folder."
     )
     sys.exit(0)
 

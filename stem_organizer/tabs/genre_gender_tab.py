@@ -2,7 +2,7 @@
 
 Three sub-tabs:
   Genre  — Paths (input + include subfolders), Run mode (Batch/Per-file),
-           Tag style (Combined/Split), Tag options (Write metadata, Overwrite).
+           Tag style (Combined/Split), Tag options (Write metadata, Skip if already tagged).
   Gender — same shape + Voice gender field (Comment/Gender) + Reverb mode
            (Combined/Split).
   Vocal type — PANNs Cnn14 (Singing / Speech / Rapping / Humming / Choir).
@@ -103,13 +103,13 @@ TIPS = {
     ),
     "write_meta": "Write tags to FLAC/MP3/M4A/WAV. Disable to only generate the CSV.",
     "vocal_write_meta": "Write tags to FLAC/MP3/M4A/WAV. Disable to only log scores.",
-    "overwrite_tags": (
-        "Off (default): skip files that already have genre/gender tags "
-        "(resume-friendly). On: re-tag every file."
+    "skip_existing": (
+        "On (default): skip files that already have genre/gender tags "
+        "(resume-friendly). Off: re-tag every file."
     ),
-    "vocal_overwrite": (
-        "Off (default): skip files that already have a vocal-type tag. "
-        "On: re-tag every file."
+    "vocal_skip_existing": (
+        "On (default): skip files that already have a vocal-type tag. "
+        "Off: re-tag every file."
     ),
     "vocal_segments": (
         "Also score 2-second windows and list Singing/Speech/… over time in the LOG."
@@ -124,6 +124,15 @@ TIPS = {k: theme.format_tooltip(v) for k, v in TIPS.items()}
 
 # Hint text beside radios — QLabel + stylesheet (BodyLabel polish resets to white)
 _HINT_FONT_PX = theme.BODY_FONT_PX
+
+
+def _load_skip_existing(d: dict, skip_key: str, overwrite_key: str) -> bool:
+    """Prefer skip_existing; migrate legacy overwrite_tags (inverted). Default on."""
+    if skip_key in d:
+        return bool(d[skip_key])
+    if overwrite_key in d:
+        return not bool(d[overwrite_key])
+    return True
 
 
 def _split_option_label(text: str) -> tuple[str, str | None]:
@@ -337,10 +346,11 @@ class GenreGenderTab(QWidget):
         self.genre_write_meta = CheckBox("Write metadata tags")
         self.genre_write_meta.setChecked(True)
         self.genre_write_meta.setToolTip(TIPS["write_meta"])
-        self.genre_overwrite_tags = CheckBox("Overwrite existing tags")
-        self.genre_overwrite_tags.setToolTip(TIPS["overwrite_tags"])
+        self.genre_skip_existing = CheckBox("Skip if already tagged")
+        self.genre_skip_existing.setChecked(True)
+        self.genre_skip_existing.setToolTip(TIPS["skip_existing"])
         opts_lay.addWidget(self.genre_write_meta)
-        opts_lay.addWidget(self.genre_overwrite_tags)
+        opts_lay.addWidget(self.genre_skip_existing)
         v.addWidget(opts_card)
         v.addStretch(1)
 
@@ -434,10 +444,11 @@ class GenreGenderTab(QWidget):
         self.gender_write_meta = CheckBox("Write metadata tags")
         self.gender_write_meta.setChecked(True)
         self.gender_write_meta.setToolTip(TIPS["write_meta"])
-        self.gender_overwrite_tags = CheckBox("Overwrite existing tags")
-        self.gender_overwrite_tags.setToolTip(TIPS["overwrite_tags"])
+        self.gender_skip_existing = CheckBox("Skip if already tagged")
+        self.gender_skip_existing.setChecked(True)
+        self.gender_skip_existing.setToolTip(TIPS["skip_existing"])
         opts_lay.addWidget(self.gender_write_meta)
-        opts_lay.addWidget(self.gender_overwrite_tags)
+        opts_lay.addWidget(self.gender_skip_existing)
         v.addWidget(opts_card)
         v.addStretch(1)
 
@@ -518,10 +529,11 @@ class GenreGenderTab(QWidget):
         self.vocal_write_meta = CheckBox("Write metadata tags")
         self.vocal_write_meta.setChecked(True)
         self.vocal_write_meta.setToolTip(TIPS["vocal_write_meta"])
-        self.vocal_overwrite_tags = CheckBox("Overwrite existing tags")
-        self.vocal_overwrite_tags.setToolTip(TIPS["vocal_overwrite"])
+        self.vocal_skip_existing = CheckBox("Skip if already tagged")
+        self.vocal_skip_existing.setChecked(True)
+        self.vocal_skip_existing.setToolTip(TIPS["vocal_skip_existing"])
         opts_lay.addWidget(self.vocal_write_meta)
-        opts_lay.addWidget(self.vocal_overwrite_tags)
+        opts_lay.addWidget(self.vocal_skip_existing)
         v.addWidget(opts_card)
         v.addStretch(1)
 
@@ -592,7 +604,7 @@ class GenreGenderTab(QWidget):
                 self.genre_run_mode,
                 self.genre_tag_style,
                 self.genre_write_meta,
-                self.genre_overwrite_tags,
+                self.genre_skip_existing,
             )
         if panel == "gender":
             return (
@@ -602,7 +614,7 @@ class GenreGenderTab(QWidget):
                 self.gender_tag_field,
                 self.gender_reverb_mode,
                 self.gender_write_meta,
-                self.gender_overwrite_tags,
+                self.gender_skip_existing,
             )
         if panel == "vocal":
             return (
@@ -611,7 +623,7 @@ class GenreGenderTab(QWidget):
                 self.vocal_segments,
                 self.vocal_tag_field,
                 self.vocal_write_meta,
-                self.vocal_overwrite_tags,
+                self.vocal_skip_existing,
             )
         return ()
 
@@ -726,7 +738,7 @@ class GenreGenderTab(QWidget):
             write_meta=self.genre_write_meta.isChecked(),
             csv_path="",
             include_subfolders=self.genre_include_subfolders.isChecked(),
-            overwrite_tags=self.genre_overwrite_tags.isChecked(),
+            overwrite_tags=not self.genre_skip_existing.isChecked(),
             settings=self._settings,
             files_from=files_from,
             parent=self,
@@ -765,7 +777,7 @@ class GenreGenderTab(QWidget):
             write_meta=self.gender_write_meta.isChecked(),
             csv_path="",
             include_subfolders=self.gender_include_subfolders.isChecked(),
-            overwrite_tags=self.gender_overwrite_tags.isChecked(),
+            overwrite_tags=not self.gender_skip_existing.isChecked(),
             settings=self._settings,
             files_from=files_from,
             parent=self,
@@ -804,7 +816,7 @@ class GenreGenderTab(QWidget):
             input_dir,
             include_subfolders=self.vocal_include_subfolders.isChecked(),
             write_meta=self.vocal_write_meta.isChecked(),
-            overwrite_tags=self.vocal_overwrite_tags.isChecked(),
+            overwrite_tags=not self.vocal_skip_existing.isChecked(),
             tag_field=self.vocal_tag_field.value(),
             segment_sec=2.0 if self.vocal_segments.isChecked() else 0.0,
             batch_mode=self.vocal_run_mode.value() == "batch",
@@ -849,7 +861,7 @@ class GenreGenderTab(QWidget):
                         "Comment stores the bare label (e.g. Singing). Vocal type stores "
                         "the same label in a custom VOCAL_TYPE field. Confidence percentages "
                         "appear in the LOG only, not in tags.",
-                        "Overwrite off skips files that already look tagged (resume-friendly).",
+                        "Skip if already tagged (default on) is resume-friendly.",
                     ]),
                     ("Setup", [
                         "Frozen build: run install-deps.bat beside STEM-organizer.exe "
@@ -904,6 +916,7 @@ class GenreGenderTab(QWidget):
                     "Combined writes one tag as Genre/Style (or gender/reverb). Split writes separate tags.",
                     "Tags are written to FLAC, MP3, M4A, and WAV (ID3 / Vorbis / MP4 atoms as appropriate). "
                     "A CSV export is always written.",
+                    "Skip if already tagged (default on) is resume-friendly.",
                 ]),
                 ("Setup", [
                     "Frozen build: run install-deps.bat beside STEM-organizer.exe "
@@ -935,21 +948,21 @@ class GenreGenderTab(QWidget):
             "gg_genre_batch_mode": self.genre_run_mode.value() == "batch",
             "gg_genre_tag_style": self.genre_tag_style.value(),
             "gg_genre_write_meta": bool(self.genre_write_meta.isChecked()),
-            "gg_genre_overwrite_tags": bool(self.genre_overwrite_tags.isChecked()),
+            "gg_genre_skip_existing": bool(self.genre_skip_existing.isChecked()),
             "gg_gender_input_dir": display_path(self.gender_input_row.text()),
             "gg_gender_include_subfolders": bool(self.gender_include_subfolders.isChecked()),
             "gg_gender_batch_mode": self.gender_run_mode.value() == "batch",
             "gg_gender_tag_field": self.gender_tag_field.value(),
             "gg_gender_reverb_mode": self.gender_reverb_mode.value(),
             "gg_gender_write_meta": bool(self.gender_write_meta.isChecked()),
-            "gg_gender_overwrite_tags": bool(self.gender_overwrite_tags.isChecked()),
+            "gg_gender_skip_existing": bool(self.gender_skip_existing.isChecked()),
             "gg_vocal_input_dir": display_path(self.vocal_input_row.text()),
             "gg_vocal_include_subfolders": bool(self.vocal_include_subfolders.isChecked()),
             "gg_vocal_batch_mode": self.vocal_run_mode.value() == "batch",
             "gg_vocal_segments": bool(self.vocal_segments.isChecked()),
             "gg_vocal_tag_field": self.vocal_tag_field.value(),
             "gg_vocal_write_meta": bool(self.vocal_write_meta.isChecked()),
-            "gg_vocal_overwrite_tags": bool(self.vocal_overwrite_tags.isChecked()),
+            "gg_vocal_skip_existing": bool(self.vocal_skip_existing.isChecked()),
         }
 
     def load_settings(self) -> None:
@@ -962,7 +975,9 @@ class GenreGenderTab(QWidget):
             self.genre_run_mode.set_value("batch" if d.get("gg_genre_batch_mode", True) else "per_file")
             self.genre_tag_style.set_value(d.get("gg_genre_tag_style", "split"))
             self.genre_write_meta.setChecked(bool(d.get("gg_genre_write_meta", True)))
-            self.genre_overwrite_tags.setChecked(bool(d.get("gg_genre_overwrite_tags", False)))
+            self.genre_skip_existing.setChecked(
+                _load_skip_existing(d, "gg_genre_skip_existing", "gg_genre_overwrite_tags")
+            )
             if d.get("gg_gender_input_dir"):
                 self.gender_input_row.set_text(d["gg_gender_input_dir"])
             self.gender_include_subfolders.setChecked(bool(d.get("gg_gender_include_subfolders", True)))
@@ -970,7 +985,9 @@ class GenreGenderTab(QWidget):
             self.gender_tag_field.set_value(d.get("gg_gender_tag_field", "gender"))
             self.gender_reverb_mode.set_value(d.get("gg_gender_reverb_mode", "split"))
             self.gender_write_meta.setChecked(bool(d.get("gg_gender_write_meta", True)))
-            self.gender_overwrite_tags.setChecked(bool(d.get("gg_gender_overwrite_tags", False)))
+            self.gender_skip_existing.setChecked(
+                _load_skip_existing(d, "gg_gender_skip_existing", "gg_gender_overwrite_tags")
+            )
             if d.get("gg_vocal_input_dir"):
                 self.vocal_input_row.set_text(d["gg_vocal_input_dir"])
             self.vocal_include_subfolders.setChecked(bool(d.get("gg_vocal_include_subfolders", True)))
@@ -978,7 +995,9 @@ class GenreGenderTab(QWidget):
             self.vocal_segments.setChecked(bool(d.get("gg_vocal_segments", False)))
             self.vocal_tag_field.set_value(d.get("gg_vocal_tag_field", "vocal"))
             self.vocal_write_meta.setChecked(bool(d.get("gg_vocal_write_meta", True)))
-            self.vocal_overwrite_tags.setChecked(bool(d.get("gg_vocal_overwrite_tags", False)))
+            self.vocal_skip_existing.setChecked(
+                _load_skip_existing(d, "gg_vocal_skip_existing", "gg_vocal_overwrite_tags")
+            )
             # Genre / Gender: fall back to Classify output when empty.
             # Vocal type: always follow Gender (not Classify).
             classify_out = (d.get("output_dir") or "").strip()
@@ -1005,21 +1024,21 @@ class GenreGenderTab(QWidget):
             self.genre_run_mode.valueChanged,
             self.genre_tag_style.valueChanged,
             self.genre_write_meta.toggled,
-            self.genre_overwrite_tags.toggled,
+            self.genre_skip_existing.toggled,
             self.gender_input_row.entry.textChanged,
             self.gender_include_subfolders.toggled,
             self.gender_run_mode.valueChanged,
             self.gender_tag_field.valueChanged,
             self.gender_reverb_mode.valueChanged,
             self.gender_write_meta.toggled,
-            self.gender_overwrite_tags.toggled,
+            self.gender_skip_existing.toggled,
             self.vocal_input_row.entry.textChanged,
             self.vocal_include_subfolders.toggled,
             self.vocal_run_mode.valueChanged,
             self.vocal_segments.toggled,
             self.vocal_tag_field.valueChanged,
             self.vocal_write_meta.toggled,
-            self.vocal_overwrite_tags.toggled,
+            self.vocal_skip_existing.toggled,
         ):
             sig.connect(self._schedule_save)
 

@@ -38,7 +38,7 @@ TIPS = {
     ),
     "include_subfolders": "Scan nested folders under the input root.",
     "skip_existing": (
-        "Skip files already tagged COMPRESSION=lossless or lossy. "
+        "On (default): skip files already tagged COMPRESSION=lossless or lossy. "
         "Compression tag is read by Charts."
     ),
     "detect": (
@@ -118,9 +118,7 @@ class CompressionTab(QWidget):
         self.include_subfolders.setChecked(True)
         self.include_subfolders.setToolTip(TIPS["include_subfolders"])
         paths.body.layout().addWidget(self.include_subfolders)
-        self.skip_existing = CheckBox(
-            "Skip files already tagged COMPRESSION=lossless or lossy"
-        )
+        self.skip_existing = CheckBox("Skip if already tagged")
         self.skip_existing.setChecked(True)
         self.skip_existing.setToolTip(TIPS["skip_existing"])
         paths.body.layout().addWidget(self.skip_existing)
