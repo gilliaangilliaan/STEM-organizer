@@ -10,10 +10,11 @@ from __future__ import annotations
 import os
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from pathlib import Path
 from typing import Callable, Optional
 
+from ..integrity_pool import integrity_pool
 from ..meta_tags import read_custom_tag, write_compression_tag
 from ..run_summary import emit_run_summary
 
@@ -290,7 +291,7 @@ def run_compression_detect(
 
         # Process pool — flac-detective CLI uses the same pattern.
         # Log "stopped" only after the pool fully shuts down (workers released).
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        with integrity_pool(max_workers=workers) as pool:
             futures = {
                 pool.submit(_analyze_path_worker, str(p)): p for p in to_analyze
             }

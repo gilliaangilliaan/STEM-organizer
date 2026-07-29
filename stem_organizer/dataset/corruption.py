@@ -5,11 +5,12 @@ from __future__ import annotations
 import subprocess
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Optional
 
+from ..integrity_pool import integrity_pool
 from ..meta_tags import read_corruption_tag, write_corruption_tag
 from ..run_summary import emit_run_summary
 from ..corruption.deep import verify_deep
@@ -256,7 +257,7 @@ def run_corruption_detect(
     if to_scan and not stopped():
         live(0, len(to_scan), "files scanned")
         # Process pool — picklable top-level worker
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        with integrity_pool(max_workers=workers) as pool:
             futures = {
                 pool.submit(
                     _analyze_one,

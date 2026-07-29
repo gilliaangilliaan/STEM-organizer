@@ -18,12 +18,13 @@ import re
 import shutil
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
 
+from ..integrity_pool import integrity_pool
 from ..run_summary import emit_run_summary
 
 LogFn = Callable[[str, str], None]
@@ -791,7 +792,7 @@ def run_convert_to_flac(
                     )
                 bump_progress()
         else:
-            with ProcessPoolExecutor(max_workers=workers) as pool:
+            with integrity_pool(max_workers=workers) as pool:
                 futures = {
                     pool.submit(_convert_one_worker, payload): payload
                     for payload in jobs

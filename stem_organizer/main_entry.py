@@ -103,6 +103,9 @@ def run(argv: list[str] | None = None) -> int:
 
         if os.environ.get("STEM_ALLOW_MULTI", "").strip() not in ("1", "true", "True", "yes", "YES"):
             if not acquire_single_instance():
+                # Pool workers re-exec the frozen .exe — exit quiet, no dialog.
+                if _is_multiprocessing_child():
+                    return 0
                 show_info(None, "STEM organizer", "Another instance is already running.")
                 return 0
     except Exception:
