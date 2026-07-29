@@ -117,7 +117,7 @@ _CHIP_FG_LIGHT = "#FFFFFF"
 
 LOG_GG_FG = {
     "dry": "#262833",
-    "wet": _CHIP_FG_LIGHT,
+    "wet": theme.COLORS["log_fg"],
     "lossless": "#262833",
     "lossy": "#262833",
     # AUTHENTIC / FAKE_CERTAIN: white text on dark badges.
@@ -356,7 +356,7 @@ class ChipRenderer:
     ) -> QPixmap:
         """Genre (dry / custom fill) / Style (wet) chip — min width = stem chips."""
         display = (text or "?").strip() or "?"
-        cache_key = f"ggval:{style_key}:{bg_hex or ''}:{display}"
+        cache_key = f"ggval:v2:{style_key}:{bg_hex or ''}:{display}"
         cached = self._chip_pix_cache.get(cache_key)
         if cached is not None:
             return cached
