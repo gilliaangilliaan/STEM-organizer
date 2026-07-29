@@ -146,7 +146,7 @@ class PairFinderTab(QWidget):
         self.reference_side = "acapella"
         self.strictness = 75.0
         self.use_filename_fallback = True
-        self.include_subfolders = False
+        self.include_subfolders = True
         self.ignore_parentheses = True
         self.ignore_square_brackets = True
         self.ignore_extra_spaces = True
@@ -221,6 +221,7 @@ class PairFinderTab(QWidget):
         )
         self._add_reference_row(folders.body, label_width=_path_lbl_w)
         self.include_subfolders_chk = CheckBox("Include subfolders")
+        self.include_subfolders_chk.setChecked(True)
         self.include_subfolders_chk.setToolTip(TIPS["include_subfolders"])
         folders.body.layout().addWidget(self.include_subfolders_chk)
         v.addWidget(folders)
@@ -1117,7 +1118,7 @@ class PairFinderTab(QWidget):
             if d.get("strictness") is not None:
                 self.strictness_slider.setValue(int(float(d["strictness"])))
             self.use_filename_fallback_chk.setChecked(bool(d.get("use_filename_fallback", True)))
-            self.include_subfolders_chk.setChecked(bool(d.get("include_subfolders", False)))
+            self.include_subfolders_chk.setChecked(bool(d.get("include_subfolders", True)))
             rules = IgnoreRules.from_dict(d.get("ignore_rules"))
             self.ignore_parens_chk.setChecked(rules.ignore_parentheses)
             self.ignore_brackets_chk.setChecked(rules.ignore_square_brackets)
