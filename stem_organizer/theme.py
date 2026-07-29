@@ -1388,6 +1388,12 @@ def polish_fluent_controls(root: QWidget) -> None:
             if hasattr(lbl, "setTextColor"):
                 lbl.setTextColor(DARK["text_dim"], DARK["text_dim"])
             continue
+        # How it works cards — same dim as RadioHint (AudioTester-style)
+        if lbl.objectName() == "HowItWorks":
+            fluent_set_font(lbl, BODY_FONT_PX)
+            if hasattr(lbl, "setTextColor"):
+                lbl.setTextColor(DARK["text_dim"], DARK["text_dim"])
+            continue
         fluent_set_font(lbl, BODY_FONT_PX)
         if hasattr(lbl, "setTextColor"):
             lbl.setTextColor(soft, soft)

@@ -37,6 +37,24 @@ def style_option_hint(lbl: QLabel) -> None:
     )
 
 
+def style_how_it_works(lbl: QLabel) -> None:
+    """Same dim text as RadioHint / AudioTester-style paren labels."""
+    dim = theme.DARK["text_dim"]
+    lbl.setObjectName("HowItWorks")
+    if hasattr(lbl, "setTextColor"):
+        lbl.setTextColor(dim, dim)
+    lbl.setStyleSheet(
+        f"""
+        QLabel#HowItWorks {{
+            color: {dim};
+            font-family: "{theme.FONT_FAMILY}";
+            font-size: {_HINT_FONT_PX}px;
+            background: transparent;
+        }}
+        """
+    )
+
+
 def option_with_hint(
     control: QWidget,
     full_label: str,

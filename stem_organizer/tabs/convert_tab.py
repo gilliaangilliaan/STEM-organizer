@@ -30,6 +30,7 @@ from ..widgets.action_bar import ActionBarPage
 from ..widgets.action_button import action_button
 from ..widgets.dialogs import help_dialog, show_info
 from ..widgets.info_icon import InfoIcon
+from ..widgets.option_hint import style_how_it_works
 from ..widgets.path_row import PathRow
 from ..widgets.section import Section
 from ..workers.overview_worker import OverviewWorker
@@ -319,6 +320,7 @@ class ConvertTab(QWidget):
             lbl = BodyLabel(paragraph)
             lbl.setWordWrap(True)
             lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+            style_how_it_works(lbl)
             note_lay.addWidget(lbl)
         self._inner.addWidget(note)
 
