@@ -780,19 +780,6 @@ if _GG_MODE:
         )
         sys.exit(1)
 
-    print(
-        f"[GG] mode={CONTENT_TYPE}  folder={INPUT_FOLDER}"
-        f"  batch={BATCH_MODE}  write_meta={WRITE_METADATA}"
-        f"  overwrite={OVERWRITE_TAGS}"
-        f"  subfolders={INCLUDE_SUBFOLDERS}"
-        + (
-            f"  reverb={REVERB_TAG_MODE}"
-            if CONTENT_TYPE == "acapella"
-            else ""
-        ),
-        flush=True,
-    )
-
 
 # ==========================================================
 # ASK CONTENT TYPE (instrumental vs acapella)
