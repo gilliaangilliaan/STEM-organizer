@@ -326,7 +326,7 @@ class ChipRenderer:
         labels grow. Text is white on colored category badges.
         """
         display = (label or "?").strip().lower() or "?"
-        cache_key = f"cat:{display}:{bg_hex}"
+        cache_key = f"cat:w:{display}:{bg_hex}"
         cached = self._chip_pix_cache.get(cache_key)
         if cached is not None:
             return cached

@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QStackedLayout,
+    QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QVBoxLayout,
@@ -419,8 +420,9 @@ class PreviewModel(QAbstractTableModel):
                 return QColor(theme.COLORS["panel"])
             return None
         if role == Qt.ForegroundRole:
-            # COL_CATEGORY is painted by _CategoryBadgeDelegate (badge bg + white text);
-            # no per-cell foreground needed there.
+            # COL_CATEGORY is painted by _CategoryBadgeDelegate (badge bg + white text).
+            if col == COL_CATEGORY:
+                return None
             # Strikethrough / emphasis only while selected — deselected rows look normal.
             active_change = (
                 preview is not None and preview.changed and track.selected
@@ -608,6 +610,12 @@ class _CategoryBadgeDelegate(QStyledItemDelegate):
         chip_text = label.lower()
         pix = self._chips.category_pixmap(chip_text, color_hex)
         cell = option.rect
+        # Erase default cell text (DisplayRole) before drawing the chip pixmap.
+        bg = option.backgroundBrush.color() if option.backgroundBrush.style() != Qt.NoBrush else QColor(
+            theme.COLORS["panel"] if index.row() % 2 else theme.COLORS["panel2"]
+        )
+        if option.state & QStyle.State_Selected:
+            bg = option.palette.color(option.palette.ColorRole.Highlight)
         avail = cell.adjusted(
             self._BADGE_INSET_H,
             self._BADGE_INSET_V,
@@ -621,6 +629,7 @@ class _CategoryBadgeDelegate(QStyledItemDelegate):
 
         painter.save()
         painter.setRenderHint(QPainter.TextAntialiasing, True)
+        painter.fillRect(cell, bg)
         painter.setClipRect(avail)
         painter.drawPixmap(x, y, pix)
         painter.restore()
