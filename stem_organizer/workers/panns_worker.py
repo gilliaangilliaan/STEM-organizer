@@ -43,6 +43,13 @@ _LIBSNDFILE_NOISE_RE = re.compile(
     r"|^\[.*libmpg123.*\]\s*error:",
     re.IGNORECASE,
 )
+# PANNs bootstrap chatter (paths / load) — keep real download / error lines.
+_PANNS_MODEL_NOISE_RE = re.compile(
+    r"^checkpoint:"
+    r"|^loading PANNs Cnn14"
+    r"|^Checkpoint path:",
+    re.IGNORECASE,
+)
 
 
 class PannsWorker(QThread):
@@ -196,6 +203,8 @@ class PannsWorker(QThread):
         if self._stop_requested:
             return
         if _LIBSNDFILE_NOISE_RE.search(bare):
+            return
+        if _PANNS_MODEL_NOISE_RE.search(bare):
             return
         if not bare:
             if not self._batch_mode:

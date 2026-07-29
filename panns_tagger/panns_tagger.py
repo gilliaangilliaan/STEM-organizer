@@ -312,7 +312,6 @@ def ensure_panns_assets(*, status=_status) -> Path:
     if not _ckpt_ok(ckpt_local) and _ckpt_ok(ckpt_home):
         import shutil
 
-        status(f"  checkpoint: copying from {ckpt_home}")
         shutil.copy2(ckpt_home, ckpt_local)
     if not _ckpt_ok(ckpt_local):
         _download_file(_CHECKPOINT_URL, ckpt_local, status=status)
@@ -456,9 +455,12 @@ def load_backend(
     if not ckpt_path.is_file():
         raise SystemExit(f"\nERROR: Cnn14 checkpoint missing: {ckpt_path}\n")
 
-    status(f"  checkpoint: {ckpt_path}")
-    status(f"  loading PANNs Cnn14 on {device}...")
-    tagger = AudioTagging(checkpoint_path=str(ckpt_path), device=device)
+    import contextlib
+    import io
+
+    # AudioTagging prints "Checkpoint path: …" — keep Vocal LOG clean.
+    with contextlib.redirect_stdout(io.StringIO()):
+        tagger = AudioTagging(checkpoint_path=str(ckpt_path), device=device)
 
     labels = list(panns_labels)
     return _PannsBackend(tagger, labels, device)
