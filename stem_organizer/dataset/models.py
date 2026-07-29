@@ -1,0 +1,306 @@
+"""Dataset overview models + demo inventory."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+VOCAL_TYPES = ("Singing", "Speech", "Rapping", "Humming", "Choir")
+GENDERS = ("female", "male")
+REVERBS = ("dry", "wet")
+# Discogs-ish sample genre set (~16) for demo charts
+DEMO_GENRES = (
+    "Electronic",
+    "Hip Hop",
+    "Rock",
+    "Pop",
+    "R&B",
+    "Jazz",
+    "Classical",
+    "Folk",
+    "Metal",
+    "Reggae",
+    "Blues",
+    "Country",
+    "Latin",
+    "Soundtrack",
+    "World",
+    "Other",
+)
+
+# MAEST Discogs519 top-level genres (Genre tab output).
+MAEST_GENRES = (
+    "Blues",
+    "Brass & Military",
+    "Children's",
+    "Classical",
+    "Electronic",
+    "Folk, World, & Country",
+    "Funk / Soul",
+    "Hip Hop",
+    "Jazz",
+    "Latin",
+    "Non-Music",
+    "Pop",
+    "Reggae",
+    "Rock",
+    "Stage & Screen",
+)
+
+# Fixed colors for MAEST genres (Genre + Style charts + export).
+# Saturated for dark UI — bumped from bright-bg palette.
+MAEST_GENRE_COLORS: dict[str, str] = {
+    "Blues": "#2D53D3",
+    "Brass & Military": "#95763D",
+    "Children's": "#FFD415",
+    "Classical": "#A8A8B0",
+    "Electronic": "#00E8CC",
+    "Folk, World, & Country": "#3D6C77",
+    "Funk / Soul": "#FF9900",
+    "Hip Hop": "#FF7040",
+    "Jazz": "#FFFF5C",
+    "Latin": "#E64CB9",
+    "Non-Music": "#000000",
+    "Pop": "#B47AFF",
+    "Reggae": "#66C137",
+    "Rock": "#F04545",
+    "Stage & Screen": "#5C5D5F",
+}
+
+# Styles nested under each of the 16 genres (demo + chart template).
+DEMO_STYLES_BY_GENRE: dict[str, tuple[str, ...]] = {
+    "Electronic": ("House", "Techno", "Trance", "Drum and Bass", "Dubstep"),
+    "Hip Hop": ("Trap", "Boom Bap", "UK Drill", "Lo-Fi", "Phonk"),
+    "Rock": ("Indie Rock", "Alternative", "Punk", "Progressive"),
+    "Pop": ("Dance Pop", "Synth Pop", "Indie Pop", "Electropop"),
+    "R&B": ("Contemporary R&B", "Neo Soul", "Quiet Storm"),
+    "Jazz": ("Bebop", "Fusion", "Smooth Jazz", "Nu Jazz"),
+    "Classical": ("Baroque", "Romantic", "Modern Classical", "Opera"),
+    "Folk": ("Indie Folk", "Traditional", "Folk Rock"),
+    "Metal": ("Death Metal", "Black Metal", "Metalcore", "Doom"),
+    "Reggae": ("Roots", "Dancehall", "Dub", "Ska"),
+    "Blues": ("Delta Blues", "Electric Blues", "Blues Rock"),
+    "Country": ("Outlaw", "Americana", "Country Pop"),
+    "Latin": ("Reggaeton", "Salsa", "Latin Pop", "Cumbia"),
+    "Soundtrack": ("Film Score", "Game Score", "Trailer"),
+    "World": ("Afrobeat", "Celtic", "Balkan", "Middle Eastern"),
+    "Other": ("Experimental", "Noise", "Spoken Word"),
+}
+
+
+@dataclass
+class ClassBucket:
+    """One discrete class (e.g. Singing, female, Rock)."""
+
+    name: str
+    count: int = 0
+    bytes: int = 0
+    duration_sec: float = 0.0
+
+    @property
+    def avg_duration_sec(self) -> float:
+        return self.duration_sec / self.count if self.count else 0.0
+
+
+@dataclass
+class ContinuousStats:
+    """Continuous metric (SI-SDR, duration)."""
+
+    values: list[float] = field(default_factory=list)
+
+    @property
+    def count(self) -> int:
+        return len(self.values)
+
+    @property
+    def total(self) -> float:
+        return float(sum(self.values)) if self.values else 0.0
+
+    @property
+    def average(self) -> float:
+        return self.total / self.count if self.count else 0.0
+
+    @property
+    def median(self) -> float:
+        if not self.values:
+            return 0.0
+        s = sorted(self.values)
+        mid = len(s) // 2
+        if len(s) % 2:
+            return float(s[mid])
+        return float(s[mid - 1] + s[mid]) / 2.0
+
+
+@dataclass
+class RoleCounts:
+    instrumental: int = 0
+    vocal: int = 0
+    samples: int = 0
+    pair_folders: int = 0
+
+    @property
+    def total_units(self) -> int:
+        return self.instrumental + self.vocal + self.samples
+
+
+@dataclass
+class OverviewStats:
+    """Aggregated library snapshot for Dataset overview charts."""
+
+    demo: bool = True
+    roles: RoleCounts = field(default_factory=RoleCounts)
+    total_files: int = 0
+    total_bytes: int = 0
+    duration: ContinuousStats = field(default_factory=ContinuousStats)
+    sdr: ContinuousStats = field(default_factory=ContinuousStats)
+    vocal_type: dict[str, ClassBucket] = field(default_factory=dict)
+    gender: dict[str, ClassBucket] = field(default_factory=dict)
+    reverb: dict[str, ClassBucket] = field(default_factory=dict)
+    genre: dict[str, ClassBucket] = field(default_factory=dict)
+    # genre → style → bucket (styles as shares within that genre)
+    styles_by_genre: dict[str, dict[str, ClassBucket]] = field(default_factory=dict)
+    style_top: dict[str, ClassBucket] = field(default_factory=dict)
+    style_other_count: int = 0
+    compression: dict[str, ClassBucket] = field(default_factory=dict)
+    key: dict[str, ClassBucket] = field(default_factory=dict)
+
+    def class_pct(self, bucket: ClassBucket, *, of: Optional[int] = None) -> float:
+        base = of if of is not None else self.total_files
+        return (100.0 * bucket.count / base) if base else 0.0
+
+
+def style_genres_from_stats(stats: OverviewStats) -> list[tuple[str, int]]:
+    """Tagged genres only — MAEST order first, then extras by count desc."""
+    tagged = {name: b.count for name, b in stats.genre.items() if b.count > 0}
+    if not tagged:
+        return []
+    out: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for name in MAEST_GENRES:
+        if name in tagged:
+            out.append((name, tagged[name]))
+            seen.add(name)
+    extras = sorted(
+        ((n, c) for n, c in tagged.items() if n not in seen),
+        key=lambda x: (-x[1], x[0].lower()),
+    )
+    out.extend(extras)
+    return out
+
+
+def make_demo_overview() -> OverviewStats:
+    """Plausible demo inventory so users see charts before a real scan."""
+    import random
+
+    rng = random.Random(42)
+    stats = OverviewStats(demo=True)
+
+    # Role imbalance (pairs contribute equally to instrumental + vocal)
+    pair_n = 12_400
+    inst_extra = 28_000
+    voc_extra = 41_200
+    samples_n = 4_800
+    stats.roles = RoleCounts(
+        instrumental=inst_extra + pair_n,
+        vocal=voc_extra + pair_n,
+        samples=samples_n,
+        pair_folders=pair_n,
+    )
+    stats.total_files = stats.roles.total_units
+
+    # Duration / size (synthetic)
+    n_files = stats.total_files
+    for _ in range(2_000):  # subsample for continuous stats speed
+        dur = max(5.0, rng.gauss(185.0, 55.0))
+        stats.duration.values.append(dur)
+    stats.total_bytes = int(1.85 * (1024**4))  # ~1.85 TB
+
+    # SDR demo — histogram 30–55 dB (last bin is 50–55, exclusive upper → cap < 55)
+    for _ in range(3_000):
+        stats.sdr.values.append(max(30.0, min(54.99, rng.gauss(40.0, 5.0))))
+
+    def _fill(names, weights, store: dict[str, ClassBucket], *, scale: int) -> None:
+        total_w = sum(weights)
+        for name, w in zip(names, weights):
+            c = int(round(scale * w / total_w))
+            b = ClassBucket(
+                name=name,
+                count=c,
+                bytes=c * int(rng.randint(8, 22) * 1024 * 1024),
+                duration_sec=c * max(30.0, rng.gauss(160.0, 40.0)),
+            )
+            store[name] = b
+
+    _fill(
+        VOCAL_TYPES,
+        (58, 18, 12, 5, 7),
+        stats.vocal_type,
+        scale=voc_extra + pair_n,
+    )
+    _fill(GENDERS, (54, 46), stats.gender, scale=voc_extra + pair_n)
+    _fill(REVERBS, (42, 58), stats.reverb, scale=voc_extra + pair_n)
+    _fill(
+        DEMO_GENRES,
+        (14, 11, 10, 9, 8, 6, 5, 5, 5, 4, 4, 4, 4, 4, 4, 3),
+        stats.genre,
+        scale=n_files,
+    )
+
+    # Nested styles under each genre (percentages sum ~100% within genre).
+    flat_styles: dict[str, ClassBucket] = {}
+    for genre_name, styles in DEMO_STYLES_BY_GENRE.items():
+        g_bucket = stats.genre.get(genre_name)
+        g_count = g_bucket.count if g_bucket else 0
+        if g_count <= 0 or not styles:
+            continue
+        weights = [rng.randint(4, 18) for _ in styles]
+        total_w = sum(weights) or 1
+        nested: dict[str, ClassBucket] = {}
+        assigned = 0
+        for i, (style_name, w) in enumerate(zip(styles, weights)):
+            if i == len(styles) - 1:
+                c = max(0, g_count - assigned)
+            else:
+                c = int(round(g_count * w / total_w))
+                assigned += c
+            b = ClassBucket(
+                name=style_name,
+                count=c,
+                bytes=c * int(rng.randint(8, 22) * 1024 * 1024),
+                duration_sec=c * max(30.0, rng.gauss(160.0, 40.0)),
+            )
+            nested[style_name] = b
+            prev = flat_styles.get(style_name)
+            if prev is None:
+                flat_styles[style_name] = ClassBucket(
+                    name=style_name,
+                    count=c,
+                    bytes=b.bytes,
+                    duration_sec=b.duration_sec,
+                )
+            else:
+                prev.count += c
+                prev.bytes += b.bytes
+                prev.duration_sec += b.duration_sec
+        stats.styles_by_genre[genre_name] = nested
+
+    # Keep a flat top-N for any legacy callers.
+    ranked = sorted(flat_styles.values(), key=lambda b: -b.count)
+    stats.style_top = {b.name: b for b in ranked[:20]}
+    stats.style_other_count = max(
+        0, n_files - sum(b.count for b in flat_styles.values())
+    )
+
+    _fill(
+        ("lossless", "lossy"),
+        (78, 22),
+        stats.compression,
+        scale=n_files,
+    )
+    from ..musical_keys import KEY_DISPLAY_ORDER
+
+    # Spread demo keys across the 24-key chart order.
+    key_weights = [max(1, 12 - (i % 12)) for i in range(len(KEY_DISPLAY_ORDER))]
+    _fill(KEY_DISPLAY_ORDER, key_weights, stats.key, scale=n_files)
+    return stats

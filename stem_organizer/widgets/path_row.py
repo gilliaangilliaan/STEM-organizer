@@ -106,6 +106,16 @@ class PathRow(QWidget):
     def changed_connect(self, callback: Callable[[str], None]) -> None:
         self.entry.textChanged.connect(callback)
 
+    def setEnabled(self, enabled: bool) -> None:  # noqa: N802 Qt name
+        """Busy-lock greys the path field only — Browse / Open stay usable."""
+        # Keep the row widget itself enabled so child buttons can stay active
+        # (Qt forces children disabled when the parent is disabled).
+        super().setEnabled(True)
+        self._lbl.setEnabled(enabled)
+        self.entry.setEnabled(enabled)
+        self.browse_btn.setEnabled(True)
+        self.open_btn.setEnabled(True)
+
     # ---- internals ----
 
     def _browse(self) -> None:

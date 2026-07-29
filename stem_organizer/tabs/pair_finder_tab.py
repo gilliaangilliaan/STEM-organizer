@@ -12,6 +12,7 @@ Sort / Align (Align).
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +53,7 @@ from stem_align import (
 )
 
 from .. import theme
+from ..run_summary import emit_run_summary
 from ..settings_store import SettingsStore, app_dir, display_path
 from ..widgets.action_bar import ActionBarPage
 from ..widgets.action_button import action_button
@@ -102,7 +104,7 @@ TIPS = {
     ),
     "align_with_original": "Folders that received an original song (auto-filled as stems root / with_original).",
     "align_without_original": "Folders still missing an original (auto-filled as stems root / without_original).",
-    "find_pairs": "Match acapellas to instrumentals by tags (or filename) and move pairs into Output.",
+    "find_pairs": "Match instrumentals to vocals by tags (or filename) and move pairs into Output.",
     "organize": "Group matched files inside Output into Artist - Title song folders.",
     "export_list_btn": "Write song-folder names from Stems root into the export list file.",
     "distribute_btn": "Copy originals from the inbox into matching song folders under Stems root.",
@@ -133,6 +135,7 @@ class PairFinderTab(QWidget):
         self._settings = settings
         self._worker: Optional[PairWorker] = None
         self._busy = False
+        self._busy_panel: Optional[str] = None  # "match" | "align"
         self._loading = False
         self._custom_keyword_edits: list[LineEdit] = []
 
@@ -190,25 +193,25 @@ class PairFinderTab(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(0, 8, 0, 10)
         header.setSpacing(6)
-        title = BodyLabel("Match acapella/instrumental files by artist/title tags, then organize pairs into song folders")
+        title = BodyLabel("Match instrumental/vocal files by artist/title tags, then organize pairs into song folders")
         title.setObjectName("HeaderDesc")
         header.addWidget(title)
         header.addWidget(InfoIcon(inner, on_click=self._show_match_help))
         header.addStretch(1)
         v.addLayout(header)
 
-        # Folders — short labels (CTk: Acapella / Instrumental / Pairs output)
+        # Folders — Instrumental first, then Vocal (formerly Acapella)
         folders = Section(inner, "Paths")
         folders.body.layout().setSpacing(5)
         _path_lbl_w = 80  # fits "Instrumental" at body font
-        self.acapella_row = PathRow(
-            folders.body, "Acapella",
-            tip_text=TIPS["acapella"],
-            label_width=_path_lbl_w,
-        )
         self.instrumental_row = PathRow(
             folders.body, "Instrumental",
             tip_text=TIPS["instrumental"],
+            label_width=_path_lbl_w,
+        )
+        self.acapella_row = PathRow(
+            folders.body, "Vocal",
+            tip_text=TIPS["acapella"],
             label_width=_path_lbl_w,
         )
         self.pairs_output_row = PathRow(
@@ -265,10 +268,10 @@ class PairFinderTab(QWidget):
         kw_lbl = BodyLabel("Custom keywords to ignore")
         kw_row.addWidget(kw_lbl)
         kw_row.addStretch(1)
-        add_kw = action_button(
+        self.add_kw_btn = action_button(
             "+ Add", on_click=lambda: self._add_custom_keyword_row(), tip=TIPS["add_keyword"]
         )
-        kw_row.addWidget(add_kw)
+        kw_row.addWidget(self.add_kw_btn)
         ignore.body.layout().addLayout(kw_row)
 
         self._custom_keywords_host = QWidget()
@@ -295,7 +298,7 @@ class PairFinderTab(QWidget):
         # 4px — same as PathRow label→LineEdit so the Acapella dot lines up with inputs
         row.addSpacing(4)
         self._ref_group = QButtonGroup(self)
-        self.ref_acapella = RadioButton("Acapella")
+        self.ref_acapella = RadioButton("Vocal")
         self.ref_instrumental = RadioButton("Instrumental")
         self.ref_acapella.setChecked(True)
         self._ref_group.addButton(self.ref_acapella, 0)
@@ -322,7 +325,7 @@ class PairFinderTab(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(0, 8, 0, 10)
         header.setSpacing(6)
-        title = BodyLabel("Align instrumentals + acapellas to the original song")
+        title = BodyLabel("Align instrumental/vocal files to the original song")
         title.setObjectName("HeaderDesc")
         header.addWidget(title)
         header.addWidget(InfoIcon(inner, on_click=self._show_align_help))
@@ -458,7 +461,7 @@ class PairFinderTab(QWidget):
             }}
             PushButton#KeywordRemove:hover {{
                 background-color: {t['danger']};
-                color: #ffffff;
+                color: {t['text']};
                 border: 1px solid {t['danger']};
             }}
             """
@@ -620,13 +623,70 @@ class PairFinderTab(QWidget):
             return False
         return True
 
-    def _set_busy(self, busy: bool, status: str = "") -> None:
+    @staticmethod
+    def _enable_widgets(enabled: bool, *widgets) -> None:
+        for w in widgets:
+            if w is None:
+                continue
+            try:
+                w.setEnabled(enabled)
+            except Exception:
+                pass
+
+    def _set_match_settings_enabled(self, enabled: bool) -> None:
+        self._enable_widgets(
+            enabled,
+            self.acapella_row,
+            self.instrumental_row,
+            self.pairs_output_row,
+            self.ref_acapella,
+            self.ref_instrumental,
+            self.include_subfolders_chk,
+            self.strictness_slider,
+            self.use_filename_fallback_chk,
+            self.ignore_parens_chk,
+            self.ignore_brackets_chk,
+            self.ignore_spaces_chk,
+            self.add_kw_btn,
+            self._custom_keywords_host,
+        )
+        for edit in self._custom_keyword_edits:
+            host = edit.parentWidget()
+            self._enable_widgets(enabled, host if host is not None else edit)
+
+    def _set_align_settings_enabled(self, enabled: bool) -> None:
+        self._enable_widgets(
+            enabled,
+            self.stems_root_row,
+            self.export_file_row,
+            self.originals_inbox_row,
+            self.with_original_row,
+            self.without_original_row,
+            self.analysis_sec_spin,
+            self.align_backup_chk,
+            self.align_skip_existing_chk,
+        )
+
+    def _set_busy(
+        self, busy: bool, status: str = "", *, panel: Optional[str] = None
+    ) -> None:
+        """Lock Match or Align settings for the started job only."""
         self._busy = busy
+        self._busy_panel = panel if busy else None
         for btn in (
             self.find_btn, self.organize_btn, self.export_list_btn,
             self.distribute_btn, self.sort_folders_btn, self.align_btn,
         ):
             btn.setEnabled(not busy)
+        if busy and panel == "match":
+            self._set_match_settings_enabled(False)
+            self._set_align_settings_enabled(True)
+        elif busy and panel == "align":
+            self._set_match_settings_enabled(True)
+            self._set_align_settings_enabled(False)
+        else:
+            self._set_match_settings_enabled(True)
+            self._set_align_settings_enabled(True)
         if busy:
             self.request_status_running.emit()
             if status:
@@ -634,15 +694,40 @@ class PairFinderTab(QWidget):
         else:
             self.request_status_idle.emit(status or "Idle")
 
-    def _start_worker(self, action, status: str, *, starting: str | None = None) -> None:
+    def _start_worker(
+        self,
+        action,
+        status: str,
+        *,
+        starting: str | None = None,
+        panel: str = "match",
+    ) -> None:
         if not self._guard():
             return
         self.request_clear_log.emit()
         # Instant feedback before the worker thread does any I/O
         # Startup/config indented like Classify; === Summary headers stay flush.
         label = (starting or status).rstrip(".… ")
+        win = self.window()
+        if win is not None and hasattr(win, "set_log_export_prefix"):
+            _PREFIX = {
+                "Find pairs": "find_pairs",
+                "Organize folder": "organize",
+                "Export list": "export_list",
+                "Distribute originals": "distribute",
+                "Sort folders": "sort_folders",
+                "Align stems": "align",
+            }
+            win.set_log_export_prefix(
+                _PREFIX.get(
+                    label,
+                    "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in label.lower())
+                    .strip("_")
+                    or "match",
+                )
+            )
         self.request_log.emit(f"  Starting {label}...", "info")
-        self._set_busy(True, status)
+        self._set_busy(True, status, panel=panel)
         self._worker = PairWorker(action, parent=self)
         self._worker.log_line.connect(self.request_log)
         self._worker.progress.connect(self.request_progress)
@@ -680,6 +765,7 @@ class PairFinderTab(QWidget):
         ignore_rules = self._collect_ignore_rules()
 
         def action(on_log, on_progress):
+            t0 = time.monotonic()
             if ref_acapella:
                 reference_dir, partner_dir = acapella, instrumental
                 ref_label, partner_label = "acapella", "instrumental"
@@ -720,7 +806,11 @@ class PairFinderTab(QWidget):
                     on_log(f"  · {track.path.name}", "warn")
                 if len(result.unmatched_partner) > 20:
                     on_log(f"  … and {len(result.unmatched_partner) - 20} more", "warn")
-            self._log_feature_summary(on_log, "Find pairs", lines=[
+            self._log_feature_summary(
+                on_log,
+                "Find pairs",
+                elapsed=time.monotonic() - t0,
+                lines=[
                 (f"Reference: {ref_label} · {fallback_note}", "info"),
                 (f"Threshold: {threshold:.0%}", "info"),
                 (f"Pairs: {len(result.pairs):,}", "ok"),
@@ -729,7 +819,7 @@ class PairFinderTab(QWidget):
             ])
             self._worker.set_final_status(f"Done · {len(result.pairs)} pair(s) moved")
 
-        self._start_worker(action, "Finding pairs…", starting="Find pairs")
+        self._start_worker(action, "Finding pairs…", starting="Find pairs", panel="match")
 
     # Organize
     def _start_organize(self) -> None:
@@ -749,6 +839,7 @@ class PairFinderTab(QWidget):
         ignore_rules = self._collect_ignore_rules()
 
         def action(on_log, on_progress):
+            t0 = time.monotonic()
             on_log(f"  Organizing matched files in:\n    {folder}", "info")
             moved = organize_matched_folder(
                 folder, strictness=strictness, use_filename_fallback=use_filename,
@@ -765,10 +856,15 @@ class PairFinderTab(QWidget):
                 on_log(f"✓ {dest_dir.name}/", "ok")
             if len(moved) > show:
                 on_log(f"… and {len(moved) - show:,} more folder(s)", "info")
-            self._log_feature_summary(on_log, "Organize folder", lines=[(f"Folders created: {len(moved):,}", "ok")])
+            self._log_feature_summary(
+                on_log,
+                "Organize folder",
+                elapsed=time.monotonic() - t0,
+                lines=[(f"Folders created: {len(moved):,}", "ok")],
+            )
             self._worker.set_final_status(f"Done · {len(moved)} folder(s) created")
 
-        self._start_worker(action, "Organizing…", starting="Organize folder")
+        self._start_worker(action, "Organizing…", starting="Organize folder", panel="match")
 
     # Export list
     def _start_export_list(self) -> None:
@@ -789,14 +885,19 @@ class PairFinderTab(QWidget):
         self.export_file_row.set_text(display_path(str(export_path)))
 
         def action(on_log, on_progress):
+            t0 = time.monotonic()
             count = export_song_list(root, export_path)
-            self._log_feature_summary(on_log, "Export list", lines=[
+            self._log_feature_summary(
+                on_log,
+                "Export list",
+                elapsed=time.monotonic() - t0,
+                lines=[
                 (f"Names: {count:,}", "ok"),
                 (f"File: {export_path}", "info"),
             ])
             self._worker.set_final_status(f"Done · {count:,} name(s) exported")
 
-        self._start_worker(action, "Exporting song list…", starting="Export list")
+        self._start_worker(action, "Exporting song list…", starting="Export list", panel="align")
 
     # Distribute
     def _start_distribute_originals(self) -> None:
@@ -813,11 +914,16 @@ class PairFinderTab(QWidget):
         with_dir, without_dir = self._align_sort_dirs(root)
 
         def action(on_log, on_progress):
+            t0 = time.monotonic()
             moved, skipped, unmatched, rejected, _sw, _so = distribute_originals(
                 inbox, root, on_log=on_log, on_progress=on_progress, sort_after=False,
                 with_original_dir=with_dir, without_original_dir=without_dir,
             )
-            self._log_feature_summary(on_log, "Distribute originals", lines=[
+            self._log_feature_summary(
+                on_log,
+                "Distribute originals",
+                elapsed=time.monotonic() - t0,
+                lines=[
                 (f"Moved: {moved:,}", "ok"),
                 (f"Skipped: {skipped:,}", "warn" if skipped else "info"),
                 (f"Unmatched: {unmatched:,}", "warn" if unmatched else "info"),
@@ -825,7 +931,7 @@ class PairFinderTab(QWidget):
             ])
             self._worker.set_final_status(f"Done · {moved:,} moved")
 
-        self._start_worker(action, "Distributing originals…", starting="Distribute originals")
+        self._start_worker(action, "Distributing originals…", starting="Distribute originals", panel="align")
 
     # Sort
     def _start_sort_folders(self) -> None:
@@ -838,18 +944,23 @@ class PairFinderTab(QWidget):
         with_dir, without_dir = self._align_sort_dirs(root)
 
         def action(on_log, on_progress):
+            t0 = time.monotonic()
             moved_with, moved_without, skipped = sort_folders_by_original(
                 root, with_original_dir=with_dir, without_original_dir=without_dir,
                 on_log=on_log, on_progress=on_progress,
             )
-            self._log_feature_summary(on_log, "Sort folders", lines=[
+            self._log_feature_summary(
+                on_log,
+                "Sort folders",
+                elapsed=time.monotonic() - t0,
+                lines=[
                 (f"With original: {moved_with:,}", "ok"),
                 (f"Without original: {moved_without:,}", "info"),
                 (f"Skipped: {skipped:,}", "warn" if skipped else "info"),
             ])
             self._worker.set_final_status(f"Done · {moved_with + moved_without:,} sorted")
 
-        self._start_worker(action, "Sorting folders…", starting="Sort folders")
+        self._start_worker(action, "Sorting folders…", starting="Sort folders", panel="align")
 
     # Align
     def _start_align_stems(self) -> None:
@@ -869,25 +980,40 @@ class PairFinderTab(QWidget):
         with_dir, _without_dir = self._align_sort_dirs(root)
 
         def action(on_log, on_progress):
+            t0 = time.monotonic()
             results, skipped = align_all_songs(
                 root, with_original_dir=with_dir, analysis_sec=analysis_sec,
                 backup=backup, skip_existing=skip_existing,
                 on_log=on_log, on_progress=on_progress,
             )
-            self._log_feature_summary(on_log, "Align stems", lines=[
+            self._log_feature_summary(
+                on_log,
+                "Align stems",
+                elapsed=time.monotonic() - t0,
+                lines=[
                 (f"Aligned: {len(results):,}", "ok"),
                 (f"Skipped (already aligned): {skipped:,}", "warn" if skipped else "info"),
             ])
             self._worker.set_final_status(f"Done · {len(results):,} aligned")
 
-        self._start_worker(action, "Aligning stems…", starting="Align stems")
+        self._start_worker(action, "Aligning stems…", starting="Align stems", panel="align")
 
-    def _log_feature_summary(self, on_log, feature: str, *, lines=None) -> None:
-        on_log(f"=== {feature} Summary ===", "info")
-        for text, tag in (lines or ()):
-            on_log(text if text.startswith("  ") else f"  {text}", tag)
-        on_log("", "info")
-        on_log("DONE", "ok")
+    def _log_feature_summary(
+        self,
+        on_log,
+        feature: str,
+        *,
+        lines=None,
+        elapsed: float | None = None,
+        files: int | None = None,
+    ) -> None:
+        emit_run_summary(
+            on_log,
+            feature,
+            elapsed=elapsed,
+            files=files,
+            stat_lines=lines or (),
+        )
 
     # ----------------- help -----------------
 
@@ -895,7 +1021,7 @@ class PairFinderTab(QWidget):
         help_dialog(
             self,
             title="Match help",
-            heading="Match acapellas & instrumentals",
+            heading="Match instrumentals & vocals",
             intro="Find matching versions by artist and title, then turn them into an organized library",
             sections=[
                 ("Workflow", [
@@ -1021,11 +1147,34 @@ class PairFinderTab(QWidget):
         finally:
             self._loading = False
 
+    def _autofill_from_instrumental(self, text: str) -> None:
+        if self._loading:
+            return
+        text = text.strip()
+        if not text:
+            return
+        p = Path(text)
+        if not self.acapella_row.text().strip():
+            self.acapella_row.set_text(str(p.parent / "Vocals"))
+        if not self.pairs_output_row.text().strip():
+            self.pairs_output_row.set_text(str(p.parent / "Pairs"))
+
+    def _autofill_align_from_output(self, text: str) -> None:
+        if self._loading:
+            return
+        text = text.strip()
+        if not text:
+            return
+        if not self.stems_root_row.text().strip():
+            self.stems_root_row.set_text(text)
+
     def _bind_autosave(self) -> None:
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.setInterval(200)
         self._autosave_timer.timeout.connect(self._flush_settings)
+        self.instrumental_row.entry.textChanged.connect(self._autofill_from_instrumental)
+        self.pairs_output_row.entry.textChanged.connect(self._autofill_align_from_output)
         for sig in (
             self.acapella_row.entry.textChanged,
             self.instrumental_row.entry.textChanged,

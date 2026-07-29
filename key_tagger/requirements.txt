@@ -1,0 +1,5 @@
+# Key Detect — MusicalKeyCNN (KeyNet nf50)
+more-itertools
+tqdm
+librosa
+soxr

@@ -234,7 +234,7 @@ class VocalReverbRouter:
         self,
         filenames: list[str],
         *,
-        gpu_batch_size: int = 32,
+        gpu_batch_size: int = 64,
         num_workers: int = 8,
     ) -> list[dict | BaseException]:
         """Parallel CPU decode/mel, then batched GPU (or CPU) forwards.

@@ -61,15 +61,15 @@ def print_feature_summary(
     print(flush=True)
     print(f"=== {feature} Summary ===", flush=True)
     print(f"  Total time: {_fmt_summary_elapsed(elapsed)}", flush=True)
-    print(f"  Files: {n}", flush=True)
+    print(f"  Files: {n:,}", flush=True)
     if n > 0:
         print(f"  Sec/file: {float(elapsed) / n:.3f}", flush=True)
         print(f"  Files/min: {n / minutes:.2f}", flush=True)
     if tagged is not None:
         if skipped is not None:
-            print(f"  Tagged: {tagged} | Skipped: {skipped}", flush=True)
+            print(f"  Tagged: {tagged:,} | Skipped: {skipped:,}", flush=True)
         else:
-            print(f"  Tagged: {tagged}", flush=True)
+            print(f"  Tagged: {tagged:,}", flush=True)
     if peak_vram_gb is not None:
         print(f"  Peak VRAM: {float(peak_vram_gb):.2f} GB", flush=True)
     if extra_lines:
@@ -271,6 +271,9 @@ class _UiTqdm(_tqdm_cls):
         self._stem_phase = kwargs.pop("stem_phase", None)
         self._stem_pct_scale = float(kwargs.pop("stem_pct_scale", 1.0) or 1.0)
         self._stem_pct_offset = float(kwargs.pop("stem_pct_offset", 0.0) or 0.0)
+        self._stem_global_total = int(kwargs.pop("stem_global_total", 0) or 0)
+        self._stem_global_offset = int(kwargs.pop("stem_global_offset", 0) or 0)
+        self._stem_global_started = float(kwargs.pop("stem_global_started", 0.0) or 0.0)
         kwargs.setdefault("file", sys.stdout)
         kwargs.setdefault("ascii", True)
         kwargs.setdefault(
@@ -323,15 +326,34 @@ class _UiTqdm(_tqdm_cls):
         ):
             return
         self._last_ui_emit = now
-        frac = float(n) / float(total)
-        pct = 100.0 * (
-            self._stem_pct_offset + self._stem_pct_scale * frac
-        )
+        global_total = int(getattr(self, "_stem_global_total", 0) or 0)
+        global_offset = int(getattr(self, "_stem_global_offset", 0) or 0)
+        if global_total > 0:
+            global_n = global_offset + n
+            frac = float(global_n) / float(global_total)
+            pct = 100.0 * self._stem_pct_scale * frac
+            display_n = global_n
+            display_total = global_total
+        else:
+            frac = float(n) / float(total)
+            pct = 100.0 * (
+                self._stem_pct_offset + self._stem_pct_scale * frac
+            )
+            display_n = None
+            display_total = None
         eta = ""
         try:
-            rate = self.format_dict.get("rate")
-            if rate:
-                eta = f"{(total - n) / float(rate):.1f}"
+            if global_total > 0 and global_n > 0:
+                started = float(getattr(self, "_stem_global_started", 0.0) or 0.0)
+                if started > 0:
+                    elapsed = max(time.monotonic() - started, 1e-9)
+                    g_rate = global_n / elapsed
+                    if g_rate > 0:
+                        eta = f"{(global_total - global_n) / g_rate:.1f}"
+            else:
+                rate = self.format_dict.get("rate")
+                if rate:
+                    eta = f"{(total - n) / float(rate):.1f}"
         except Exception:
             eta = ""
         phase = self._stem_phase
@@ -341,12 +363,14 @@ class _UiTqdm(_tqdm_cls):
             except Exception:
                 phase = ""
         emit_stem_progress(
-            n,
-            total,
+            n if global_total <= 0 else global_n,
+            total if global_total <= 0 else global_total,
             phase or "",
             pct=pct,
             eta=eta,
             force=True,
+            display_n=display_n,
+            display_total=display_total,
         )
 
 
@@ -451,17 +475,17 @@ CLIP_LENGTH = 30
 NUMBER_OF_CLIPS = 3
 
 
-# RTX 5090 tuning
-# v0.4 proved 64 is optimal. Kept.
-# (GPU only. Ignored in per-file mode / on CPU.)
+# Defaults tuned for large libraries on a single HDD/NAS (RTX-class GPU).
+# Workers/chunk come from Quick tune; GPU batch aligned with Gender/Reverb (64).
 BATCH_SIZE = 64
 
 
-# CPU workers
-# v0.4 used 8. Workers now also do feature extraction,
-# so they are busier. 8 still matches logical-core sweet spot.
-# (Batch mode only.)
-AUDIO_WORKERS = 8
+# CPU workers — parallel decode + feature extract (batch mode only).
+AUDIO_WORKERS = 4
+
+# Genre batch: process files in waves so the thread pool does not queue
+# the entire library and so HDD read concurrency stays bounded.
+GENRE_FILE_CHUNK = 128
 
 # Gender batch: never queue the whole library at once. Each Future
 # caches its mel-patch result until destroyed — with 80k files that
@@ -489,8 +513,26 @@ AUDIO_EXTENSIONS = {
 INCLUDE_SUBFOLDERS = True
 
 
+def _paths_from_files_list(path: str) -> list[str]:
+    """One audio path per line (STEM organizer filtered tag list)."""
+    out: list[str] = []
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.lstrip("\ufeff").strip().strip('"')
+        if not line:
+            continue
+        candidate = Path(line)
+        if candidate.is_file() and candidate.suffix.lower() in AUDIO_EXTENSIONS:
+            out.append(str(candidate.resolve(strict=False)))
+    return out
+
+
 def iter_audio_files(folder):
     """Yield audio files under folder (recursive when INCLUDE_SUBFOLDERS)."""
+    files_from = os.environ.get("GG_FILES_FROM", "").strip()
+    if files_from:
+        for path_str in _paths_from_files_list(files_from):
+            yield Path(path_str)
+        return
     root = Path(folder)
     it = root.rglob("*") if INCLUDE_SUBFOLDERS else root.iterdir()
     for path in it:
@@ -524,7 +566,7 @@ GENDER_BATCH_SIZE = 64  # discogs-effnet-bs64 fixed batch
 
 # Reverb (vocal mel-CNN): files decoded in parallel, crops stacked on GPU.
 REVERB_FILE_CHUNK = 64
-REVERB_GPU_BATCH = 32
+REVERB_GPU_BATCH = 64  # align with EffNet wave rhythm; dynamic batch OK
 GENDER_LABELS = ("female", "male")
 
 def _tagger_package_dir() -> Path:
@@ -666,6 +708,7 @@ if _GG_MODE:
     _gg_overwrite  = os.environ.get("GG_OVERWRITE",    "0").strip()
     _gg_recursive  = os.environ.get("GG_RECURSIVE",    "1").strip()
     _gg_csv        = os.environ.get("GG_CSV",          "").strip()
+    _gg_files_from = os.environ.get("GG_FILES_FROM",   "").strip()
 
     CONTENT_TYPE     = "acapella" if _GG_MODE == "gender" else "instrumental"
     INPUT_FOLDER     = _gg_input
@@ -682,6 +725,20 @@ if _GG_MODE:
         OUTPUT_CSV        = _gg_csv
         OUTPUT_CSV_GENDER = _gg_csv
 
+    _gg_workers = os.environ.get("GG_AUDIO_WORKERS", "").strip()
+    _gg_batch_sz = os.environ.get("GG_BATCH_SIZE", "").strip()
+    _gg_file_chunk = os.environ.get("GG_FILE_CHUNK", "").strip()
+    if _gg_workers:
+        AUDIO_WORKERS = max(1, int(_gg_workers))
+    if _gg_batch_sz:
+        BATCH_SIZE = max(1, int(_gg_batch_sz))
+        # Genre MAEST only — reverb stays aligned with EffNet (64).
+    if _gg_file_chunk:
+        GENRE_FILE_CHUNK = max(BATCH_SIZE, int(_gg_file_chunk))
+        GENDER_FILE_CHUNK = max(128, int(_gg_file_chunk))
+        REVERB_FILE_CHUNK = GENDER_FILE_CHUNK
+        REVERB_GPU_BATCH = GENDER_BATCH_SIZE
+
     _input_path = Path(INPUT_FOLDER) if INPUT_FOLDER else None
     if not _input_path or not _input_path.is_dir():
         print(
@@ -690,7 +747,9 @@ if _GG_MODE:
         )
         sys.exit(1)
 
-    _has_audio_env = any(True for _ in iter_audio_files(_input_path))
+    _has_audio_env = bool(_paths_from_files_list(_gg_files_from)) if _gg_files_from else any(
+        True for _ in iter_audio_files(_input_path)
+    )
     if not _has_audio_env:
         print(
             f"GG_MODE error: no supported audio files in {INPUT_FOLDER!r}",
@@ -1864,7 +1923,10 @@ def _apply_mp4_updates(audio: MP4, updates: dict) -> None:
 def apply_audio_tags(filename, updates: dict) -> bool:
     """Apply logical tag updates. None clears a field. Returns True on success."""
 
+    from file_writable import ensure_writable
+
     ext = Path(filename).suffix.lower()
+    ensure_writable(filename)
 
     try:
         if ext == ".flac":
@@ -2626,6 +2688,8 @@ if BATCH_MODE:
 
     _log_intro(f"Audio workers: {AUDIO_WORKERS}")
 
+    _log_intro(f"File chunk: {GENRE_FILE_CHUNK}")
+
 _log_intro(f"Clips/song: {NUMBER_OF_CLIPS}")
 
 _log_intro(f"Write metadata: {WRITE_METADATA}")
@@ -2694,11 +2758,7 @@ def load_audio(filename):
     Returns a 1D float32 torch tensor.
     """
 
-    data, sr = sf.read(
-        filename,
-        always_2d=True,
-        dtype="float32"
-    )
+    data, sr = sf.read(filename, always_2d=True, dtype="float32")
 
     # stereo -> mono (numpy), then optional resample
     audio_np = data.mean(axis=1)
@@ -2816,6 +2876,14 @@ def load_and_extract(args):
         inputs
     )
 
+
+def _genre_extract_worker(args):
+    """Thread-pool worker: decode + extract, or return error without crashing."""
+    index, filename = args
+    try:
+        return load_and_extract((index, filename)) + (None,)
+    except Exception as exc:
+        return index, None, str(exc)
 
 
 
@@ -3086,6 +3154,8 @@ def classify_one_file(filename):
 
 score_storage = {}
 
+genre_errors: dict[int, str] = {}
+
 total_clips = 0
 
 
@@ -3110,80 +3180,101 @@ def _log_genre_from_scores(index, scores_tensor):
     _log_genre_result(files[index], genre, style, best_score)
 
 
-def _store_gpu_scores(scores, mapping):
+def _store_gpu_scores(scores, mapping, *, progress=None):
     """Accumulate clip scores (batch mode: no per-file LOG spam)."""
     global total_clips
     total_clips += len(mapping)
     for score, idx in zip(scores, mapping):
         score_storage.setdefault(idx, []).append(score)
-    emit_gg_processed(len(score_storage), len(files))
+    if progress is not None:
+        _emit_genre_progress(progress)
+
+
+def _emit_genre_progress(progress):
+    emit_gg_processed(
+        max(progress["decoded"], len(score_storage)),
+        len(files),
+    )
 
 
 if BATCH_MODE:
 
     # ------------------------------------------------
-    # BATCH PATH (streaming pipeline)
+    # BATCH PATH (streaming pipeline, bounded waves)
     # ------------------------------------------------
 
     batch = []
-
+    genre_progress = {"decoded": 0}
+    genre_errors.clear()
+    files_total = len(files)
 
     print(
         "Processing..."
     )
+    if files_total > GENRE_FILE_CHUNK:
+        print(
+            f"  workers={AUDIO_WORKERS}  "
+            f"file_chunk={GENRE_FILE_CHUNK}  "
+            f"gpu_batch={BATCH_SIZE}"
+        )
 
+    emit_gg_processed(0, files_total, force=True)
 
+    genre_audio_started = time.monotonic()
 
-    with ThreadPoolExecutor(
-        max_workers=AUDIO_WORKERS
-    ) as executor:
+    for wave_start in range(0, files_total, GENRE_FILE_CHUNK):
 
+        wave_end = min(wave_start + GENRE_FILE_CHUNK, files_total)
 
-        futures = {
+        with ThreadPoolExecutor(
+            max_workers=AUDIO_WORKERS
+        ) as executor:
 
-            executor.submit(
-                load_and_extract,
-                (i, f)
+            futures = {
+                executor.submit(
+                    _genre_extract_worker,
+                    (i, files[i]),
+                ):
+                i
+                for i in range(wave_start, wave_end)
+            }
+
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Audio",
+                stem_phase="audio",
+                stem_pct_scale=_GENRE_AUDIO_WEIGHT,
+                stem_global_total=files_total,
+                stem_global_offset=wave_start,
+                stem_global_started=genre_audio_started,
             ):
-            i
 
-            for i, f in enumerate(files)
+                index, inputs, err = future.result()
 
-        }
+                genre_progress["decoded"] += 1
+                _emit_genre_progress(genre_progress)
 
+                if err is not None:
+                    genre_errors[index] = err
+                    print("ERROR:", files[index], flush=True)
+                    print(" ", err, flush=True)
+                    continue
 
-
-        for future in tqdm(
-            as_completed(futures),
-            total=len(futures),
-            desc="Audio",
-            stem_phase="audio",
-            stem_pct_scale=_GENRE_AUDIO_WEIGHT,
-            stem_pct_offset=0.0,
-        ):
-
-            index, inputs = future.result()
-
-
-            batch.append(
-                (
-                    index,
-                    inputs
+                batch.append(
+                    (
+                        index,
+                        inputs
+                    )
                 )
-            )
 
+                if len(batch) >= BATCH_SIZE:
 
-
-            if len(batch) >= BATCH_SIZE:
-
-                scores, mapping = run_gpu_batch(
-                    batch
-                )
-                _store_gpu_scores(scores, mapping)
-                batch = []
-
-
-
+                    scores, mapping = run_gpu_batch(
+                        batch
+                    )
+                    _store_gpu_scores(scores, mapping, progress=genre_progress)
+                    batch = []
 
     # remaining batch
 
@@ -3192,9 +3283,15 @@ if BATCH_MODE:
         scores, mapping = run_gpu_batch(
             batch
         )
-        _store_gpu_scores(scores, mapping)
+        _store_gpu_scores(scores, mapping, progress=genre_progress)
 
-    emit_gg_processed(len(files), len(files), force=True)
+    emit_gg_processed(files_total, files_total, force=True)
+
+    if genre_errors:
+        print(
+            f"{LOG_INDENT}Decode errors: {len(genre_errors)}",
+            flush=True,
+        )
 
     print()
 
@@ -3308,6 +3405,20 @@ results = []
 
 for index, filename in enumerate(files):
 
+    if index not in score_storage:
+        err = genre_errors.get(index, "no scores (decode/inference failed)")
+        results.append(
+            {
+                "file": filename,
+                "genre": "",
+                "style": "",
+                "confidence": 0.0,
+                "top5": "[]",
+                "error": err,
+            }
+        )
+        continue
+
     avg = torch.mean(
         torch.stack(
             score_storage[index]
@@ -3396,14 +3507,24 @@ if WRITE_METADATA:
         "files..."
     )
 
+    tag_total = len(results)
+    emit_gg_processed(0, tag_total, force=True)
 
-    for row in tqdm(
-        results,
-        desc="Tagging",
-        stem_phase="tagging",
-        stem_pct_scale=_GENRE_TAG_WEIGHT,
-        stem_pct_offset=_GENRE_AUDIO_WEIGHT,
+    for i, row in enumerate(
+        tqdm(
+            results,
+            desc="Tagging",
+            stem_phase="tagging",
+            stem_pct_scale=_GENRE_TAG_WEIGHT,
+            stem_pct_offset=_GENRE_AUDIO_WEIGHT,
+        ),
+        start=1,
     ):
+
+        if row.get("error") or not row.get("genre"):
+            skipped += 1
+            emit_gg_processed(i, tag_total)
+            continue
 
         ok = write_metadata(
             row["file"],
@@ -3418,6 +3539,10 @@ if WRITE_METADATA:
         else:
 
             skipped += 1
+
+        emit_gg_processed(i, tag_total)
+
+    emit_gg_processed(tag_total, tag_total, force=True)
 
 
 else:

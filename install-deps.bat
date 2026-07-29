@@ -19,10 +19,10 @@ echo STEM organizer (PySide6) - install dependencies
 echo.
 echo You need:
 echo   - Python 3.10 or 3.11 on PATH ^(same version as the .exe if present^)
-echo   - Internet ^(PyTorch, demucs, ffmpeg, tagger models^)
+echo   - Internet ^(PyTorch, demucs, ffmpeg, mp3val, flac, tagger models^)
 echo.
 echo You choose once: GPU or CPU PyTorch.
-echo Genre ^& Gender and Rename Auto-detect deps will also be installed.
+echo Genre ^& Gender, Rename Auto-detect, PANNs, and Key Detect deps will also be installed.
 echo.
 
 where python >nul 2>&1
@@ -313,9 +313,9 @@ if errorlevel 1 goto failed
 
 echo [3/4] verify ...
 if /I "%TORCH_LABEL%"=="CPU" (
-    "%PY%" -c "import torch, soundfile, demucs; v=torch.__version__; assert '+cpu' in v or 'cpu' in v.lower(), f'expected CPU torch, got {v}'; print('OK torch', v)"
+    "%PY%" -c "import torch, soundfile, scipy, flac_detective, demucs; v=torch.__version__; assert '+cpu' in v or 'cpu' in v.lower(), f'expected CPU torch, got {v}'; print('OK torch', v)"
 ) else (
-    "%PY%" -c "import torch, soundfile, demucs; print('OK torch', torch.__version__, 'cuda=', torch.cuda.is_available())"
+    "%PY%" -c "import torch, soundfile, scipy, flac_detective, demucs; print('OK torch', torch.__version__, 'cuda=', torch.cuda.is_available())"
 )
 if errorlevel 1 goto failed
 
@@ -357,7 +357,9 @@ if errorlevel 1 goto failed
 echo [2/4] audio + UI deps ...
 "%PIP_PY%" -m pip install "cffi>=1.16" -t "%DEST%" --only-binary=:all: --upgrade --no-cache-dir
 if errorlevel 1 goto failed
-"%PIP_PY%" -m pip install soundfile numpy sounddevice PySide6 "PySide6-Fluent-Widgets>=1.11,<2" psutil mutagen scipy librosa resampy audioread requests -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install soundfile numpy sounddevice PySide6 "PySide6-Fluent-Widgets>=1.11,<2" psutil mutagen scipy librosa soxr resampy audioread requests -t "%DEST%" --upgrade --no-cache-dir
+if errorlevel 1 goto failed
+"%PIP_PY%" -m pip install flac-detective==1.7.0 -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 goto failed
 
 echo [3/4] demucs ...
@@ -378,9 +380,9 @@ if /I "%TORCH_LABEL%"=="CPU" (
 
 echo [4/4] verify ...
 if /I "%TORCH_LABEL%"=="CPU" (
-    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import PIL; import torch; import torchvision; import torchaudio; import soundfile; import demucs; v=torch.__version__; assert '+cpu' in v, f'expected CPU torch, got {v}'; print('OK torch', v, 'torchvision', torchvision.__version__, 'PIL', PIL.__version__)"
+    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import PIL; import torch; import torchvision; import torchaudio; import soundfile; import scipy; import flac_detective; import demucs; v=torch.__version__; assert '+cpu' in v, f'expected CPU torch, got {v}'; print('OK torch', v, 'torchvision', torchvision.__version__, 'PIL', PIL.__version__)"
 ) else (
-    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import PIL; import torch; import torchvision; import torchaudio; import soundfile; import demucs; print('OK torch', torch.__version__, 'torchvision', torchvision.__version__, 'PIL', PIL.__version__)"
+    "%HOST_PY%" -c "import sys; sys.path.insert(0, r'%DEST%'); import _cffi_backend; import PIL; import torch; import torchvision; import torchaudio; import soundfile; import scipy; import flac_detective; import demucs; print('OK torch', torch.__version__, 'torchvision', torchvision.__version__, 'PIL', PIL.__version__)"
 )
 if errorlevel 1 goto failed
 
@@ -463,6 +465,125 @@ del /Q "%FFMPEG_ZIP%" 2>nul
 
 :ffmpeg_done
 
+REM --- mp3val (Detect corruption Fix / Fast second opinion) ---
+set "MP3VAL_DIR=%~dp0mp3val"
+if exist "%MP3VAL_DIR%\mp3val.exe" goto mp3val_done
+
+set "MP3VAL_ZIP=%TEMP%\stem-organizer-mp3val.zip"
+set "MP3VAL_URL=https://downloads.sourceforge.net/project/mp3val/mp3val-bundle/MP3val%%200.1.8%%20with%%20MP3val-frontend%%200.1.1%%20included/mp3val-0.1.8_with_frontend-0.1.1-bin-win32.zip"
+set "MP3VAL_URL_FALLBACK=https://sourceforge.net/projects/mp3val/files/mp3val-bundle/MP3val%%200.1.8%%20with%%20MP3val-frontend%%200.1.1%%20included/mp3val-0.1.8_with_frontend-0.1.1-bin-win32.zip/download"
+
+echo Downloading mp3val ...
+where curl >nul 2>&1
+if errorlevel 1 goto mp3val_download_ps
+
+curl -L --fail --progress-bar -o "%MP3VAL_ZIP%" "%MP3VAL_URL%"
+if errorlevel 1 curl -L --fail --progress-bar -o "%MP3VAL_ZIP%" "%MP3VAL_URL_FALLBACK%"
+if not errorlevel 1 goto mp3val_download_ok
+goto mp3val_download_failed
+
+:mp3val_download_ps
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$urls=@('%MP3VAL_URL%','%MP3VAL_URL_FALLBACK%');" ^
+  "$out='%MP3VAL_ZIP%';" ^
+  "$ok=$false;" ^
+  "foreach ($url in $urls) {" ^
+  "  try {" ^
+  "    Write-Host ('Downloading ' + $url);" ^
+  "    $wc = New-Object System.Net.WebClient;" ^
+  "    $wc.DownloadFile($url, $out);" ^
+  "    $ok=$true; break" ^
+  "  } catch { Write-Host $_.Exception.Message }" ^
+  "};" ^
+  "if (-not $ok) { exit 1 }"
+if errorlevel 1 goto mp3val_download_failed
+
+:mp3val_download_ok
+if not exist "%MP3VAL_ZIP%" goto mp3val_download_failed
+goto mp3val_extract
+
+:mp3val_download_failed
+echo WARNING: mp3val download failed - Detect corruption Fix will use ffmpeg fallback.
+goto mp3val_done
+
+:mp3val_extract
+if not exist "%MP3VAL_DIR%" mkdir "%MP3VAL_DIR%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$tmp = Join-Path $env:TEMP ('stem-organizer-mp3val-' + [guid]::NewGuid().ToString());" ^
+  "New-Item -ItemType Directory -Path $tmp | Out-Null;" ^
+  "Expand-Archive -Path '%MP3VAL_ZIP%' -DestinationPath $tmp -Force;" ^
+  "$exe = Get-ChildItem -Path $tmp -Recurse -Filter mp3val.exe | Select-Object -First 1;" ^
+  "if (-not $exe) { throw 'mp3val.exe not found in archive' };" ^
+  "Copy-Item -Path $exe.FullName -Destination '%MP3VAL_DIR%\mp3val.exe' -Force;" ^
+  "Remove-Item -Recurse -Force $tmp"
+if errorlevel 1 (
+    echo WARNING: mp3val extract failed - Detect corruption Fix will use ffmpeg fallback.
+    goto mp3val_done
+)
+del /Q "%MP3VAL_ZIP%" 2>nul
+if exist "%MP3VAL_DIR%\mp3val.exe" echo OK mp3val -^> %MP3VAL_DIR%\mp3val.exe
+
+:mp3val_done
+
+REM --- flac (Detect corruption Deep — STREAMINFO MD5 / foobar parity) ---
+set "FLAC_DIR=%~dp0flac"
+if exist "%FLAC_DIR%\flac.exe" goto flac_done
+
+set "FLAC_ZIP=%TEMP%\stem-organizer-flac.zip"
+set "FLAC_URL=https://ftp.osuosl.org/pub/xiph/releases/flac/flac-1.5.0-win.zip"
+set "FLAC_URL_FALLBACK=https://downloads.xiph.org/releases/flac/flac-1.5.0-win.zip"
+
+echo Downloading flac ...
+curl -L --fail --retry 2 -o "%FLAC_ZIP%" "%FLAC_URL%" 2>nul
+if errorlevel 1 goto flac_download_ps
+if exist "%FLAC_ZIP%" goto flac_download_ok
+curl -L --fail --retry 2 -o "%FLAC_ZIP%" "%FLAC_URL_FALLBACK%" 2>nul
+if not errorlevel 1 goto flac_download_ok
+goto flac_download_failed
+
+:flac_download_ps
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try {" ^
+  "  $ProgressPreference = 'SilentlyContinue';" ^
+  "  Invoke-WebRequest -Uri '%FLAC_URL%' -OutFile '%FLAC_ZIP%' -UseBasicParsing;" ^
+  "} catch {" ^
+  "  try {" ^
+  "    Invoke-WebRequest -Uri '%FLAC_URL_FALLBACK%' -OutFile '%FLAC_ZIP%' -UseBasicParsing;" ^
+  "  } catch { exit 1 }" ^
+  "}"
+if errorlevel 1 goto flac_download_failed
+
+:flac_download_ok
+if not exist "%FLAC_ZIP%" goto flac_download_failed
+goto flac_extract
+
+:flac_download_failed
+echo WARNING: flac download failed - Deep FLAC verify will use ffmpeg only ^(no MD5^).
+goto flac_done
+
+:flac_extract
+mkdir "%FLAC_DIR%" 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference = 'Stop';" ^
+  "$tmp = Join-Path $env:TEMP ('stem-organizer-flac-' + [guid]::NewGuid().ToString());" ^
+  "New-Item -ItemType Directory -Path $tmp | Out-Null;" ^
+  "Expand-Archive -LiteralPath '%FLAC_ZIP%' -DestinationPath $tmp -Force;" ^
+  "$exe = Get-ChildItem -Path $tmp -Recurse -Filter flac.exe | Where-Object { $_.FullName -match 'win64' } | Select-Object -First 1;" ^
+  "if (-not $exe) { $exe = Get-ChildItem -Path $tmp -Recurse -Filter flac.exe | Select-Object -First 1 };" ^
+  "if (-not $exe) { throw 'flac.exe not found in archive' };" ^
+  "$srcDir = $exe.Directory.FullName;" ^
+  "Copy-Item -Path (Join-Path $srcDir 'flac.exe') -Destination '%FLAC_DIR%\flac.exe' -Force;" ^
+  "Get-ChildItem -Path $srcDir -Filter '*.dll' | Copy-Item -Destination '%FLAC_DIR%\' -Force;" ^
+  "Remove-Item -Recurse -Force $tmp"
+if errorlevel 1 (
+    echo WARNING: flac extract failed - Deep FLAC verify will use ffmpeg only ^(no MD5^).
+    goto flac_done
+)
+del /Q "%FLAC_ZIP%" 2>nul
+if exist "%FLAC_DIR%\flac.exe" echo OK flac -^> %FLAC_DIR%\flac.exe
+
+:flac_done
+
 echo.
 echo Core install OK (%TORCH_LABEL%).
 echo.
@@ -491,6 +612,29 @@ set "STEM_INST_BUNDLED="
 set "STEM_GG_BUNDLED="
 if errorlevel 1 (
     echo WARNING: Rename Auto-detect install reported errors - continuing.
+)
+if not exist "%~dp0panns_tagger\install-deps.bat" goto after_panns
+echo.
+echo === PANNs tagger deps ^(AudioSet Cnn14^) ===
+set "STEM_PANNS_BUNDLED=1"
+set "STEM_GG_BUNDLED=1"
+call "%~dp0panns_tagger\install-deps.bat" %STEM_GG_TORCH%
+set "STEM_PANNS_BUNDLED="
+set "STEM_GG_BUNDLED="
+if errorlevel 1 (
+    echo WARNING: PANNs install reported errors - continuing.
+)
+:after_panns
+if not exist "%~dp0key_tagger\install-deps.bat" goto after_inst
+echo.
+echo === Key Detect deps ^(MusicalKeyCNN^) ===
+set "STEM_KEY_BUNDLED=1"
+set "STEM_GG_BUNDLED=1"
+call "%~dp0key_tagger\install-deps.bat" %STEM_GG_TORCH%
+set "STEM_KEY_BUNDLED="
+set "STEM_GG_BUNDLED="
+if errorlevel 1 (
+    echo WARNING: Key Detect install reported errors - continuing.
 )
 goto after_inst
 
@@ -559,6 +703,34 @@ if exist "%~dp0genre_gender_tagger\requirements.txt" (
     if errorlevel 1 echo WARNING: Genre ^& Gender extras reported errors - continuing.
 ) else (
     echo WARNING: genre_gender_tagger\requirements.txt missing - skipping.
+)
+echo PANNs tagger ^(panns-inference / Cnn14^) ...
+"%PIP_PY%" -m pip install panns-inference -t "%DEST%" --upgrade --no-cache-dir
+if errorlevel 1 (
+    echo WARNING: panns-inference install reported errors - continuing.
+) else (
+    set "STEM_OLD_PP=%PYTHONPATH%"
+    set "PYTHONPATH=%DEST%"
+    "%HOST_PY%" -c "import panns_inference; print('OK panns_inference', panns_inference.__file__)"
+    if errorlevel 1 (
+        echo WARNING: panns_inference not importable from site-packages - continuing.
+    )
+    if defined STEM_OLD_PP (set "PYTHONPATH=%STEM_OLD_PP%") else (set "PYTHONPATH=")
+    set "STEM_OLD_PP="
+)
+echo Key Detect ^(librosa / more-itertools / tqdm / soxr^) ...
+"%PIP_PY%" -m pip install more-itertools tqdm librosa soxr -t "%DEST%" --upgrade --no-cache-dir
+if errorlevel 1 (
+    echo WARNING: Key Detect extras reported errors - continuing.
+) else (
+    set "STEM_OLD_PP=%PYTHONPATH%"
+    set "PYTHONPATH=%DEST%"
+    "%HOST_PY%" -c "import librosa, more_itertools; print('OK key_tagger deps')"
+    if errorlevel 1 (
+        echo WARNING: Key Detect deps not importable from site-packages - continuing.
+    )
+    if defined STEM_OLD_PP (set "PYTHONPATH=%STEM_OLD_PP%") else (set "PYTHONPATH=")
+    set "STEM_OLD_PP="
 )
 
 :after_inst

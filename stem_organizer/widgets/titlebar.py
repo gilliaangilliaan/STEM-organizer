@@ -1138,7 +1138,7 @@ def _make_title_button(text: str, *, danger: bool = False) -> QPushButton:
             }}
             QPushButton#TitleClose:hover {{
                 background-color: {theme.DARK['danger']};
-                color: #ffffff;
+                color: {theme.COLORS['log_fg']};
             }}
             """
         )

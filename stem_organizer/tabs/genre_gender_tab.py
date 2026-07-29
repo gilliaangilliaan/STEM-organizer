@@ -1,17 +1,19 @@
 """Genre & Gender tab — port of genre_gender_panel.GenreGenderPanel.
 
-Two sub-tabs:
+Three sub-tabs:
   Genre  — Paths (input + include subfolders), Run mode (Batch/Per-file),
            Tag style (Combined/Split), Tag options (Write metadata, Overwrite).
   Gender — same shape + Voice gender field (Comment/Gender) + Reverb mode
            (Combined/Split).
+  Vocal type — PANNs Cnn14 (Singing / Speech / Rapping / Humming / Choir).
 
-Action buttons: ▶ Tag genre / ▶ Tag gender / ■ Stop.
+Action buttons: ▶ Tag genre / ▶ Tag gender / ▶ Tag vocal type / ■ Stop.
 """
 from __future__ import annotations
 
+import classify_backend as cb
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -32,41 +34,89 @@ from qfluentwidgets import (
 
 from .. import theme
 from ..settings_store import SettingsStore, display_path
+from ..tag_input import (
+    TagPanel,
+    collect_paths_for_panel,
+    layout_log_line,
+    resolve_tag_input,
+    scan_mode_from_recursive,
+    write_files_list,
+)
 from ..widgets.action_bar import ActionBarPage
 from ..widgets.action_button import action_button
 from ..widgets.dialogs import help_dialog, show_info
 from ..widgets.info_icon import InfoIcon
 from ..widgets.path_row import PathRow
 from ..widgets.section import Section
+from ..workers.panns_worker import PannsWorker
 from ..workers.tagger_worker import TaggerWorker
 
 
 PANEL_TITLE = "Genre & Gender"
 
 TIPS = {
-    "genre_input": "Folder containing instrumental FLAC/MP3/WAV files to tag with genre.",
-    "gender_input": "Folder containing acapella FLAC/MP3/WAV files to tag with voice gender.",
+    "genre_input": (
+        "Folder to scan for genre/style tagging. Uses the same layout rules as "
+        "Classify: only instrumental-side files are tagged (instrumentals, bass/drums/other, "
+        "or the instrumental stem in pairs — not vocals)."
+    ),
+    "gender_input": (
+        "Folder to scan for gender/reverb tagging. Uses the same layout rules as "
+        "Classify: only vocal files are tagged (vocals stem in pairs, not instrumentals)."
+    ),
+    "vocal_input": (
+        "Folder to scan for vocal-type tagging (Singing / Speech / …). Uses the same "
+        "layout rules as Classify: vocals only, not instrumentals."
+    ),
     "include_subfolders": "Scan audio files in subfolders too, not just the selected folder itself.",
-    "batch_mode": (
-        "Batch shares GPU batches across files (fastest). Per-file logs each prediction live."
+    "run_mode_batch": (
+        "Batch decodes several files in parallel, then runs the model in GPU batches "
+        "(or CPU if no CUDA). Fastest overall; LOG shows a single progress counter."
     ),
-    "tag_style": (
-        "Combined writes a single GENRE tag as Genre/Style. "
-        "Split writes separate GENRE and STYLE tags."
+    "run_mode_per_file": (
+        "Per-file processes one track at a time and prints each prediction live in the LOG. "
+        "Still uses the GPU for inference when available; slower than Batch because it does not "
+        "overlap decode across files."
     ),
-    "tag_field": "Comment writes gender to the COMMENT tag. Gender writes to a GENDER tag.",
-    "reverb_mode": (
+    "tag_style_combined": "Combined writes a single GENRE tag as Genre/Style.",
+    "tag_style_split": (
+        "Split writes separate GENRE and STYLE tags. "
+        "Genre/Style tags are read by Charts."
+    ),
+    "tag_field_comment": "Comment writes gender to the COMMENT tag.",
+    "tag_field_gender": (
+        "Gender (custom) writes to a GENDER tag. Gender tag is read by Charts."
+    ),
+    "vocal_tag_field_comment": "Comment writes the label (e.g. Singing) to COMMENT.",
+    "vocal_tag_field_vocal": (
+        "Vocal type (custom) writes to a VOCAL_TYPE tag. "
+        "Vocal type tag is read by Charts."
+    ),
+    "reverb_mode_combined": (
         "Dry/wet from the bundled vocal mel-CNN. "
-        "Combined writes gender/reverb into the chosen field. "
-        "Split writes gender alone and REVERB=wet|dry as a separate custom field."
+        "Combined writes gender/reverb into the chosen field."
+    ),
+    "reverb_mode_split": (
+        "Dry/wet from the bundled vocal mel-CNN. "
+        "Split writes gender alone and REVERB=wet|dry as a separate custom field. "
+        "Gender/Reverb tags are read by Charts."
     ),
     "write_meta": "Write tags to FLAC/MP3/M4A/WAV. Disable to only generate the CSV.",
+    "vocal_write_meta": "Write tags to FLAC/MP3/M4A/WAV. Disable to only log scores.",
     "overwrite_tags": (
         "Off (default): skip files that already have genre/gender tags "
         "(resume-friendly). On: re-tag every file."
     ),
+    "vocal_overwrite": (
+        "Off (default): skip files that already have a vocal-type tag. "
+        "On: re-tag every file."
+    ),
+    "vocal_segments": (
+        "Also score 2-second windows and list Singing/Speech/… over time in the LOG."
+    ),
     "tag_genre": "Run the genre/style tagger on the input folder.",
     "tag_gender": "Run the voice gender + reverb tagger on the input folder.",
+    "tag_vocal": "Run PANNs vocal-type tagging (Singing / Speech / Rapping / Humming / Choir).",
     "stop": "Stop the running tagger.",
 }
 
@@ -103,7 +153,15 @@ def _style_radio_hint(lbl: QLabel) -> None:
 class _RadioRow(QWidget):
     """Two radio options split evenly across the full card width."""
 
-    def __init__(self, parent: QWidget, options, value: str, *, tooltip: str = "") -> None:
+    def __init__(
+        self,
+        parent: QWidget,
+        options,
+        value: str,
+        *,
+        tooltip: str = "",
+        tooltips: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -125,8 +183,9 @@ class _RadioRow(QWidget):
             rb = RadioButton(main)
             rb.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             rb.setCursor(Qt.PointingHandCursor)
-            if tooltip:
-                tip = theme.format_tooltip(tooltip)
+            tip_text = (tooltips or {}).get(key) or tooltip
+            if tip_text:
+                tip = theme.format_tooltip(tip_text)
                 rb.setToolTip(tip)
             self._group.addButton(rb)
             self._buttons[key] = rb
@@ -137,7 +196,7 @@ class _RadioRow(QWidget):
                 hint_lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
                 _style_radio_hint(hint_lbl)
                 hint_lbl.setCursor(Qt.PointingHandCursor)
-                if tooltip:
+                if tip_text:
                     hint_lbl.setToolTip(tip)
                 hint_lbl.mousePressEvent = (  # type: ignore[method-assign]
                     lambda _e, v=key: self.set_value(v)
@@ -172,7 +231,7 @@ class _RadioRow(QWidget):
 
 
 class GenreGenderTab(QWidget):
-    """Genre + Gender sub-tabs sharing an action bar."""
+    """Genre + Gender + Vocal type sub-tabs sharing an action bar."""
 
     request_status_running = Signal()
     request_status_idle = Signal(str)
@@ -185,8 +244,9 @@ class GenreGenderTab(QWidget):
     def __init__(self, settings: SettingsStore) -> None:
         super().__init__()
         self._settings = settings
-        self._worker: Optional[TaggerWorker] = None
+        self._worker: Optional[Union[TaggerWorker, PannsWorker]] = None
         self._busy = False
+        self._busy_panel: Optional[str] = None  # "genre" | "gender" | "vocal"
         self._loading = False
 
         self._build_ui()
@@ -203,6 +263,7 @@ class GenreGenderTab(QWidget):
         theme.configure_tab_widget(self._tabview)
         self._tabview.addTab(self._build_genre_tab(), "Genre")
         self._tabview.addTab(self._build_gender_tab(), "Gender")
+        self._tabview.addTab(self._build_vocal_tab(), "Vocal type")
         theme.configure_tab_widget(self._tabview)
         theme.inset_tab_bar(self._tabview)
         self._tabview.currentChanged.connect(self._on_subtab_changed)
@@ -247,7 +308,10 @@ class GenreGenderTab(QWidget):
             run_card.body,
             [("Batch (fast)", "batch"), ("Per-file (live results)", "per_file")],
             "batch",
-            tooltip=TIPS["batch_mode"],
+            tooltips={
+                "batch": TIPS["run_mode_batch"],
+                "per_file": TIPS["run_mode_per_file"],
+            },
         )
         run_card.body.layout().addWidget(self.genre_run_mode)
         v.addWidget(run_card)
@@ -256,8 +320,11 @@ class GenreGenderTab(QWidget):
         self.genre_tag_style = _RadioRow(
             style_card.body,
             [("Combined  (GENRE=Rock/Surf)", "combined"), ("Split  (GENRE=Rock, STYLE=Surf)", "split")],
-            "combined",
-            tooltip=TIPS["tag_style"],
+            "split",
+            tooltips={
+                "combined": TIPS["tag_style_combined"],
+                "split": TIPS["tag_style_split"],
+            },
         )
         style_card.body.layout().addWidget(self.genre_tag_style)
         v.addWidget(style_card)
@@ -294,7 +361,7 @@ class GenreGenderTab(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(0, 8, 0, 10)
         header.setSpacing(6)
-        title = BodyLabel("Tag acapella audio files with voice gender (female/male) and reverb (wet/dry)")
+        title = BodyLabel("Tag vocal audio files with voice gender (female/male) and reverb (wet/dry)")
         title.setObjectName("HeaderDesc")
         header.addWidget(title)
         header.addWidget(InfoIcon(inner, on_click=lambda: self._show_help("gender")))
@@ -319,7 +386,10 @@ class GenreGenderTab(QWidget):
             run_card.body,
             [("Batch (fast)", "batch"), ("Per-file (live results)", "per_file")],
             "batch",
-            tooltip=TIPS["batch_mode"],
+            tooltips={
+                "batch": TIPS["run_mode_batch"],
+                "per_file": TIPS["run_mode_per_file"],
+            },
         )
         run_card.body.layout().addWidget(self.gender_run_mode)
         v.addWidget(run_card)
@@ -331,8 +401,11 @@ class GenreGenderTab(QWidget):
         self.gender_tag_field = _RadioRow(
             field_card.body,
             [("Comment", "comment"), ("Gender (custom)", "gender")],
-            "comment",
-            tooltip=TIPS["tag_field"],
+            "gender",
+            tooltips={
+                "comment": TIPS["tag_field_comment"],
+                "gender": TIPS["tag_field_gender"],
+            },
         )
         field_card.body.layout().addWidget(self.gender_tag_field)
         v.addWidget(field_card)
@@ -344,8 +417,11 @@ class GenreGenderTab(QWidget):
         self.gender_reverb_mode = _RadioRow(
             rev_card.body,
             [("Combined  (COMMENT=female/wet)", "combined"), ("Split  (GENDER=female, REVERB=wet)", "split")],
-            "combined",
-            tooltip=TIPS["reverb_mode"],
+            "split",
+            tooltips={
+                "combined": TIPS["reverb_mode_combined"],
+                "split": TIPS["reverb_mode_split"],
+            },
         )
         rev_card.body.layout().addWidget(self.gender_reverb_mode)
         v.addWidget(rev_card)
@@ -368,12 +444,97 @@ class GenreGenderTab(QWidget):
         scroll.setWidget(inner)
         return scroll
 
+    def _build_vocal_tab(self) -> QWidget:
+        scroll = ScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(ScrollArea.NoFrame)
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(
+            theme.PAGE_CONTENT_INSET, 0, theme.PAGE_CONTENT_INSET, 0
+        )
+        v.setSpacing(theme.SECTION_GAP)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 8, 0, 10)
+        header.setSpacing(6)
+        title = BodyLabel(
+            "Classify vocal content: Singing / Speech / Rapping / Humming / Choir"
+        )
+        title.setObjectName("HeaderDesc")
+        header.addWidget(title)
+        header.addWidget(InfoIcon(inner, on_click=lambda: self._show_help("vocal")))
+        header.addStretch(1)
+        v.addLayout(header)
+
+        paths = Section(inner, "Path")
+        paths.body.layout().setSpacing(12)
+        self.vocal_input_row = PathRow(
+            paths.body, "Input folder",
+            tip_text=TIPS["vocal_input"],
+            label_width=80,
+        )
+        self.vocal_include_subfolders = CheckBox("Include subfolders")
+        self.vocal_include_subfolders.setChecked(True)
+        self.vocal_include_subfolders.setToolTip(TIPS["include_subfolders"])
+        paths.body.layout().addWidget(self.vocal_include_subfolders)
+        v.addWidget(paths)
+
+        self.vocal_segments = CheckBox()
+        self.vocal_segments.setChecked(False)
+        self.vocal_segments.hide()
+
+        run_card = Section(inner, "Run mode")
+        self.vocal_run_mode = _RadioRow(
+            run_card.body,
+            [("Batch (fast)", "batch"), ("Per-file (live results)", "per_file")],
+            "batch",
+            tooltips={
+                "batch": TIPS["run_mode_batch"],
+                "per_file": TIPS["run_mode_per_file"],
+            },
+        )
+        run_card.body.layout().addWidget(self.vocal_run_mode)
+        v.addWidget(run_card)
+
+        field_card = Section(inner, "Write label to")
+        self.vocal_tag_field = _RadioRow(
+            field_card.body,
+            [("Comment", "comment"), ("Vocal type (custom)", "vocal")],
+            "vocal",
+            tooltips={
+                "comment": TIPS["vocal_tag_field_comment"],
+                "vocal": TIPS["vocal_tag_field_vocal"],
+            },
+        )
+        field_card.body.layout().addWidget(self.vocal_tag_field)
+        v.addWidget(field_card)
+
+        opts_card = Section(inner, "Tag options")
+        opts_lay = opts_card.body.layout()
+        m = opts_lay.contentsMargins()
+        opts_lay.setContentsMargins(m.left(), 14, m.right(), m.bottom())
+        opts_lay.setSpacing(12)
+        self.vocal_write_meta = CheckBox("Write metadata tags")
+        self.vocal_write_meta.setChecked(True)
+        self.vocal_write_meta.setToolTip(TIPS["vocal_write_meta"])
+        self.vocal_overwrite_tags = CheckBox("Overwrite existing tags")
+        self.vocal_overwrite_tags.setToolTip(TIPS["vocal_overwrite"])
+        opts_lay.addWidget(self.vocal_write_meta)
+        opts_lay.addWidget(self.vocal_overwrite_tags)
+        v.addWidget(opts_card)
+        v.addStretch(1)
+
+        scroll.setWidget(inner)
+        return scroll
+
     def _on_subtab_changed(self, _idx: int) -> None:
         if not hasattr(self, "_action_page"):
             return
-        is_genre = self._tabview.currentIndex() == 0
-        self.genre_btn.setVisible(is_genre)
-        self.gender_btn.setVisible(not is_genre)
+        idx = self._tabview.currentIndex()
+        self.genre_btn.setVisible(idx == 0)
+        self.gender_btn.setVisible(idx == 1)
+        self.vocal_btn.setVisible(idx == 2)
 
     # ----- action bar -----
 
@@ -386,21 +547,72 @@ class GenreGenderTab(QWidget):
         self.gender_btn = action_button(
             "▶ Tag gender", on_click=self._start_gender, accent=True, tip=TIPS["tag_gender"]
         )
+        self.vocal_btn = action_button(
+            "▶ Tag vocal type", on_click=self._start_vocal, accent=True, tip=TIPS["tag_vocal"]
+        )
         self.stop_btn = action_button("■ Stop", on_click=self._stop, tip=TIPS["stop"])
         self.stop_btn.setEnabled(False)
         page.add_button(self.genre_btn)
         page.add_button(self.gender_btn)
+        page.add_button(self.vocal_btn)
         page.add_button(self.stop_btn)
         page.add_stretch()
         self._on_subtab_changed(0)
 
     # ----- worker lifecycle -----
 
-    def _set_busy(self, busy: bool, status: str = "") -> None:
+    @staticmethod
+    def _enable_widgets(enabled: bool, *widgets) -> None:
+        for w in widgets:
+            if w is None:
+                continue
+            try:
+                w.setEnabled(enabled)
+            except Exception:
+                pass
+
+    def _panel_settings(self, panel: str) -> tuple:
+        if panel == "genre":
+            return (
+                self.genre_input_row,
+                self.genre_include_subfolders,
+                self.genre_run_mode,
+                self.genre_tag_style,
+                self.genre_write_meta,
+                self.genre_overwrite_tags,
+            )
+        if panel == "gender":
+            return (
+                self.gender_input_row,
+                self.gender_include_subfolders,
+                self.gender_run_mode,
+                self.gender_tag_field,
+                self.gender_reverb_mode,
+                self.gender_write_meta,
+                self.gender_overwrite_tags,
+            )
+        if panel == "vocal":
+            return (
+                self.vocal_input_row,
+                self.vocal_include_subfolders,
+                self.vocal_segments,
+                self.vocal_tag_field,
+                self.vocal_write_meta,
+                self.vocal_overwrite_tags,
+            )
+        return ()
+
+    def _set_busy(self, busy: bool, status: str = "", *, panel: Optional[str] = None) -> None:
+        """Lock only the started sub-tab's settings; other Genre/Gender/Vocal panels stay editable."""
         self._busy = busy
+        self._busy_panel = panel if busy else None
         self.genre_btn.setEnabled(not busy)
         self.gender_btn.setEnabled(not busy)
+        self.vocal_btn.setEnabled(not busy)
         self.stop_btn.setEnabled(busy)
+        for name in ("genre", "gender", "vocal"):
+            locked = busy and self._busy_panel == name
+            self._enable_widgets(not locked, *self._panel_settings(name))
         if busy:
             self.request_status_running.emit()
             if status:
@@ -418,6 +630,59 @@ class GenreGenderTab(QWidget):
         self._worker.stop()
         self.request_log.emit("[stopping] ...", "warn")
 
+    def _prepare_tag_files(
+        self,
+        input_dir: str,
+        *,
+        panel: TagPanel,
+        include_subfolders: bool,
+        title_prefix: str,
+    ) -> tuple[str, str] | None:
+        """Detect layout, prompt when ambiguous, return (files_list_path, log_summary)."""
+        root = Path(input_dir).expanduser().resolve()
+        scan_mode = scan_mode_from_recursive(include_subfolders)
+        options = resolve_tag_input(
+            self.window() or self,
+            root,
+            scan_mode,
+            title_prefix=title_prefix,
+        )
+        if options is None:
+            return None
+
+        paths = collect_paths_for_panel(root, scan_mode, options, panel)
+        if not paths:
+            if panel == "genre":
+                msg = (
+                    "No instrumental-side files found.\n\n"
+                    "Genre tags apply to instrumentals, samples, and the instrumental "
+                    "stem in pairs (not vocals)."
+                )
+            else:
+                msg = (
+                    "No vocal files found.\n\n"
+                    "Gender, reverb, and vocal-type tags apply to vocals and the vocal "
+                    "stem in pairs (not instrumentals)."
+                )
+            show_info(self, PANEL_TITLE, msg)
+            return None
+
+        total_audio = sum(1 for _ in cb.iter_sdr_audio_files(root, scan_mode))
+        skipped = max(0, total_audio - len(paths))
+        summary = f"{len(paths):,} file(s) to tag · {layout_log_line(options)}"
+        if skipped and options.layout == cb.SDR_LAYOUT_MIXED_FLAT:
+            summary += f" · {skipped:,} skipped (no vocals/instrumental keyword)"
+
+        self.request_log.emit(f"  Layout: {layout_log_line(options)}", "info")
+        self.request_log.emit(f"  {len(paths):,} file(s) selected for tagging", "info")
+        if skipped and options.layout == cb.SDR_LAYOUT_MIXED_FLAT:
+            self.request_log.emit(
+                f"  {skipped:,} file(s) skipped (unrecognized vocals/instrumental name)",
+                "detail",
+            )
+
+        return str(write_files_list(paths)), summary
+
     def _start_genre(self) -> None:
         if self._busy:
             return
@@ -426,9 +691,20 @@ class GenreGenderTab(QWidget):
             show_info(self, PANEL_TITLE, "Input folder is missing or invalid.")
             return
         self.request_clear_log.emit()
-        # Startup/config indented like Classify; === file headers stay flush.
+        win = self.window()
+        if win is not None and hasattr(win, "set_log_export_prefix"):
+            win.set_log_export_prefix("genre")
         self.request_log.emit("  Starting genre tagger:", "info")
         self.request_log.emit(f"  {input_dir}", "info")
+        prepared = self._prepare_tag_files(
+            input_dir,
+            panel="genre",
+            include_subfolders=self.genre_include_subfolders.isChecked(),
+            title_prefix="Genre",
+        )
+        if prepared is None:
+            return
+        files_from, _summary = prepared
         worker = TaggerWorker(
             "genre", input_dir,
             batch_mode=self.genre_run_mode.value() == "batch",
@@ -438,10 +714,12 @@ class GenreGenderTab(QWidget):
             csv_path="",
             include_subfolders=self.genre_include_subfolders.isChecked(),
             overwrite_tags=self.genre_overwrite_tags.isChecked(),
+            settings=self._settings,
+            files_from=files_from,
             parent=self,
         )
         self._wire(worker)
-        self._set_busy(True, "Tagging genre…")
+        self._set_busy(True, "Tagging genre…", panel="genre")
         worker.start()
 
     def _start_gender(self) -> None:
@@ -452,9 +730,20 @@ class GenreGenderTab(QWidget):
             show_info(self, PANEL_TITLE, "Input folder is missing or invalid.")
             return
         self.request_clear_log.emit()
-        # Startup/config indented like Classify; === file headers stay flush.
+        win = self.window()
+        if win is not None and hasattr(win, "set_log_export_prefix"):
+            win.set_log_export_prefix("gender")
         self.request_log.emit("  Starting gender tagger:", "info")
         self.request_log.emit(f"  {input_dir}", "info")
+        prepared = self._prepare_tag_files(
+            input_dir,
+            panel="gender",
+            include_subfolders=self.gender_include_subfolders.isChecked(),
+            title_prefix="Gender",
+        )
+        if prepared is None:
+            return
+        files_from, _summary = prepared
         worker = TaggerWorker(
             "gender", input_dir,
             batch_mode=self.gender_run_mode.value() == "batch",
@@ -464,13 +753,56 @@ class GenreGenderTab(QWidget):
             csv_path="",
             include_subfolders=self.gender_include_subfolders.isChecked(),
             overwrite_tags=self.gender_overwrite_tags.isChecked(),
+            settings=self._settings,
+            files_from=files_from,
             parent=self,
         )
         self._wire(worker)
-        self._set_busy(True, "Tagging gender…")
+        self._set_busy(True, "Tagging gender…", panel="gender")
         worker.start()
 
-    def _wire(self, worker: TaggerWorker) -> None:
+    def _start_vocal(self) -> None:
+        if self._busy:
+            return
+        input_dir = self.vocal_input_row.text().strip()
+        if not input_dir or not Path(input_dir).is_dir():
+            show_info(self, PANEL_TITLE, "Input folder is missing or invalid.")
+            return
+        self.request_clear_log.emit()
+        win = self.window()
+        if win is not None and hasattr(win, "set_log_export_prefix"):
+            win.set_log_export_prefix("vocal")
+        self.request_log.emit("  Starting PANNs vocal-type tagger:", "info")
+        self.request_log.emit(f"  {input_dir}", "info")
+        self.request_log.emit(
+            "  Focus: Singing · Speech · Rapping · Humming · Choir",
+            "info",
+        )
+        prepared = self._prepare_tag_files(
+            input_dir,
+            panel="vocal",
+            include_subfolders=self.vocal_include_subfolders.isChecked(),
+            title_prefix="Vocal type",
+        )
+        if prepared is None:
+            return
+        files_from, _summary = prepared
+        worker = PannsWorker(
+            input_dir,
+            include_subfolders=self.vocal_include_subfolders.isChecked(),
+            write_meta=self.vocal_write_meta.isChecked(),
+            overwrite_tags=self.vocal_overwrite_tags.isChecked(),
+            tag_field=self.vocal_tag_field.value(),
+            segment_sec=2.0 if self.vocal_segments.isChecked() else 0.0,
+            batch_mode=self.vocal_run_mode.value() == "batch",
+            files_from=files_from,
+            parent=self,
+        )
+        self._wire(worker)
+        self._set_busy(True, "Tagging vocal type…", panel="vocal")
+        worker.start()
+
+    def _wire(self, worker: Union[TaggerWorker, PannsWorker]) -> None:
         self._worker = worker
         worker.log_line.connect(self.request_log)
         worker.progress.connect(self.request_progress)
@@ -481,6 +813,45 @@ class GenreGenderTab(QWidget):
     # ----- help -----
 
     def _show_help(self, mode: str) -> None:
+        if mode == "vocal":
+            help_dialog(
+                self,
+                title="Vocal type help",
+                heading="Classify Singing / Speech / Rapping / Humming / Choir",
+                intro=(
+                    "PANNs Cnn14 (AudioSet) scores vocal content without fine-tuning. "
+                    "The five focus classes are softmax-renormalized to shares that sum "
+                    "to 100% (same idea as Classify RMS energy shares)."
+                ),
+                sections=[
+                    ("Workflow", [
+                        "1. Choose a folder (vocals root, pairs root, or mixed library).",
+                        "2. Layout is detected like Classify — only vocal files are tagged.",
+                        "3. When many files lack clear names, you may be asked to treat all "
+                        "as vocals or all as pairs (same prompts as SI-SDR).",
+                        "4. Pick run mode (Batch or Per-file) and tag options.",
+                        "5. Click ▶ Tag vocal type and watch scores in the LOG panel.",
+                    ]),
+                    ("Options", [
+                        "Comment stores the bare label (e.g. Singing). Vocal type stores "
+                        "the same label in a custom VOCAL_TYPE field. Confidence percentages "
+                        "appear in the LOG only, not in tags.",
+                        "Overwrite off skips files that already look tagged (resume-friendly).",
+                    ]),
+                    ("Setup", [
+                        "Frozen build: run install-deps.bat beside STEM-organizer.exe "
+                        "(installs panns_inference into site-packages\\). "
+                        "From source: root install-deps.bat or panns_tagger\\install-deps.bat.",
+                    ]),
+                    ("Sources", [
+                        '<a href="https://github.com/qiuqiangkong/audioset_tagging_cnn">'
+                        "PANNs Cnn14</a> pretrained on AudioSet (panns-inference). "
+                        "First run downloads ~470 MB weights into panns_tagger\\models\\.",
+                    ]),
+                ],
+            )
+            return
+
         is_genre = mode == "genre"
         help_dialog(
             self,
@@ -488,7 +859,7 @@ class GenreGenderTab(QWidget):
             heading=(
                 "Tag instrumentals with genre & style"
                 if is_genre
-                else "Tag acapellas with voice gender + dry/wet reverb"
+                else "Tag vocals with voice gender + dry/wet reverb"
             ),
             intro=(
                 "Classify instrumental tracks and write Discogs-style GENRE / STYLE tags"
@@ -497,15 +868,23 @@ class GenreGenderTab(QWidget):
             ),
             sections=[
                 ("Workflow", [
-                    "1. Choose an input folder of instrumental FLAC/MP3/WAV files.",
-                    "2. Pick run mode (Batch or Per-file) and tag style.",
-                    "3. Click ▶ Tag genre (or Tag gender) and watch progress in the LOG panel.",
-                    "4. Check FLAC tags and/or the CSV export when the run finishes.",
-                ]),
-                ("Model", [
-                    "Genre: Hugging Face MAEST mtg-upf/discogs-maest-30s-pw-129e-519l (Discogs519)."
-                    if is_genre
-                    else "Gender: Discogs-EffNet (ONNX Runtime DirectML). Reverb: in-house trained vocal mel-CNN.",
+                    (
+                        "1. Choose a folder (instrumental root, pairs root, or mixed library)."
+                        if is_genre
+                        else "1. Choose a folder (vocal root, pairs root, or mixed library)."
+                    ),
+                    (
+                        "2. Layout is detected like Classify — only instrumental-side files "
+                        "are tagged (instrumentals, bass/drums/other, or the instrumental stem "
+                        "in pairs — not vocals)."
+                        if is_genre
+                        else "2. Layout is detected like Classify — only vocal files are tagged "
+                        "(vocals stem in pairs, not instrumentals)."
+                    ),
+                    "3. When many files lack clear names, you may be asked to treat all as "
+                    "pairs or all as one stem type (same prompts as SI-SDR).",
+                    "4. Pick run mode (Batch or Per-file) and tag options.",
+                    "5. Click ▶ Tag genre (or Tag gender) and watch progress in the LOG panel.",
                 ]),
                 ("Options", [
                     "Batch is faster (best with a GPU). Per-file prints each prediction live. "
@@ -517,6 +896,19 @@ class GenreGenderTab(QWidget):
                     "Frozen build: run install-deps.bat beside STEM-organizer.exe "
                     "(wheels go into site-packages\\; no nested genre_gender_tagger\\venv). "
                     "From source: run root install-deps.bat or genre_gender_tagger\\install-deps.bat.",
+                ]),
+                ("Sources", [
+                    (
+                        'Genre: <a href="https://huggingface.co/mtg-upf/discogs-maest-30s-pw-129e">'
+                        "Hugging Face MAEST</a> "
+                        "mtg-upf/discogs-maest-30s-pw-129e-519l (Discogs519)."
+                        if is_genre
+                        else (
+                            'Gender: <a href="https://essentia.upf.edu/models.html#voice-gender">'
+                            "Discogs-EffNet</a> (ONNX Runtime DirectML). "
+                            "Reverb: in-house trained vocal mel-CNN."
+                        )
+                    ),
                 ]),
             ],
         )
@@ -538,6 +930,13 @@ class GenreGenderTab(QWidget):
             "gg_gender_reverb_mode": self.gender_reverb_mode.value(),
             "gg_gender_write_meta": bool(self.gender_write_meta.isChecked()),
             "gg_gender_overwrite_tags": bool(self.gender_overwrite_tags.isChecked()),
+            "gg_vocal_input_dir": display_path(self.vocal_input_row.text()),
+            "gg_vocal_include_subfolders": bool(self.vocal_include_subfolders.isChecked()),
+            "gg_vocal_batch_mode": self.vocal_run_mode.value() == "batch",
+            "gg_vocal_segments": bool(self.vocal_segments.isChecked()),
+            "gg_vocal_tag_field": self.vocal_tag_field.value(),
+            "gg_vocal_write_meta": bool(self.vocal_write_meta.isChecked()),
+            "gg_vocal_overwrite_tags": bool(self.vocal_overwrite_tags.isChecked()),
         }
 
     def load_settings(self) -> None:
@@ -548,17 +947,34 @@ class GenreGenderTab(QWidget):
                 self.genre_input_row.set_text(d["gg_genre_input_dir"])
             self.genre_include_subfolders.setChecked(bool(d.get("gg_genre_include_subfolders", True)))
             self.genre_run_mode.set_value("batch" if d.get("gg_genre_batch_mode", True) else "per_file")
-            self.genre_tag_style.set_value(d.get("gg_genre_tag_style", "combined"))
+            self.genre_tag_style.set_value(d.get("gg_genre_tag_style", "split"))
             self.genre_write_meta.setChecked(bool(d.get("gg_genre_write_meta", True)))
             self.genre_overwrite_tags.setChecked(bool(d.get("gg_genre_overwrite_tags", False)))
             if d.get("gg_gender_input_dir"):
                 self.gender_input_row.set_text(d["gg_gender_input_dir"])
             self.gender_include_subfolders.setChecked(bool(d.get("gg_gender_include_subfolders", True)))
             self.gender_run_mode.set_value("batch" if d.get("gg_gender_batch_mode", True) else "per_file")
-            self.gender_tag_field.set_value(d.get("gg_gender_tag_field", "comment"))
-            self.gender_reverb_mode.set_value(d.get("gg_gender_reverb_mode", "combined"))
+            self.gender_tag_field.set_value(d.get("gg_gender_tag_field", "gender"))
+            self.gender_reverb_mode.set_value(d.get("gg_gender_reverb_mode", "split"))
             self.gender_write_meta.setChecked(bool(d.get("gg_gender_write_meta", True)))
             self.gender_overwrite_tags.setChecked(bool(d.get("gg_gender_overwrite_tags", False)))
+            if d.get("gg_vocal_input_dir"):
+                self.vocal_input_row.set_text(d["gg_vocal_input_dir"])
+            self.vocal_include_subfolders.setChecked(bool(d.get("gg_vocal_include_subfolders", True)))
+            self.vocal_run_mode.set_value("batch" if d.get("gg_vocal_batch_mode", True) else "per_file")
+            self.vocal_segments.setChecked(bool(d.get("gg_vocal_segments", False)))
+            self.vocal_tag_field.set_value(d.get("gg_vocal_tag_field", "vocal"))
+            self.vocal_write_meta.setChecked(bool(d.get("gg_vocal_write_meta", True)))
+            self.vocal_overwrite_tags.setChecked(bool(d.get("gg_vocal_overwrite_tags", False)))
+            # Auto-fill from Classify output if own fields are empty
+            classify_out = d.get("output_dir", "")
+            if classify_out:
+                if not d.get("gg_genre_input_dir"):
+                    self.genre_input_row.set_text(classify_out)
+                if not d.get("gg_gender_input_dir"):
+                    self.gender_input_row.set_text(classify_out)
+                if not d.get("gg_vocal_input_dir"):
+                    self.vocal_input_row.set_text(classify_out)
         finally:
             self._loading = False
 
@@ -581,6 +997,13 @@ class GenreGenderTab(QWidget):
             self.gender_reverb_mode.valueChanged,
             self.gender_write_meta.toggled,
             self.gender_overwrite_tags.toggled,
+            self.vocal_input_row.entry.textChanged,
+            self.vocal_include_subfolders.toggled,
+            self.vocal_run_mode.valueChanged,
+            self.vocal_segments.toggled,
+            self.vocal_tag_field.valueChanged,
+            self.vocal_write_meta.toggled,
+            self.vocal_overwrite_tags.toggled,
         ):
             sig.connect(self._schedule_save)
 

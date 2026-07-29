@@ -3,6 +3,7 @@ PySide6-Fluent-Widgets>=1.11,<2
 # ML / audio backends (same as original STEM organizer)
 # torch is installed separately by install-deps.bat (CUDA 12.4 / 12.8 / CPU)
 numpy
+scipy
 soundfile
 demucs
 sounddevice
@@ -11,5 +12,7 @@ psutil
 requests
 # Optional tag writers / metadata
 mutagen
+# Overview compression detect (spectral fake-lossless)
+flac-detective==1.7.0
 # torchvision (hear21passt/timm) imports PIL
 Pillow

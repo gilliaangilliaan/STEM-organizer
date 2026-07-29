@@ -35,7 +35,7 @@ from .. import theme
 from ..settings_store import SettingsStore, display_path
 from ..widgets.action_bar import ActionBarPage
 from ..widgets.action_button import action_button
-from ..widgets.dialogs import help_dialog, show_info
+from ..widgets.dialogs import ask_yes_no, help_dialog, show_info
 from ..widgets.info_icon import InfoIcon
 from ..widgets.path_row import PathRow
 from ..widgets.section import Section
@@ -398,12 +398,26 @@ class ClassifyTab(QWidget):
                 "On: delete the whole output folder."
             )
         )
+        self.sdr_write_tags = CheckBox("Write SI-SDR to SDR metadata tag")
+        self.sdr_write_tags.setChecked(False)
+        self.sdr_write_tags.setToolTip(
+            theme.format_tooltip(
+                "Write each stem's SI-SDR score (dB) into the SDR tag "
+                "(FLAC Vorbis / ID3 TXXX / M4A). SDR tag is read by Charts."
+            )
+        )
 
         self._cls_stack.addWidget(rms_tab)
         self._cls_stack.addWidget(sdr_tab)
         # Rebuild after stack pages exist
         self._rebuild_sdr_thresholds()
-        sdr_layout.addWidget(self.sdr_delete_folder)
+        sdr_opts = QHBoxLayout()
+        sdr_opts.setContentsMargins(0, 0, 0, 0)
+        sdr_opts.setSpacing(16)
+        sdr_opts.addWidget(self.sdr_delete_folder, 0, Qt.AlignVCenter)
+        sdr_opts.addWidget(self.sdr_write_tags, 0, Qt.AlignVCenter)
+        sdr_opts.addStretch(1)
+        sdr_layout.addLayout(sdr_opts)
         sdr_layout.addStretch(1)
 
         cls_body = cls_section.body.layout()
@@ -623,6 +637,9 @@ class ClassifyTab(QWidget):
             return
         self._worker_kind = "rms"
         self._rms_saw_done = False
+        win = self.window()
+        if win is not None and hasattr(win, "set_log_export_prefix"):
+            win.set_log_export_prefix("classify")
         self._worker = ClassifyWorker(params, parent=self)
         self._wire_worker(self._worker)
         self.set_running(True)
@@ -641,12 +658,86 @@ class ClassifyTab(QWidget):
             "scan_mode": cb.SCAN_MODES[self.scan_combo.currentText()],
             "sdr_thresholds": dict(self._sdr_thresholds),
             "sdr_delete_folder": self.sdr_delete_folder.isChecked(),
+            "write_sdr_tags": self.sdr_write_tags.isChecked(),
         }
+        if not self._maybe_prompt_sdr_process_all(params):
+            return
         self._worker_kind = "sdr"
+        win = self.window()
+        if win is not None and hasattr(win, "set_log_export_prefix"):
+            win.set_log_export_prefix("sdr")
         self._worker = SdrClassifyWorker(params, parent=self)
         self._wire_worker(self._worker)
         self.set_running(True)
         self._worker.start()
+
+    def _maybe_prompt_sdr_process_all(self, params: dict) -> bool:
+        """Ask to treat loose files / 2-file folders as one stem type or pairs.
+
+        Pair ask (MUSDB): ≥10 two-file song folders without clear names → process all as pairs.
+        Flat ask: ≥10 instrumental or vocals keyword hits with leftovers → process all as that type.
+        """
+        root = Path(params["target_dir"])
+        if not root.is_dir():
+            return True
+        scan_mode = params["scan_mode"]
+        mode_cfg = cb.STEM_MODES[cb.resolve_stem_mode(params["stem_mode"])]
+        preferred = mode_cfg["categories"]
+        _cats, layout = cb.resolve_sdr_layout_and_categories(root, scan_mode, preferred)
+        parent = self.window() or self
+
+        # 2-stem: many song folders with exactly 2 files → offer process-all as pairs.
+        if set(preferred) == {"instrumental", "vocals"}:
+            pair_hint = cb.build_pair_folder_process_all_hint(root, scan_mode)
+            if pair_hint and pair_hint.get("should_ask_process_all"):
+                if ask_yes_no(
+                    parent,
+                    "SI-SDR · all as pairs?",
+                    cb.pair_folder_process_all_message(pair_hint),
+                    yes_text="Yes, all pairs",
+                    no_text="Keywords only",
+                ):
+                    params["sdr_categories"] = ("instrumental", "vocals")
+                    params["sdr_layout"] = cb.SDR_LAYOUT_MUSDB
+                    params["sdr_pair_process_all"] = True
+                    return True
+                # Keywords only: still use improved name matching (no force).
+
+        # Loose-file layouts (and unknown flat dumps) can leave unmarked tracks behind.
+        if layout not in (
+            cb.SDR_LAYOUT_SINGLE_FLAT,
+            cb.SDR_LAYOUT_MIXED_FLAT,
+            None,
+        ):
+            return True
+
+        # Same ≥10 rule for instrumental and vocals/acapella/vocal.
+        candidates: list[dict] = []
+        for kind in ("instrumental", "vocals"):
+            hint = cb.build_single_stem_folder_hint(root, scan_mode, kind)
+            if hint and hint.get("should_ask_process_all"):
+                candidates.append(hint)
+        if not candidates:
+            return True
+        hint = max(candidates, key=lambda h: int(h.get("keyword_matches") or 0))
+        kind = str(hint["kind"])
+        title = (
+            "SI-SDR · all as vocals?"
+            if kind == "vocals"
+            else "SI-SDR · all as instrumental?"
+        )
+        if ask_yes_no(
+            parent,
+            title,
+            cb.single_stem_process_all_message(hint),
+            yes_text="Yes, all files",
+            no_text="Keywords only",
+        ):
+            params["sdr_categories"] = (kind,)
+            params["sdr_layout"] = cb.SDR_LAYOUT_SINGLE_FLAT
+            params["sdr_flat_process_all"] = True
+            params["sdr_user_picked_category"] = True
+        return True
 
     def _wire_worker(self, worker: BaseWorker) -> None:
         worker.log_line.connect(self._forward_worker_log)
@@ -706,6 +797,7 @@ class ClassifyTab(QWidget):
             self.dedup, self.peak_norm, self.make_mixture,
             self.delete_if_short, self.min_duration_sec, self.skip_existing, self.delete_if_incomplete,
             self.sdr_delete_folder,
+            self.sdr_write_tags,
             *self._sdr_threshold_widgets.values(),
         ):
             try:
@@ -776,20 +868,33 @@ class ClassifyTab(QWidget):
             rhythm="classify",
             sections=[
                 ("How it works", [
-                    "• Scans folders of audio stems and classifies each one via Demucs "
-                    "(vocals, drums, bass, other)",
+                    (
+                        "• Scans folders of audio stems and classifies each one via "
+                        '<a href="https://github.com/facebookresearch/demucs">Demucs</a> '
+                        "(vocals, drums, bass, other)"
+                    ),
                     "• Mixes original files into cleanly-grouped outputs per folder",
-                    "• Skips stems with ambiguous classification "
-                    "(e.g. background vocals + guitar)",
-                    "• Supports 2-way (instrumental/vocals) and 4-way "
-                    "(bass/drums/other/vocals) mixing modes",
-                    "Ideal for organizing ripped stems, unsorted libraries, or building "
-                    "training datasets — without having to audition everything manually.",
-                    "Accepted stems are summed from their original files (not AI-separated). "
-                    "You can filter short or incomplete outputs, resume by skipping existing "
-                    "results, and export an optional mixture.wav per song.",
-                    "Additionally, you can play 2- or 4-stem folders to audition mixes, "
-                    "using the STEM player with the Play button.",
+                    (
+                        "• Skips stems with ambiguous classification "
+                        "(e.g. background vocals + guitar)"
+                    ),
+                    (
+                        "• Supports 2-way (instrumental/vocals) and 4-way "
+                        "(bass/drums/other/vocals) mixing modes"
+                    ),
+                    (
+                        "Ideal for organizing ripped stems, unsorted libraries, or building "
+                        "training datasets — without having to audition everything manually."
+                    ),
+                    (
+                        "Accepted stems are summed from their original files (not AI-separated). "
+                        "You can filter short or incomplete outputs, resume by skipping existing "
+                        "results, and export an optional mixture.wav per song."
+                    ),
+                    (
+                        "Additionally, you can play 2- or 4-stem folders to audition mixes, "
+                        "using the STEM player with the Play button."
+                    ),
                 ]),
                 ("Stem legend — 2-stem", [
                     "instrumental — Non-vocal content: drums, bass, keys, synths, and other "
@@ -815,21 +920,47 @@ class ClassifyTab(QWidget):
                     "Skip the entire song: abort this folder; no outputs are written.",
                 ]),
                 ("(Optional) Calculate SI-SDR", [
-                    "After organizing stems (or on an existing library), you can filter out "
-                    "low-quality results using scale-invariant SDR:",
-                    "• Optional SI-SDR quality check on organized stem folders.",
-                    "• Each stem file is processed individually through Demucs and compared "
-                    "to the model output.",
-                    "• Set per-stem thresholds (dB) — stems scoring below are moved to the "
-                    "Recycle Bin.",
-                    "• Optionally delete the whole folder (Type 1) or all stems for a song "
-                    "(Type 2) when any stem fails.",
-                    "• Uses the same 2-way or 4-way stem mode and thresholds as the main "
-                    "classification settings.",
+                    (
+                        "After organizing stems (or on an existing library), you can filter out "
+                        "low-quality results using scale-invariant SDR:"
+                    ),
+                    (
+                        "• Optional "
+                        '<a href="https://source-separation.github.io/tutorial/basics/evaluation.html#si-sdr">'
+                        "SI-SDR</a> quality check on organized stem folders."
+                    ),
+                    (
+                        "• Each stem file is processed individually through "
+                        '<a href="https://github.com/facebookresearch/demucs">Demucs</a> '
+                        "and compared to the model output."
+                    ),
+                    (
+                        "• Set per-stem thresholds (dB) — stems scoring below are moved to the "
+                        "Recycle Bin."
+                    ),
+                    (
+                        "• Optionally delete the whole folder ("
+                        '<a href="https://github.com/ZFTurbo/Music-Source-Separation-Training/blob/main/docs/dataset_types.md#type-1-musdb">'
+                        "Type 1</a>) or all stems for a song ("
+                        '<a href="https://github.com/ZFTurbo/Music-Source-Separation-Training/blob/main/docs/dataset_types.md#type-2-stems">'
+                        "Type 2</a>) when any stem fails."
+                    ),
+                    (
+                        "• Uses the same 2-way or 4-way stem mode and thresholds as the main "
+                        "classification settings."
+                    ),
                     "Two input layouts are supported:",
-                    "• Type 1: one folder per song containing vocals.wav, bass.wav, etc.",
-                    "• Type 2: one folder per stem category (vocals/, bass/, …) with a file "
-                    "per song inside.",
+                    (
+                        "• "
+                        '<a href="https://github.com/ZFTurbo/Music-Source-Separation-Training/blob/main/docs/dataset_types.md#type-1-musdb">'
+                        "Type 1</a>: one folder per song containing vocals.wav, bass.wav, etc."
+                    ),
+                    (
+                        "• "
+                        '<a href="https://github.com/ZFTurbo/Music-Source-Separation-Training/blob/main/docs/dataset_types.md#type-2-stems">'
+                        "Type 2</a>: one folder per stem category (vocals/, bass/, …) with a file "
+                        "per song inside."
+                    ),
                 ]),
             ],
         )
@@ -866,6 +997,7 @@ class ClassifyTab(QWidget):
             "delete_if_incomplete": bool(self.delete_if_incomplete.isChecked()),
             "skip_existing": bool(self.skip_existing.isChecked()),
             "sdr_delete_folder": bool(self.sdr_delete_folder.isChecked()),
+            "write_sdr_tags": bool(self.sdr_write_tags.isChecked()),
             "sdr_thresholds": dict(self._sdr_thresholds),
             # Always reopen on RMS — do not restore last SI-SDR session.
             "classify_mode": "rms",
@@ -916,6 +1048,7 @@ class ClassifyTab(QWidget):
             self.delete_if_incomplete.setChecked(bool(d.get("delete_if_incomplete", False)))
             self.skip_existing.setChecked(bool(d.get("skip_existing", True)))
             self.sdr_delete_folder.setChecked(bool(d.get("sdr_delete_folder", True)))
+            self.sdr_write_tags.setChecked(bool(d.get("write_sdr_tags", False)))
             stored = d.get("sdr_thresholds")
             if isinstance(stored, dict):
                 for cat in cb.SDR_DEFAULT_THRESHOLDS:
@@ -928,12 +1061,24 @@ class ClassifyTab(QWidget):
         finally:
             self._loading = False
 
+    def _autofill_output_from_input(self, text: str) -> None:
+        if self._loading:
+            return
+        if self.output_row.text().strip():
+            return
+        text = text.strip()
+        if not text:
+            return
+        p = Path(text)
+        self.output_row.set_text(str(Path(p.parent, p.name + "_organized")))
+
     def _bind_autosave(self) -> None:
         """Wire every settings-affecting widget to a debounced save."""
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.setInterval(200)
         self._autosave_timer.timeout.connect(self._flush_settings)
+        self.input_row.entry.textChanged.connect(self._autofill_output_from_input)
         for sig in (
             self.input_row.entry.textChanged,
             self.output_row.entry.textChanged,
@@ -955,6 +1100,7 @@ class ClassifyTab(QWidget):
             self.delete_if_incomplete.toggled,
             self.skip_existing.toggled,
             self.sdr_delete_folder.toggled,
+            self.sdr_write_tags.toggled,
         ):
             sig.connect(self._schedule_save)
 

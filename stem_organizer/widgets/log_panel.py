@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import CaptionLabel, PushButton, TextEdit
 
 from .. import theme
+from ..musical_keys import CHART_KEY_COLORS, KEY_DISPLAY_ORDER, SHORT_TO_DISPLAY
 
 # Tag → (color_token_or_hex, bold, italic, monospace).
 # Colors match CTk stem_organizer_ui log tags exactly.
@@ -48,11 +49,14 @@ TAG_STYLES: dict[str, tuple[str, bool, bool, bool]] = {
     "gg_conf_low": (theme.GG_CONF_LOW_COLOR, True, False, True),
     "gg_result":("log_fg",   False, False, True),
     "log_pct":  (theme.LOG_PCT_COLOR, False, False, True),
+    "log_note": (theme.LOG_WARN_COLOR, False, False, True),  # same yellow as warning/suspicious
+    "log_note_err": (theme.LOG_ERR_COLOR, False, False, True),  # failed badge description (same size as log_note)
     "deleted":  (theme.LOG_DELETED_COLOR, False, False, True),
     "log_margin": (theme.LOG_MARGIN_COLOR, False, False, True),
 }
 
 LOG_CHIP_FONT_PX = 11  # CTk LOG_STEM_CHIP_FONT_SIZE was 9; slight bump for Qt
+LOG_NOTE_FONT_PX = 10  # smaller description beside warning/suspicious badges
 LOG_PCT_FONT_PX = 11   # was 8 — closer to body log size for readability
 LOG_LINE_EXTRA_PX = 5  # extra space between log lines (QTextBlockFormat)
 # Classify startup/config lines use this indent; === progress headers stay flush.
@@ -76,19 +80,112 @@ LOG_GG_COLORS = {
     "male":   "#60A5FA",
     "dry":    theme.COLORS["log_fg"],
     "wet":    "#262833",
+    # Overview Compression donut — same fills as CHART_COMPRESSION_COLORS.
+    "lossless": theme.LOG_OK_COLOR,   # #7ee0a0 green
+    "lossy":    theme.LOG_ERR_COLOR,  # #ff7a7a red
+    # flac-detective / Integrity warning — yellow badge, dark text
+    "authentic": "#262833",
+    "warning": theme.LOG_WARN_COLOR,
+    "suspicious": theme.LOG_WARN_COLOR,
+    "fake_certain": "#262833",
+    # Integrity → Corruption verdicts
+    "ok": theme.LOG_OK_COLOR,
+    "minor": theme.LOG_WARN_COLOR,  # legacy; log maps minor→warning
+    "failed": theme.LOG_ERR_COLOR,
+    "suspect": theme.LOG_WARN_COLOR,  # legacy; log maps suspect→warning
+    # Vocal type (Charts CHART_VOCAL_TYPE_COLORS — purple, progressively lighter)
+    "singing": theme.CHART_VOCAL_TYPE_COLORS["Singing"],
+    "speech": theme.CHART_VOCAL_TYPE_COLORS["Speech"],
+    "rapping": theme.CHART_VOCAL_TYPE_COLORS["Rapping"],
+    "humming": theme.CHART_VOCAL_TYPE_COLORS["Humming"],
+    "choir": theme.CHART_VOCAL_TYPE_COLORS["Choir"],
 }
+# Musical keys — lowercase lookup keys; paint uses display casing.
+_KEY_CHIP_DISPLAY: dict[str, str] = {}
+for _disp in KEY_DISPLAY_ORDER:
+    LOG_GG_COLORS[_disp.lower()] = CHART_KEY_COLORS[_disp]
+    _KEY_CHIP_DISPLAY[_disp.lower()] = _disp
+    _compact = _disp.replace(" / ", "/")
+    if _compact != _disp:
+        LOG_GG_COLORS.setdefault(_compact.lower(), CHART_KEY_COLORS[_disp])
+        _KEY_CHIP_DISPLAY.setdefault(_compact.lower(), _disp)
+for _short, _disp in SHORT_TO_DISPLAY.items():
+    LOG_GG_COLORS.setdefault(_short.lower(), CHART_KEY_COLORS[_disp])
+    _KEY_CHIP_DISPLAY.setdefault(_short.lower(), _disp)
+
 LOG_GG_FG = {
     "dry": "#262833",
     "wet": theme.COLORS["log_fg"],
+    "lossless": "#262833",
+    "lossy": "#262833",
+    # AUTHENTIC / FAKE_CERTAIN: default light text (no tint).
+    # WARNING: dark text on yellow badge.
+    "authentic": theme.COLORS["log_fg"],
+    "warning": "#262833",
+    "suspicious": "#262833",
+    "fake_certain": theme.COLORS["log_fg"],
+    "ok": "#262833",
+    "minor": "#262833",
+    "failed": "#262833",
+    "suspect": "#262833",
+    # Vocal type: dark text on all purple chips.
+    "singing": "#262833",
+    "speech": "#262833",
+    "rapping": "#262833",
+    "humming": "#262833",
+    "choir": "#262833",
 }
+for _k in _KEY_CHIP_DISPLAY:
+    LOG_GG_FG[_k] = "#262833"
+
 LOG_SKIP_COLOR = "#636b7a"
+
+
+_GENRE_CHIP_LIGHT_TEXT = frozenset({"stage & screen", "non-music"})
+
+
+def _genre_chip_fg(genre: str) -> str:
+    """Genre badge text — dark by default; light on very dark fills only."""
+    if (genre or "").strip().casefold() in _GENRE_CHIP_LIGHT_TEXT:
+        return theme.COLORS["log_fg"]
+    return "#262833"
+
+
+def _genre_chip_bg(genre: str) -> str:
+    from ..dataset.charts import genre_colors_for
+
+    name = (genre or "").strip()
+    if not name:
+        return LOG_GG_COLORS["dry"]
+    return genre_colors_for([name]).get(name, LOG_GG_COLORS["dry"])
 
 # CTk: r'^(\s+)([a-z_]+)(?: (\d+%))?(?: \(margin [^)]+\))?(  →  .+)$'
 STEM_CLASSIFY_RE = re.compile(
     r"^(\s+)([a-z_]+)(?: (\d+%))?(?: \(margin [^)]+\))?(  →  .+)$"
 )
+# Key badges include / and # (Db/C#, Abm/G#m). Longest-first for alternation.
+_KEY_BADGE_ALTS = "|".join(
+    sorted(
+        {
+            re.escape(x)
+            for x in list(KEY_DISPLAY_ORDER)
+            + list(SHORT_TO_DISPLAY)
+            + [d.replace(" / ", "/") for d in KEY_DISPLAY_ORDER]
+        },
+        key=len,
+        reverse=True,
+    )
+)
 GG_BADGE_RE = re.compile(
-    r"^(\s*)(female|male|dry|wet)(?: \(confidence [^)]+\)| (\d+%))?\s*$",
+    r"^(\s*)(female|male|dry|wet|lossless|lossy|"
+    r"authentic|warning|suspicious|fake_certain|"
+    r"ok|minor|failed|suspect|"
+    r"singing|speech|rapping|humming|choir|"
+    + _KEY_BADGE_ALTS
+    + r")"
+    r"(?: \(confidence [^)]+\)| (\d+%))?"
+    r"(?:  (.+))?"
+    r"\s*$",
     re.IGNORECASE,
 )
 GG_HEADER_RE = re.compile(r"^=== .+ ===\s*$")
@@ -189,22 +286,26 @@ class ChipRenderer:
 
     def chip_fg(self, label: str) -> str:
         key = label.strip().lower()
-        return LOG_GG_FG.get(key, "#ffffff")
+        return LOG_GG_FG.get(key, theme.COLORS["log_fg"])
 
     def chip_pixmap(self, label: str) -> QPixmap:
-        """Paint a fixed-size chip (CTk equal width — Qt text pads don't paint bg reliably)."""
+        """Paint a chip (min width = shared stem width; longer labels grow)."""
         key = label.strip().lower()
         cached = self._chip_pix_cache.get(key)
         if cached is not None:
             return cached
-        w, h = self.chip_width_px, self.chip_height_px
+        fm = QFontMetrics(self.chip_font)
+        # Horizontal pad so longer verdicts (fake_certain) aren't clipped.
+        w = max(self.chip_width_px, fm.horizontalAdvance(key) + 12)
+        h = self.chip_height_px
         img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
         img.fill(QColor(self.chip_bg(key)))
         painter = QPainter(img)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
         painter.setFont(self.chip_font)
         painter.setPen(QColor(self.chip_fg(key)))
-        painter.drawText(img.rect(), int(Qt.AlignCenter), key)
+        paint_text = _KEY_CHIP_DISPLAY.get(key, key)
+        painter.drawText(img.rect(), int(Qt.AlignCenter), paint_text)
         painter.end()
         pix = QPixmap.fromImage(img)
         self._chip_pix_cache[key] = pix
@@ -220,7 +321,7 @@ class ChipRenderer:
         """Chip painted in an arbitrary category color (Rename auto-detect).
 
         min width = shared chip width so it lines up with stem/skip chips; longer
-        labels grow. Text is white (category badges use white-on-color everywhere).
+        labels grow. Text is soft log_fg (category badges use soft-on-color).
         """
         display = (label or "?").strip().lower() or "?"
         cache_key = f"cat:{display}:{bg_hex}"
@@ -236,7 +337,7 @@ class ChipRenderer:
         painter = QPainter(img)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
         painter.setFont(self.chip_font)
-        painter.setPen(QColor("#ffffff"))
+        painter.setPen(QColor(theme.COLORS["log_fg"]))
         painter.drawText(img.rect(), int(Qt.AlignCenter), display)
         painter.end()
         pix = QPixmap.fromImage(img)
@@ -248,10 +349,12 @@ class ChipRenderer:
         safe = re.sub(r"[^\w.-]+", "_", (label or "?").strip())[:40]
         cursor.insertImage(pix.toImage(), f"catchip_{safe}_{bg_hex.lstrip('#')}")
 
-    def gg_value_pixmap(self, text: str, style_key: str) -> QPixmap:
-        """Genre (dry) / Style (wet) chip — min width = stem chips; longer text grows."""
+    def gg_value_pixmap(
+        self, text: str, style_key: str, *, bg_hex: Optional[str] = None
+    ) -> QPixmap:
+        """Genre (dry / custom fill) / Style (wet) chip — min width = stem chips."""
         display = (text or "?").strip() or "?"
-        cache_key = f"ggval:{style_key}:{display}"
+        cache_key = f"ggval:{style_key}:{bg_hex or ''}:{display}"
         cached = self._chip_pix_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -259,20 +362,29 @@ class ChipRenderer:
         fm = QFontMetrics(self.chip_font)
         w = max(self.chip_width_px, fm.horizontalAdvance(padded))
         h = self.chip_height_px
+        fill = bg_hex or self.chip_bg(style_key)
+        fg = _genre_chip_fg(display) if bg_hex else self.chip_fg(style_key)
         img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
-        img.fill(QColor(self.chip_bg(style_key)))
+        img.fill(QColor(fill))
         painter = QPainter(img)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
         painter.setFont(self.chip_font)
-        painter.setPen(QColor(self.chip_fg(style_key)))
+        painter.setPen(QColor(fg))
         painter.drawText(img.rect(), int(Qt.AlignCenter), display)
         painter.end()
         pix = QPixmap.fromImage(img)
         self._chip_pix_cache[cache_key] = pix
         return pix
 
-    def insert_gg_value_chip(self, cursor: QTextCursor, text: str, style_key: str) -> None:
-        pix = self.gg_value_pixmap(text, style_key)
+    def insert_gg_value_chip(
+        self,
+        cursor: QTextCursor,
+        text: str,
+        style_key: str,
+        *,
+        bg_hex: Optional[str] = None,
+    ) -> None:
+        pix = self.gg_value_pixmap(text, style_key, bg_hex=bg_hex)
         safe = re.sub(r"[^\w.-]+", "_", (text or "?").strip())[:40]
         cursor.insertImage(pix.toImage(), f"ggchip_{style_key}_{safe}")
 
@@ -291,7 +403,11 @@ class ChipRenderer:
             if mono:
                 font = QFont(theme.FONT_FAMILY_MONO)
                 font.setPixelSize(
-                    LOG_PCT_FONT_PX if tag == "log_pct" else theme.LOG_FONT_PX
+                    LOG_NOTE_FONT_PX
+                    if tag in ("log_note", "log_note_err")
+                    else LOG_PCT_FONT_PX
+                    if tag == "log_pct"
+                    else theme.LOG_FONT_PX
                 )
             else:
                 font = QFont(theme.FONT_FAMILY)
@@ -368,7 +484,7 @@ class LogPanel(QWidget):
                 border-radius: {theme.LOG_VIEW_CORNER_RADIUS}px;
                 padding: 8px;
                 selection-background-color: {c['accent']};
-                selection-color: #ffffff;
+                selection-color: {c['log_fg']};
             }}
             """
         self.view.setStyleSheet(log_qss)
@@ -405,6 +521,10 @@ class LogPanel(QWidget):
         self._gg_pending_style: Optional[str] = None
         # In-place Batch progress line (CTk _gg_processed mark)
         self._gg_processed_cursor: Optional[QTextCursor] = None
+        # Full plain-text mirror for Save (chips + maxBlockCount drop image/text)
+        self._plain_lines: list[str] = []
+        self._plain_processed_idx: Optional[int] = None
+        self._export_prefix: str = ""
 
         # Formats are owned by ChipRenderer; alias so legacy _fmt/_insert work.
         self._formats = self._chips._formats
@@ -434,8 +554,15 @@ class LogPanel(QWidget):
     def _gg_value_pixmap(self, text: str, style_key: str) -> QPixmap:
         return self._chips.gg_value_pixmap(text, style_key)
 
-    def _insert_gg_value_chip(self, cursor: QTextCursor, text: str, style_key: str) -> None:
-        self._chips.insert_gg_value_chip(cursor, text, style_key)
+    def _insert_gg_value_chip(
+        self,
+        cursor: QTextCursor,
+        text: str,
+        style_key: str,
+        *,
+        bg_hex: Optional[str] = None,
+    ) -> None:
+        self._chips.insert_gg_value_chip(cursor, text, style_key, bg_hex=bg_hex)
 
     @staticmethod
     def _gg_norm_pct(val: str) -> str:
@@ -465,7 +592,9 @@ class LogPanel(QWidget):
         if genre:
             self._apply_line_spacing(cursor)
             self._insert(cursor, "  ")
-            self._insert_gg_value_chip(cursor, genre, "dry")
+            self._insert_gg_value_chip(
+                cursor, genre, "dry", bg_hex=_genre_chip_bg(genre)
+            )
             if conf:
                 self._insert(cursor, f"  {conf}", "log_pct")
                 conf = ""
@@ -502,11 +631,39 @@ class LogPanel(QWidget):
         self._gg_pending_genre = None
         self._gg_pending_style = None
         self._gg_processed_cursor = None
+        self._plain_lines.clear()
+        self._plain_processed_idx = None
         self.view.clear()
+
+    def set_export_prefix(self, prefix: str) -> None:
+        """Suggested Save filename stem, e.g. 'compression' → compression_stem_organizer.log."""
+        cleaned = re.sub(r"[^\w\-]+", "_", (prefix or "").strip().lower()).strip("_")
+        self._export_prefix = cleaned
+
+    def _record_plain(self, line: str) -> None:
+        self._plain_lines.append(line)
 
     def update_gg_processed(self, n: int, total: int) -> None:
         """Update single Batch progress line in LOG (Processed: n/total) — CTk parity."""
-        line = f"Processed: {int(n):,}/{int(total):,}"
+        self.update_live_progress(f"Processed: {int(n):,}/{int(total):,}")
+
+    def end_live_progress(self) -> None:
+        """Stop updating the current live line; next update starts a new one."""
+        self._gg_processed_cursor = None
+        self._plain_processed_idx = None
+
+    def update_live_progress(self, text: str) -> None:
+        """Replace a single in-place progress line (e.g. ``12/40,110 files read``)."""
+        line = (text or "").rstrip("\n")
+        if not line:
+            return
+        if self._plain_processed_idx is not None and 0 <= self._plain_processed_idx < len(
+            self._plain_lines
+        ):
+            self._plain_lines[self._plain_processed_idx] = line
+        else:
+            self._plain_processed_idx = len(self._plain_lines)
+            self._plain_lines.append(line)
         fmt = self._fmt("info")
         if self._gg_processed_cursor is not None and not self._gg_processed_cursor.isNull():
             c = QTextCursor(self._gg_processed_cursor)
@@ -538,13 +695,21 @@ class LogPanel(QWidget):
     def save_to_file(self, parent: QWidget) -> None:
         from PySide6.QtWidgets import QFileDialog
 
+        default = (
+            f"{self._export_prefix}_stem_organizer.log"
+            if self._export_prefix
+            else "stem_organizer.log"
+        )
         path, _ = QFileDialog.getSaveFileName(
-            parent, "Save log", "stem_organizer.log", "Text files (*.txt *.log)"
+            parent, "Save log", default, "Text files (*.txt *.log)"
         )
         if path:
             try:
+                body = "\n".join(self._plain_lines)
+                if self._plain_lines:
+                    body += "\n"
                 with open(path, "w", encoding="utf-8") as fh:
-                    fh.write(self.view.toPlainText())
+                    fh.write(body)
             except OSError:
                 pass
 
@@ -608,6 +773,7 @@ class LogPanel(QWidget):
         if not text and not tag:
             return
         line = text.rstrip("\n")
+        self._record_plain(line)
         cursor = self.view.textCursor()
         cursor.movePosition(QTextCursor.End)
 
@@ -628,16 +794,21 @@ class LogPanel(QWidget):
             self.view.ensureCursorVisible()
             return
 
-        # Gender/reverb fixed badges: female / male / dry / wet
+        # Gender / reverb / compression fixed badges (+ optional note)
         gg = GG_BADGE_RE.match(line)
         if gg:
             self._gg_flush_pending(cursor)
             self._apply_line_spacing(cursor)
-            indent, label, pct = gg.group(1), gg.group(2), gg.group(3)
+            indent, label, pct, note = (
+                gg.group(1), gg.group(2), gg.group(3), gg.group(4),
+            )
             self._insert(cursor, indent or "  ")
             self._insert_chip(cursor, label)
             if pct:
                 self._insert(cursor, f"  {pct}", "log_pct")
+            if note:
+                note_tag = "log_note_err" if str(label).lower() == "failed" else "log_note"
+                self._insert(cursor, f"  {note.strip()}", note_tag)
             self._insert(cursor, "\n")
             self.view.setTextCursor(cursor)
             self.view.ensureCursorVisible()
@@ -722,11 +893,17 @@ class LogPanel(QWidget):
         """SI-SDR result line with optional stem chip (CTk _append_sdr_log_line)."""
         from pathlib import Path
 
+        stem_name = Path(filename).stem.lower()
+        if stem_name in LOG_STEM_COLORS:
+            plain = f"  {stem_name}  →  SI-SDR: {score:.1f}"
+        else:
+            plain = f"  {filename}  →  SI-SDR: {score:.1f}"
+        self._record_plain(plain)
+
         cursor = self.view.textCursor()
         cursor.movePosition(QTextCursor.End)
         self._apply_line_spacing(cursor)
         self._insert(cursor, "  ", "detail")
-        stem_name = Path(filename).stem.lower()
         if stem_name in LOG_STEM_COLORS:
             self._insert(cursor, "  ", "detail")
             self._insert_chip(cursor, stem_name)

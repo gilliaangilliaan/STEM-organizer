@@ -256,18 +256,30 @@ class StatusBar(QFrame):
     ) -> None:
         """Match worker Signal(float, object, int, int, str) → pct, eta, n, total, phase."""
         self._progress_bar.set_pct(pct)
+        try:
+            ni = int(n) if n is not None else None
+            ti = int(total) if total is not None else None
+        except (TypeError, ValueError):
+            ni, ti = None, None
+
+        eta_sec: Optional[float] = None
         if eta is not None:
             try:
-                self._eta_lbl.setText(f"ETA {_fmt_hms(float(eta))}")
+                eta_sec = float(eta)
             except (TypeError, ValueError):
-                pass
+                eta_sec = None
+        # Vocal type (and any worker that sends eta=None / "?") — estimate from pace.
+        if eta_sec is None and ni is not None and ti is not None and self._progress_start:
+            if ni > 0 and ti > ni:
+                elapsed = time.monotonic() - self._progress_start
+                eta_sec = elapsed / ni * (ti - ni)
+            elif ti > 0 and ni >= ti:
+                eta_sec = 0.0
+        if eta_sec is not None:
+            self._eta_lbl.setText(f"ETA {_fmt_hms(eta_sec)}")
+
         phase_text = phase if isinstance(phase, str) else ""
         if phase_text:
-            try:
-                ni = int(n) if n is not None else None
-                ti = int(total) if total is not None else None
-            except (TypeError, ValueError):
-                ni, ti = None, None
             if ni is not None and ti is not None:
                 self._status_lbl.setText(f"{phase_text} {ni:,}/{ti:,}")
             else:
@@ -330,7 +342,7 @@ class _ProgressBar(QWidget):
         if fill_w > 0:
             p.fillRect(0, 0, fill_w, h, QColor(theme.DARK["accent"]))
         # Percent text on right side of fill
-        p.setPen(QColor("#ffffff"))
+        p.setPen(QColor(theme.COLORS["status_pct"]))
         from PySide6.QtCore import QRect
 
         label = f"{self._pct:.0f}%"

@@ -1,4 +1,4 @@
-"""Resolve a real Python for genre/gender + instrument tagger subprocesses.
+"""Resolve a real Python for genre/gender + instrument + PANNs tagger subprocesses.
 
 Frozen builds ship tagger scripts beside the exe (no nested venv). ML wheels
 live in ``site-packages\\`` from root ``install-deps.bat``. ``sys.executable``
@@ -38,7 +38,7 @@ def _parse_version_tag(text: str) -> tuple[int, int] | None:
 
 
 def tagger_app_root() -> Path:
-    """Folder that holds ``genre_gender_tagger\\`` / ``instrument_tagger\\``."""
+    """Folder that holds ``genre_gender_tagger\\`` / ``instrument_tagger\\`` / ``panns_tagger\\``."""
     return app_dir()
 
 
@@ -77,6 +77,42 @@ def instrument_tagger_dir() -> Path:
 
 def instrument_tagger_script() -> Path:
     return instrument_tagger_dir() / "instrument_tagger.py"
+
+
+def panns_tagger_dir() -> Path:
+    root = tagger_app_root()
+    candidates = [root / "panns_tagger"]
+    if is_frozen():
+        candidates.append(root / "_internal" / "panns_tagger")
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "panns_tagger")
+    for path in candidates:
+        if (path / "panns_tagger.py").is_file():
+            return path
+    return candidates[0]
+
+
+def panns_tagger_script() -> Path:
+    return panns_tagger_dir() / "panns_tagger.py"
+
+
+def key_tagger_dir() -> Path:
+    root = tagger_app_root()
+    candidates = [root / "key_tagger"]
+    if is_frozen():
+        candidates.append(root / "_internal" / "key_tagger")
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "key_tagger")
+    for path in candidates:
+        if (path / "key_tagger.py").is_file():
+            return path
+    return candidates[0]
+
+
+def key_tagger_script() -> Path:
+    return key_tagger_dir() / "key_tagger.py"
 
 
 def _site_packages() -> Path | None:
@@ -186,11 +222,14 @@ def resolve_host_python() -> Path | None:
 def _venv_python_candidates(root: Path) -> tuple[Path, ...]:
     gg = root / "genre_gender_tagger"
     inst = root / "instrument_tagger"
+    panns = root / "panns_tagger"
     return (
         gg / "venv" / "Scripts" / "python.exe",
         gg / "venv" / "bin" / "python",
         inst / "venv" / "Scripts" / "python.exe",
         inst / "venv" / "bin" / "python",
+        panns / "venv" / "Scripts" / "python.exe",
+        panns / "venv" / "bin" / "python",
     )
 
 
@@ -277,7 +316,7 @@ def tagger_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
 def missing_tagger_python_hint() -> str:
     if is_frozen():
         return (
-            "No Python found for Genre & Gender / Rename Auto-detect.\n"
+            "No Python found for Genre & Gender / Rename Auto-detect / PANNs.\n"
             "Run install-deps.bat beside STEM-organizer.exe once "
             "(installs into site-packages\\).\n"
             "Need Python 3.10 or 3.11 on PATH (or: py -3.11)."

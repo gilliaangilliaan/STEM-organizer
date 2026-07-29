@@ -35,6 +35,20 @@ if _os.path.isdir(_gg_models):
             datas += [(_src, 'genre_gender_tagger/models')]
 datas += [('instrument_tagger/instrument_tagger.py', 'instrument_tagger')]
 datas += [('instrument_tagger/passt_mel.py', 'instrument_tagger')]
+datas += [('panns_tagger/panns_tagger.py', 'panns_tagger')]
+datas += [('panns_tagger/readme.md', 'panns_tagger')]
+datas += [('key_tagger/key_tagger.py', 'key_tagger')]
+datas += [('key_tagger/inference.py', 'key_tagger')]
+datas += [('key_tagger/keys.py', 'key_tagger')]
+datas += [('key_tagger/model.py', 'key_tagger')]
+datas += [('key_tagger/log_pace.py', 'key_tagger')]
+datas += [('key_tagger/requirements.txt', 'key_tagger')]
+_kk_ckpt = 'key_tagger/checkpoints'
+if _os.path.isdir(_kk_ckpt):
+    for _name in _os.listdir(_kk_ckpt):
+        _src = _os.path.join(_kk_ckpt, _name)
+        if _os.path.isfile(_src):
+            datas += [(_src, 'key_tagger/checkpoints')]
 
 hiddenimports = []
 # Avoid PySide6.scripts (deploy tooling); collect_submodules hits missing project_lib.
@@ -43,7 +57,8 @@ hiddenimports += [
     if not m.startswith('PySide6.scripts')
 ]
 hiddenimports += ['classify_backend', 'pair_matcher', 'stem_align',
-                  'ffmpeg_bootstrap', 'deps_bootstrap', 'tagger_launch',
+                  'ffmpeg_bootstrap', 'mp3val_bootstrap', 'flac_bootstrap', 'deps_bootstrap', 'tagger_launch',
+                  'panns_enrich',
                   'resource_monitor',
                   'update_checker', 'single_instance', 'done_sound',
                   'sounddevice', 'soundfile', 'resampy', 'numpy',

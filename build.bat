@@ -120,6 +120,28 @@ copy /Y "instrument_tagger\instrument_tagger.py" "%OUT%\instrument_tagger\" >nul
 if exist "instrument_tagger\passt_mel.py" copy /Y "instrument_tagger\passt_mel.py" "%OUT%\instrument_tagger\" >nul
 if exist "instrument_tagger\install-deps.bat" copy /Y "instrument_tagger\install-deps.bat" "%OUT%\instrument_tagger\" >nul
 
+echo   Copying panns_tagger\ ^(AudioSet Cnn14, no venv^) ...
+if exist "%OUT%\panns_tagger" rmdir /S /Q "%OUT%\panns_tagger"
+mkdir "%OUT%\panns_tagger" >nul
+mkdir "%OUT%\panns_tagger\models" >nul
+copy /Y "panns_tagger\panns_tagger.py" "%OUT%\panns_tagger\" >nul
+if exist "panns_tagger\install-deps.bat" copy /Y "panns_tagger\install-deps.bat" "%OUT%\panns_tagger\" >nul
+if exist "panns_tagger\readme.md" copy /Y "panns_tagger\readme.md" "%OUT%\panns_tagger\" >nul
+if exist "panns_tagger\models\*.pth" copy /Y "panns_tagger\models\*.pth" "%OUT%\panns_tagger\models\" >nul
+
+echo   Copying key_tagger\ ^(Key Detect, no venv^) ...
+if exist "%OUT%\key_tagger" rmdir /S /Q "%OUT%\key_tagger"
+mkdir "%OUT%\key_tagger" >nul
+mkdir "%OUT%\key_tagger\checkpoints" >nul
+copy /Y "key_tagger\key_tagger.py" "%OUT%\key_tagger\" >nul
+if exist "key_tagger\inference.py" copy /Y "key_tagger\inference.py" "%OUT%\key_tagger\" >nul
+if exist "key_tagger\keys.py" copy /Y "key_tagger\keys.py" "%OUT%\key_tagger\" >nul
+if exist "key_tagger\model.py" copy /Y "key_tagger\model.py" "%OUT%\key_tagger\" >nul
+if exist "key_tagger\log_pace.py" copy /Y "key_tagger\log_pace.py" "%OUT%\key_tagger\" >nul
+if exist "key_tagger\install-deps.bat" copy /Y "key_tagger\install-deps.bat" "%OUT%\key_tagger\" >nul
+if exist "key_tagger\requirements.txt" copy /Y "key_tagger\requirements.txt" "%OUT%\key_tagger\" >nul
+if exist "key_tagger\checkpoints\*.pt" copy /Y "key_tagger\checkpoints\*.pt" "%OUT%\key_tagger\checkpoints\" >nul
+
 REM ffmpeg is NOT bundled by the .spec - install-deps.bat downloads it next to the exe after build.
 REM If a local ffmpeg\ already exists (dev machine), copy it for convenience:
 if exist "ffmpeg\ffmpeg.exe" if not exist "%OUT%\ffmpeg\ffmpeg.exe" (
@@ -136,6 +158,8 @@ echo   Next: dist\STEM-organizer\install-deps.bat  ^(run this now^)
 echo         then start STEM-organizer.exe
 echo   Also: dist\STEM-organizer\genre_gender_tagger\
 echo         dist\STEM-organizer\instrument_tagger\
+echo         dist\STEM-organizer\panns_tagger\
+echo         dist\STEM-organizer\key_tagger\
 echo.
 pause
 exit /b 0

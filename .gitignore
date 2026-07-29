@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.build-venv/
+genre_gender_tagger/venv/
+key_tagger/venv/
+panns_tagger/venv/
+
+# Build / frozen output
+build/
+dist/
+*.spec.bak
+
+# Local settings & caches
+settings.json
+overview_scan_cache.json
+python-version.txt
+
+# Tagger run outputs
+genre_gender_tagger/genre_gender_results.csv
+genre_gender_tagger/genre_gender_voice_results.csv
+*_stem_organizer.log
+
+# Downloaded binaries (install-deps.bat)
+ffmpeg/
+mp3val/
+flac/
+
+# Large ML assets (optional / download on first run)
+key_tagger/checkpoints/*
+!key_tagger/checkpoints/nf50-q05-221125.pt
+panns_tagger/models/*.pth
+genre_gender_tagger/models/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

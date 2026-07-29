@@ -11,21 +11,21 @@ from .. import theme
 
 FluentButton = Union[PushButton, PrimaryPushButton]
 
-# Fluent paints PrimaryPushButton labels dark unless this sheet is applied
-# (same tokens as theme.style_fluent_subtree / app QSS).
-_PRIMARY_LABEL_SHEET = """
-PrimaryPushButton {
-    color: #ffffff;
-}
-PrimaryPushButton:hover {
-    color: #ffffff;
-}
-PrimaryPushButton:pressed {
-    color: #ffffff;
-}
-PrimaryPushButton:focus {
-    color: #ffffff;
-}
+# Soft CTk text on accent (Fluent paints PrimaryPushButton labels dark otherwise).
+_SOFT = theme.COLORS["log_fg"]
+_PRIMARY_LABEL_SHEET = f"""
+PrimaryPushButton {{
+    color: {_SOFT};
+}}
+PrimaryPushButton:hover {{
+    color: {_SOFT};
+}}
+PrimaryPushButton:pressed {{
+    color: {_SOFT};
+}}
+PrimaryPushButton:focus {{
+    color: {_SOFT};
+}}
 """
 
 
@@ -50,7 +50,8 @@ def action_button(
         if danger:
             btn.setStyleSheet(
                 f"PushButton {{ color: {theme.DARK['danger']}; }}"
-                f"PushButton:hover {{ background-color: {theme.DARK['danger']}; color: #ffffff; }}"
+                f"PushButton:hover {{ background-color: {theme.DARK['danger']}; "
+                f"color: {theme.COLORS['log_fg']}; }}"
             )
     btn.setCursor(Qt.PointingHandCursor)
     # Content-sized like Classify action bar — Fixed so Minimum policy cannot stretch.

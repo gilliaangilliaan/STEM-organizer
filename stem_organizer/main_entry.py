@@ -53,6 +53,15 @@ def _startup_error_report(exc: BaseException) -> str:
 
 def run(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
+    # Quiet Qt font fallback spam (OpenType support missing for Consolas/Arial/…).
+    # Must be set before QApplication is constructed.
+    _font_rule = "qt.text.font.db=false"
+    existing = os.environ.get("QT_LOGGING_RULES", "").strip()
+    if "qt.text.font.db" not in existing:
+        os.environ["QT_LOGGING_RULES"] = (
+            f"{existing};{_font_rule}" if existing else _font_rule
+        )
+
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("STEM organizer")
     app.setApplicationDisplayName("STEM organizer")

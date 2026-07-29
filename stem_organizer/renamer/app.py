@@ -976,6 +976,8 @@ class TrackRenamerApp(QWidget):
             folder = str(d.get("rename_folder") or "").strip()
             if folder:
                 self.folder_row.set_text(display_path(folder))
+            elif d.get("output_dir"):
+                self.folder_row.set_text(d["output_dir"])
 
             rules_data = d.get("rename_rules")
             loaded_rules = False
@@ -1058,9 +1060,20 @@ class TrackRenamerApp(QWidget):
     def _set_busy(self, busy: bool, message: str = "") -> None:
         was_busy = self._busy
         self._busy = busy
-        self.folder_row.browse_btn.setEnabled(not busy)
-        self.folder_row.entry.setEnabled(not busy)
-        self.recursive_chk.setEnabled(not busy)
+        for w in (
+            self.folder_row,
+            self.recursive_chk,
+            self.preset_menu,
+            self.save_preset_btn,
+            self.delete_preset_btn,
+            self.rules_panel,
+            self.rules_panel.clear_btn,
+            self.rules_panel.apply_btn,
+        ):
+            try:
+                w.setEnabled(not busy)
+            except Exception:
+                pass
         if busy:
             # Keep folder path visible in PATH; status bar carries progress text.
             if not was_busy:

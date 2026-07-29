@@ -28,6 +28,13 @@ def register_all_tabs(window: "MainWindow", settings: "SettingsStore") -> None:
         print(f"[stem_organizer] genre/gender tab unavailable: {exc}")
 
     try:
+        from .key_detect_tab import register as register_key
+
+        register_key(window, settings)
+    except Exception as exc:
+        print(f"[stem_organizer] key detect tab unavailable: {exc}")
+
+    try:
         from .pair_finder_tab import register as register_pair
 
         register_pair(window, settings)
@@ -40,3 +47,17 @@ def register_all_tabs(window: "MainWindow", settings: "SettingsStore") -> None:
         register_rename(window, settings)
     except Exception as exc:
         print(f"[stem_organizer] rename tab unavailable: {exc}")
+
+    try:
+        from .integrity_tab import register as register_integrity
+
+        register_integrity(window, settings)
+    except Exception as exc:
+        print(f"[stem_organizer] integrity tab unavailable: {exc}")
+
+    try:
+        from .dataset_overview_tab import register as register_dataset
+
+        register_dataset(window, settings)
+    except Exception as exc:
+        print(f"[stem_organizer] dataset overview tab unavailable: {exc}")

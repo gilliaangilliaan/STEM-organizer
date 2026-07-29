@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QApplication, QWidget
+
+from .musical_keys import CHART_KEY_COLORS  # noqa: F401 — Charts / LOG badges
 # ---------------------------------------------------------------------------
 # Color tokens — copied verbatim from ui_theme.COLORS / DARK
 # ---------------------------------------------------------------------------
@@ -24,7 +26,7 @@ COLORS = {
     "log_fg":        "#d6dae8",
     "border":        "#3a3d4d",
     "status_trough": "#343647",
-    "status_pct":    "#ffffff",
+    "status_pct":    "#d6dae8",  # soft white (= log_fg); not Fluent pure #ffffff
 }
 
 DARK = {
@@ -54,12 +56,12 @@ DARK = {
     "list_fg":         COLORS["log_fg"],
     "waveform_bg":     COLORS["log_bg"],
     "waveform_axis":   "#343647",
-    "waveform_playhead": "#ffffff",
+    "waveform_playhead": "#ffffff",  # 1px scrubber — keep pure white for punch
     "audio":           "#10b981",
     "midi":            COLORS["accent"],
     "group":           "#a855f7",
     "danger":          COLORS["danger"],
-    "badge_fg":        "#ffffff",
+    "badge_fg":        COLORS["log_fg"],  # soft white (#d6dae8)
     "btn":             COLORS["panel2"],
     "btn_hover":       COLORS["border"],
     "category_colors": {},
@@ -85,6 +87,83 @@ STEM_COLORS = {
     "original":     "#9aa0b4",
     "mixture":      "#9aa0b4",
 }
+
+# LOG gender/reverb chips (log_panel.LOG_GG_COLORS) — charts reuse these.
+GG_CHIP_COLORS = {
+    "female": "#ec4899",
+    "male":   "#60A5FA",
+    "dry":    COLORS["log_fg"],   # #d6dae8 — also Genre chips
+    "wet":    "#262833",          # also Style chips (dark fill)
+}
+
+# Dataset overview chart fills (aliases into STEM / GG chips).
+CHART_ROLE_COLORS = {
+    "Instrumental": "#7C5CFF",
+    # Same purple as vocal-type donut base / vocals waveform.
+    "Vocal": STEM_COLORS["vocals"],
+    "Samples": "#5C4EA0",
+    "instrumental": "#7C5CFF",
+    "vocal": STEM_COLORS["vocals"],
+    "vocals": STEM_COLORS["vocals"],
+    "samples": "#5C4EA0",
+    "sample": "#5C4EA0",
+}
+CHART_GENDER_COLORS = {
+    "female": GG_CHIP_COLORS["female"],
+    "male": GG_CHIP_COLORS["male"],
+}
+CHART_REVERB_COLORS = {
+    "dry": GG_CHIP_COLORS["dry"],
+    "wet": GG_CHIP_COLORS["wet"],
+}
+# Genre uses dry chip; Style uses wet chip (same as LOG GENRE/STYLE flush).
+CHART_GENRE_COLOR = GG_CHIP_COLORS["dry"]
+CHART_STYLE_COLOR = GG_CHIP_COLORS["wet"]
+CHART_VOCAL_TYPE_COLOR = STEM_COLORS["vocals"]  # #a855f7 — waveform / acapella
+
+
+def _lighten_hex(hex_color: str, toward_white: float) -> str:
+    """Blend ``hex_color`` toward white; 0 = unchanged, 1 = white."""
+    c = QColor(hex_color)
+    t = max(0.0, min(1.0, float(toward_white)))
+    return QColor(
+        int(c.red() + (255 - c.red()) * t),
+        int(c.green() + (255 - c.green()) * t),
+        int(c.blue() + (255 - c.blue()) * t),
+    ).name()
+
+
+# Vocal-type donut/badges: Roles chart Vocal purple as Singing, then +22% each step.
+_VOCAL_BASE = CHART_ROLE_COLORS["Vocal"]  # same as STEM_COLORS["vocals"] / Roles
+_VOCAL_STEP = 0.22
+CHART_VOCAL_TYPE_COLORS = {
+    "Singing": _lighten_hex(_VOCAL_BASE, 0.00),
+    "Speech": _lighten_hex(_VOCAL_BASE, _VOCAL_STEP),
+    "Rapping": _lighten_hex(_VOCAL_BASE, _VOCAL_STEP * 2),
+    "Humming": _lighten_hex(_VOCAL_BASE, _VOCAL_STEP * 3),
+    "Choir": _lighten_hex(_VOCAL_BASE, _VOCAL_STEP * 4),
+}
+
+# Dataset genre bars — same 16 custom swatches as Rename's QColorDialog.
+# (track_renamer.category_palette.CATEGORY_PALETTE_COLORS[:16])
+CHART_GENRE_PALETTE: tuple[str, ...] = (
+    "#EF4444",
+    "#F59E0B",
+    "#A855F7",
+    "#10B981",
+    "#8D95A4",
+    "#C1090B",
+    "#C41D63",
+    "#8351A1",
+    "#5C4EA0",
+    "#485FAB",
+    "#398BCB",
+    "#00B8D3",
+    "#25BAA2",
+    "#3FB655",
+    "#76C043",
+    "#B0D236",
+)
 
 # ---------------------------------------------------------------------------
 # Layout constants — port of ui_theme numeric vocabulary
@@ -139,12 +218,17 @@ LOG_ERR_COLOR = "#ff7a7a"
 LOG_WARN_COLOR = "#ecc990"
 LOG_DELETED_COLOR = "#e89292"
 LOG_MARGIN_COLOR = "#9aa0b4"
-LOG_PCT_COLOR = "#9aa0b4"  # COLORS['fg_dim']
+LOG_PCT_COLOR = COLORS["log_fg"]  # soft white — same as body / Browse·Open labels
 SDR_PASS_COLOR = "#7ee0a0"
 SDR_FAIL_COLOR = "#ff7a7a"
-SDR_LABEL_COLOR = "#d6dae8"  # COLORS['log_fg']
+SDR_LABEL_COLOR = COLORS["log_fg"]
 GG_CONF_COLOR = "#7ee0a0"
 GG_CONF_LOW_COLOR = "#e0b07a"
+
+CHART_COMPRESSION_COLORS = {
+    "lossless": LOG_OK_COLOR,
+    "lossy": LOG_ERR_COLOR,
+}
 
 
 STATUS_FRAME_HEIGHT = 66
@@ -243,7 +327,7 @@ ACTION_BTN_HEIGHT = 30
 TITLE_ICON_SIZE = 22  # match CTk TITLE_ICON_SIZE
 TITLE_LABEL_FONT_PX = 13  # CTk title Label uses Segoe UI 10pt ≈ 13px
 
-# Sub-tab bar (Match/Align, Genre/Gender) breathing room: a few px of gap between
+# Sub-tab bar (Match/Align, Genre/Gender, Integrity) breathing room: a few px of gap between
 # the two pills and a top shift so the row isn't flush against the page top.
 SUBTAB_SPACING = 6
 SUBTAB_TOP_PAD = 4
@@ -302,8 +386,8 @@ def style_color_dialog(dlg: QWidget) -> None:
         f"""
         QColorDialog {{
             background-color: {t['panel']};
-            color: {t['text']};
-            font-family: "{FONT_FAMILY}";
+        color: {t['text']};
+        font-family: "{FONT_FAMILY}";
             font-size: {BODY_FONT_PX}px;
         }}
         QColorDialog QLabel {{
@@ -312,8 +396,8 @@ def style_color_dialog(dlg: QWidget) -> None:
         }}
         QColorDialog QPushButton {{
             background-color: {CONTROL_BG};
-            color: {t['text']};
-            border: 1px solid {t['border']};
+        color: {t['text']};
+        border: 1px solid {t['border']};
             border-radius: 6px;
             padding: 6px 14px;
             min-height: {ACTION_BTN_HEIGHT - 4}px;
@@ -328,33 +412,33 @@ def style_color_dialog(dlg: QWidget) -> None:
         QColorDialog QPushButton:default {{
             background-color: {c['accent']};
             border: 1px solid {c['accent_hov']};
-            color: #ffffff;
+        color: {t['text']};
             font-weight: 600;
         }}
         QColorDialog QPushButton:default:hover {{
             background-color: {c['accent_hov']};
-            color: #ffffff;
+            color: {t['text']};
         }}
         QColorDialog QLineEdit,
         QColorDialog QAbstractSpinBox {{
             background-color: {CONTROL_BG};
-            color: {t['text']};
-            border: 1px solid {t['border']};
+        color: {t['text']};
+        border: 1px solid {t['border']};
             border-radius: 5px;
             padding: 2px 6px;
             min-height: 22px;
             selection-background-color: {c['accent']};
-            selection-color: #ffffff;
+            selection-color: {c['log_fg']};
         }}
         QColorDialog QLineEdit:focus,
         QColorDialog QAbstractSpinBox:focus {{
             background-color: {INPUT_FOCUS_BG};
-            border: 1px solid {t['border']};
-        }}
+        border: 1px solid {t['border']};
+    }}
         QColorDialog QAbstractSpinBox::up-button,
         QColorDialog QAbstractSpinBox::down-button {{
             background-color: {CONTROL_BG_HOVER};
-            border: none;
+        border: none;
             width: 16px;
         }}
         QColorDialog QAbstractSpinBox::up-button:hover,
@@ -524,6 +608,7 @@ def build_app_overrides_qss() -> str:
     QLabel#Link {{ color: {t['text_dim']}; background: transparent; }}
     QLabel#Link:hover {{ color: {t['fg']}; }}
     QLabel#HeaderDesc {{ color: {t['text_dim']}; font-size: {HEADER_DESC_FONT_PX}px; background: transparent; }}
+    QLabel#ChartNote {{ color: {t['text_dim']}; font-size: {HEADER_DESC_FONT_PX}px; background: transparent; }}
 
     /* Native Qt tooltips — match CTk Tooltip (log_bg fill, log_fg text) */
     QToolTip {{
@@ -652,12 +737,15 @@ def build_app_overrides_qss() -> str:
     PushButton, TransparentPushButton {{
         font-family: "{FONT_FAMILY}";
         font-size: {PATH_BTN_FONT_PX}px;
+        color: {t['text']};
         background-color: {CONTROL_BG};
     }}
     PushButton:hover, TransparentPushButton:hover {{
+        color: {t['text']};
         background-color: {CONTROL_BG_HOVER};
     }}
     PushButton:pressed, TransparentPushButton:pressed {{
+        color: {t['text']};
         background-color: {CONTROL_BG_PRESSED};
     }}
     /* Disabled: keep Play/control fill — gray text alone shows state (no gray pill). */
@@ -676,19 +764,19 @@ def build_app_overrides_qss() -> str:
     PrimaryPushButton {{
         font-family: "{FONT_FAMILY}";
         font-size: {ACTION_BTN_FONT_PX}px;
-        color: #ffffff;
+        color: {t['text']};
     }}
     PrimaryPushButton:hover, PrimaryPushButton:pressed,
     PrimaryPushButton:focus {{
-        color: #ffffff;
+        color: {t['text']};
     }}
     PrimaryToolButton, ToggleButton:checked, ToggleToolButton:checked {{
-        color: #ffffff;
+        color: {t['text']};
     }}
     PrimaryToolButton:hover, PrimaryToolButton:pressed,
     ToggleButton:checked:hover, ToggleButton:checked:pressed,
     ToggleToolButton:checked:hover, ToggleToolButton:checked:pressed {{
-        color: #ffffff;
+        color: {t['text']};
     }}
     SegmentedWidget {{
         min-height: {ACTION_BTN_HEIGHT}px;
@@ -716,7 +804,7 @@ def build_app_overrides_qss() -> str:
         border-radius: {LOG_VIEW_CORNER_RADIUS}px;
         padding: 8px;
         selection-background-color: {c['accent']};
-        selection-color: #ffffff;
+        selection-color: {c['log_fg']};
     }}
 
     /* Fluent MessageBox center panel */
@@ -752,7 +840,7 @@ def _apply_dark_palette(app: QApplication) -> None:
     pal.setColor(QPalette.ButtonText, text)
     pal.setColor(QPalette.BrightText, QColor(COLORS["danger"]))
     pal.setColor(QPalette.Highlight, accent)
-    pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    pal.setColor(QPalette.HighlightedText, QColor(COLORS["log_fg"]))
     # Tooltips — CTk Tooltip uses log_bg #15161c, border #3a3d4d, text log_fg #d6dae8.
     # Set all color groups so Windows native tips don't keep a white Inactive base.
     tip_bg = QColor(COLORS["log_bg"])
@@ -797,10 +885,10 @@ def _status_idle_fg() -> QColor:
 
 
 def _status_active_fg() -> QColor:
-    """Selected label color."""
+    """Selected label color — soft white (log_fg), not Fluent pure #ffffff."""
     from qfluentwidgets.common.style_sheet import isDarkTheme
 
-    return QColor("#ffffff") if isDarkTheme() else QColor("#000000")
+    return QColor(COLORS["log_fg"]) if isDarkTheme() else QColor("#000000")
 
 
 def _status_pill_css() -> str:
@@ -883,25 +971,42 @@ def configure_segmented_widget(seg) -> None:
         SegmentedItem[isSelected=true]:hover,
         SegmentedItem[isSelected=true]:pressed,
         SegmentedItem[isSelected=true]:focus {{
-            color: #ffffff;
+            color: {DARK["text"]};
             background-color: transparent;
             border: none;
         }}
     """
     setCustomStyleSheet(seg, sheet, sheet)
 
-    def _paint_item_underline(item, prev_paint):
+    def _paint_item_chrome(item, prev_paint):
         def _paint(self, e) -> None:
-            prev_paint(e)
-            if not getattr(self, "isSelected", False):
+            selected = bool(getattr(self, "isSelected", False))
+            if selected:
+                # Paint recessed selected chrome ourselves so Fluent/QSS :hover
+                # wash cannot flatten the pushed-in look until the mouse leaves.
+                painter = QPainter(self)
+                painter.setRenderHints(QPainter.Antialiasing)
+                painter.setPen(Qt.NoPen)
+                # Darker than idle soft pills → reads as inset / pushed-in
+                painter.setBrush(QColor(COLORS["bg"]))  # #1E1F26 pushed-in
+                painter.drawRoundedRect(
+                    QRectF(self.rect()).adjusted(1, 3, -1, -3),
+                    STATUS_PILL_RADIUS,
+                    STATUS_PILL_RADIUS,
+                )
+                painter.setPen(_status_active_fg())
+                painter.setFont(self.font())
+                painter.drawText(self.rect(), Qt.AlignCenter, self.text())
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(accent)
+                uw = _underline_width_for_text(self.fontMetrics(), self.text())
+                x = (self.width() - uw) / 2.0
+                painter.drawRoundedRect(
+                    QRectF(x, self.height() - 4.0, uw, 3.0), 1.5, 1.5
+                )
                 return
-            painter = QPainter(self)
-            painter.setRenderHints(QPainter.Antialiasing)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(accent)
-            uw = _underline_width_for_text(self.fontMetrics(), self.text())
-            x = (self.width() - uw) / 2.0
-            painter.drawRoundedRect(QRectF(x, self.height() - 4.0, uw, 3.0), 1.5, 1.5)
+
+            prev_paint(e)
 
         item.paintEvent = types.MethodType(_paint, item)
 
@@ -920,6 +1025,10 @@ def configure_segmented_widget(seg) -> None:
 
         def _release(self, e) -> None:
             prev_release(e)
+            # Selection applies on release — force chrome refresh immediately
+            # (don't wait for mouse-leave to reveal pushed-in).
+            for it in seg.items.values():
+                it.update()
             seg.update()
 
         item.enterEvent = types.MethodType(_enter, item)
@@ -933,7 +1042,7 @@ def configure_segmented_widget(seg) -> None:
         item.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         item.setFocusPolicy(Qt.NoFocus)  # click selects without stealing focus chrome
         item.setCursor(Qt.CursorShape.PointingHandCursor)
-        _paint_item_underline(item, item.paintEvent)
+        _paint_item_chrome(item, item.paintEvent)
         _hook_hover_refresh(
             item, item.enterEvent, item.leaveEvent, item.mousePressEvent, item.mouseReleaseEvent
         )
@@ -944,10 +1053,16 @@ def configure_segmented_widget(seg) -> None:
         painter.setRenderHints(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
 
-        # Idle soft pill; hover brightens (same alphas as top tabs)
         current = self.currentItem()
         for item in self.items.values():
             if item is current:
+                # Selected pill also on parent (behind label) for slide/resize frames
+                painter.setBrush(QColor(COLORS["bg"]))  # #1E1F26 pushed-in
+                painter.drawRoundedRect(
+                    item.geometry().adjusted(1, 3, -1, -3),
+                    STATUS_PILL_RADIUS,
+                    STATUS_PILL_RADIUS,
+                )
                 continue
             pill = (
                 _status_hover_pill_color()
@@ -1079,7 +1194,7 @@ def configure_tab_widget(tabs) -> None:
 def inset_tab_bar(tabs, left: int | None = None) -> None:
     """Pad the tab bar so labels share the page content left edge.
 
-    Sub-tabs (Match/Align, Genre/Gender) sit above scroll content that already
+    Sub-tabs (Match/Align, Genre/Gender, Integrity) sit above scroll content that already
     uses PAGE_CONTENT_INSET; without this the first tab sticks out left of the
     HeaderDesc line.
 
@@ -1136,7 +1251,7 @@ def style_toggle_button(btn) -> None:
     ToggleButton:checked:pressed,
     ToggleButton:checked:focus {{
         background-color: {accent};
-        color: #ffffff;
+        color: {soft};
     }}
     ToggleButton:checked:hover {{
         background-color: {COLORS['accent_hov']};
@@ -1213,20 +1328,21 @@ def polish_fluent_controls(root: QWidget) -> None:
         """
 
     def _primary_button_sheet() -> str:
-        # Accent buttons: bright label on purple (Fluent defaults to black text).
+        # Accent buttons: soft label on purple (Fluent defaults to black text).
         # Disabled fill matches neutral Play; gray text alone shows state.
+        soft_fg = DARK["text"]
         return f"""
         PrimaryPushButton {{
-            color: #ffffff;
+            color: {soft_fg};
         }}
         PrimaryPushButton:hover {{
-            color: #ffffff;
+            color: {soft_fg};
         }}
         PrimaryPushButton:pressed {{
-            color: #ffffff;
+            color: {soft_fg};
         }}
         PrimaryPushButton:focus {{
-            color: #ffffff;
+            color: {soft_fg};
         }}
         PrimaryPushButton:disabled {{
             background-color: {CONTROL_BG};
@@ -1267,7 +1383,7 @@ def polish_fluent_controls(root: QWidget) -> None:
         if isinstance(lbl, CaptionLabel):
             continue
         # CTk HEADER_DESC_COLOR = DARK['text_dim'] (#9aa0b4)
-        if lbl.objectName() == "HeaderDesc":
+        if lbl.objectName() in ("HeaderDesc", "ChartNote"):
             fluent_set_font(lbl, HEADER_DESC_FONT_PX)
             if hasattr(lbl, "setTextColor"):
                 lbl.setTextColor(DARK["text_dim"], DARK["text_dim"])
@@ -1365,7 +1481,7 @@ def polish_fluent_controls(root: QWidget) -> None:
                 PushButton {{ color: {DARK['danger']}; }}
                 PushButton:hover {{
                     background-color: {DARK['danger']};
-                    color: #ffffff;
+                    color: {DARK['text']};
                 }}
                 PushButton:disabled {{
                     background-color: {CONTROL_BG};
@@ -1377,12 +1493,19 @@ def polish_fluent_controls(root: QWidget) -> None:
             PushButton {{ color: {DARK['danger']}; }}
             PushButton:hover {{
                 background-color: {DARK['danger']};
-                color: #ffffff;
+                color: {DARK['text']};
             }}
             PushButton:disabled {{
                 background-color: {CONTROL_BG};
                 background: {CONTROL_BG};
             }}
+            """
+        else:
+            # Browse / Open / Play — soft CTk text (not Fluent pure white)
+            sheet += f"""
+            PushButton {{ color: {DARK['text']}; }}
+            PushButton:hover {{ color: {DARK['text']}; }}
+            PushButton:pressed {{ color: {DARK['text']}; }}
             """
         setCustomStyleSheet(btn, "", sheet)
 

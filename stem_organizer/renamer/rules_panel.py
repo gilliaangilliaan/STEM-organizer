@@ -84,7 +84,7 @@ def _make_delete_button(tooltip: str) -> PushButton:
             padding: 0px;
         }}
         PushButton#RuleDelete:hover {{
-            color: #ffffff;
+            color: {t['text']};
             background-color: {t['danger']};
             border: 1px solid {t['danger']};
         }}
@@ -114,7 +114,7 @@ def _make_add_button(tooltip: str) -> PushButton:
             padding: 0px 8px;
         }}
         PushButton#RuleAdd:hover {{
-            color: #ffffff;
+            color: {t['text']};
             background-color: {theme.COLORS['accent']};
             border: 1px solid {theme.COLORS['accent']};
         }}
@@ -395,13 +395,13 @@ class RulesPanel(QWidget):
                     background-color: {theme.COLORS['accent']};
                     border: 1px solid {theme.COLORS['accent_hov']};
                     border-radius: 5px;
-                    color: #ffffff;
+                    color: {theme.DARK['text']};
                     font-weight: 600;
                     padding: 0px;
                 }}
                 PushButton#RenameApply:hover {{
                     background-color: {theme.COLORS['accent_hov']};
-                    color: #ffffff;
+                    color: {theme.DARK['text']};
                 }}
                 """
             )

@@ -985,12 +985,148 @@ def mix_originals(paths, sr: int):
 # SDR layout detection + helpers
 # ---------------------------------------------------------------------------
 
+def list_folder_sdr_audio(folder: Path) -> list[Path]:
+    if not folder.is_dir():
+        return []
+    return sorted(
+        f for f in folder.iterdir()
+        if f.is_file() and f.suffix.lower() in STEM_FILE_EXTS
+    )
+
+
+def _is_named_category_stem_file(path: Path, category: str) -> bool:
+    """True when filename looks like this stem category (exact or keyword)."""
+    if path.suffix.lower() not in STEM_FILE_EXTS:
+        return False
+    cat = category.lower()
+    if cat == 'vocals':
+        return is_vocals_only_stem_file(path)
+    if cat == 'instrumental':
+        return is_instrumental_only_stem_file(path)
+    stem = path.stem.lower()
+    if stem == cat or stem.endswith(f'_{cat}') or stem.endswith(f'-{cat}'):
+        return True
+    if f'({cat})' in stem:
+        return True
+    # Avoid loose 'other' / 'bass' substring hits on unrelated titles.
+    return False
+
+
+def _pick_best_category_match(matches: list[Path], category: str) -> Path:
+    cat = category.lower()
+
+    def score(path: Path) -> tuple:
+        s = path.stem.lower()
+        if s == cat:
+            return (0, len(s), s)
+        if s.endswith(f'_{cat}') or s.endswith(f'-{cat}'):
+            return (1, len(s), s)
+        if f'({cat})' in s:
+            return (2, len(s), s)
+        return (3, len(s), s)
+
+    return sorted(matches, key=score)[0]
+
+
 def find_category_stem(folder: Path, category: str) -> Path | None:
+    """Exact ``{category}.ext`` first, then keyword / role names in the folder."""
     for ext in STEM_FILE_EXTS:
         p = folder / f'{category}{ext}'
         if p.is_file():
             return p
+    matches = [
+        f for f in list_folder_sdr_audio(folder)
+        if _is_named_category_stem_file(f, category)
+    ]
+    if not matches:
+        return None
+    return _pick_best_category_match(matches, category)
+
+
+def assign_two_file_pair(files: list[Path]) -> dict[str, Path] | None:
+    """Map exactly two audio files to instrumental + vocals when possible."""
+    if len(files) != 2:
+        return None
+    inst = voc = None
+    for path in files:
+        if is_instrumental_only_stem_file(path) and inst is None:
+            inst = path
+        elif is_vocals_only_stem_file(path) and voc is None:
+            voc = path
+    remaining = [p for p in files if p not in {inst, voc}]
+    if inst is not None and voc is not None and inst != voc:
+        return {'instrumental': inst, 'vocals': voc}
+    if inst is not None and len(remaining) == 1:
+        return {'instrumental': inst, 'vocals': remaining[0]}
+    if voc is not None and len(remaining) == 1:
+        return {'instrumental': remaining[0], 'vocals': voc}
+
+    # Filename classifier (Align roles) when keywords miss both.
+    try:
+        from stem_align import classify_audio_file
+    except Exception:
+        classify_audio_file = None  # type: ignore
+    if classify_audio_file is not None:
+        roles: dict[str, Path] = {}
+        for path in files:
+            try:
+                role = classify_audio_file(path)
+            except Exception:
+                role = None
+            if role == 'instrumental' and 'instrumental' not in roles:
+                roles['instrumental'] = path
+            elif role == 'acapella' and 'vocals' not in roles:
+                roles['vocals'] = path
+        if len(roles) == 2:
+            return roles
+        if 'instrumental' in roles:
+            other = next(p for p in files if p != roles['instrumental'])
+            return {'instrumental': roles['instrumental'], 'vocals': other}
+        if 'vocals' in roles:
+            other = next(p for p in files if p != roles['vocals'])
+            return {'instrumental': other, 'vocals': roles['vocals']}
     return None
+
+
+def resolve_musdb_folder_stems(
+    folder: Path,
+    categories: tuple[str, ...],
+    *,
+    force_two_file: bool = False,
+) -> dict[str, Path] | None:
+    """Resolve stem paths in a song folder.
+
+    For 2-stem (instrumental/vocals), any folder with exactly two audio files is
+    treated as a pair — keywords assign roles when present; otherwise the other
+    file is the complement, or size is used when both names are unmarked.
+    ``force_two_file`` is kept for API compatibility (same behavior for 2-stem).
+    """
+    stems: dict[str, Path] = {}
+    for cat in categories:
+        p = find_category_stem(folder, cat)
+        if p is not None and p not in stems.values():
+            stems[cat] = p
+    if all(c in stems for c in categories) and len(stems) == len(categories):
+        return stems
+
+    if set(categories) != {'instrumental', 'vocals'}:
+        return None
+
+    audio = list_folder_sdr_audio(folder)
+    if len(audio) != 2:
+        return None
+
+    assigned = assign_two_file_pair(audio)
+    if assigned is not None:
+        return assigned
+
+    # Both unmarked (e.g. track_a.flac + track_b.flac): still a pair.
+    # Larger file → instrumental (typical stem dump); stable tie-break by name.
+    try:
+        a, b = sorted(audio, key=lambda p: (-p.stat().st_size, p.name.lower()))
+    except OSError:
+        a, b = sorted(audio, key=lambda p: p.name.lower())
+    return {'instrumental': a, 'vocals': b}
 
 
 def collect_sdr_song_folders(root: Path, scan_mode: str) -> list[Path]:
@@ -1006,7 +1142,58 @@ def collect_sdr_song_folders(root: Path, scan_mode: str) -> list[Path]:
 
 
 def folder_has_all_stems(folder: Path, categories: tuple[str, ...]) -> bool:
-    return all(find_category_stem(folder, c) is not None for c in categories)
+    return resolve_musdb_folder_stems(folder, categories, force_two_file=False) is not None
+
+
+def count_two_file_song_folders(root: Path, scan_mode: str) -> tuple[int, int, int]:
+    """Return (two_file_total, keyword_complete, two_file_without_keywords)."""
+    cats = SDR_MIXED_FLAT_CATEGORIES
+    two_file = 0
+    complete = 0
+    unmatched_two = 0
+    for folder in collect_sdr_song_folders(root, scan_mode):
+        n = len(list_folder_sdr_audio(folder))
+        has = folder_has_all_stems(folder, cats)
+        if has:
+            complete += 1
+        if n == 2:
+            two_file += 1
+            if not has:
+                unmatched_two += 1
+    return two_file, complete, unmatched_two
+
+
+def build_pair_folder_process_all_hint(root: Path, scan_mode: str) -> dict | None:
+    """Ask when many 2-file song folders lack instrumental/vocals filename markers."""
+    two_file, complete, unmatched = count_two_file_song_folders(root, scan_mode)
+    if two_file < SDR_SINGLE_STEM_ASK_MIN_MATCHES:
+        return None
+    should_ask = (
+        unmatched >= SDR_SINGLE_STEM_ASK_MIN_MATCHES
+        or (complete == 0 and two_file >= SDR_SINGLE_STEM_ASK_MIN_MATCHES)
+    )
+    if not should_ask:
+        return None
+    return {
+        'kind': 'pairs',
+        'two_file': two_file,
+        'complete': complete,
+        'unmatched': unmatched if unmatched > 0 else two_file,
+        'should_ask_process_all': True,
+    }
+
+
+def pair_folder_process_all_message(hint: dict) -> str:
+    two_file = int(hint['two_file'])
+    complete = int(hint['complete'])
+    unmatched = int(hint['unmatched'])
+    return (
+        f'Found {two_file:,} song folder(s) with exactly 2 audio files.\n'
+        f'{complete:,} already match instrumental + vocals by filename '
+        f'(vocals / acapella / instrumental / …).\n'
+        f'{unmatched:,} still need to be treated as pairs without clear names.\n\n'
+        f'Process all {two_file:,} two-file folders as instrumental + vocals pairs?'
+    )
 
 
 SDR_LAYOUT_MUSDB = 'musdb'
@@ -1022,7 +1209,7 @@ SDR_SINGLE_FLAT_LAYOUTS = frozenset({SDR_LAYOUT_SINGLE_FLAT, SDR_LAYOUT_MIXED_FL
 
 SDR_STEM_PICK_ORDER = ('instrumental', 'vocals', 'bass', 'drums', 'other')
 
-SDR_SINGLE_STEM_ASK_MIN_MATCHES = 25
+SDR_SINGLE_STEM_ASK_MIN_MATCHES = 10
 
 _SDR_NON_VOCAL_MARKERS = (
     '_instrumental', '-instrumental', '_drums', '-drums',
@@ -1068,9 +1255,23 @@ def is_vocals_only_stem_file(path: Path) -> bool:
         return False
     if stem == 'vocals' or stem.endswith('_vocals') or stem.endswith('-vocals'):
         return True
-    if 'acapella' in stem or 'a capella' in stem or 'acappella' in stem:
+    if stem == 'vocal' or stem.endswith('_vocal') or stem.endswith('-vocal'):
         return True
-    if 'vocal' in stem:
+    if any(
+        m in stem
+        for m in (
+            'acapella',
+            'a capella',
+            'acappella',
+            'acapela',
+            'accapella',
+            '(vocals)',
+            '(vocal)',
+            '(acapella)',
+        )
+    ):
+        return True
+    if 'vocals' in stem or 'vocal' in stem:
         return True
     return False
 
@@ -1087,9 +1288,15 @@ def is_instrumental_only_stem_file(path: Path) -> bool:
         return True
     if '(instrumental)' in stem:
         return True
+    # Common typo: "(Instrumenta)l" — paren closed early, so "instrumental" never appears.
+    if 'instrumenta' in stem:
+        return True
     if 'inst.' in stem or '-inst' in stem:
         return True
     if 'instrumental' in stem:
+        return True
+    # Stem dumps often use "Beat" / "beat 1" instead of instrumental.
+    if re.search(r'(^|[\s_\-\[(])beat(\s|$|[\d\)\]])', stem):
         return True
     return False
 
@@ -1114,7 +1321,7 @@ def sdr_single_flat_keyword_predicate(category: str):
 
 def single_flat_category_patterns(category: str) -> str:
     return {
-        'vocals': '*_vocals, acapella, vocal, …',
+        'vocals': 'vocals, vocal, acapella, a capella, (vocals), …',
         'instrumental': '*_instrumental, instrumental, inst., -inst, (instrumental), …',
         'bass': '*_bass or bass in name',
         'drums': '*_drums or drums in name',
@@ -1327,7 +1534,118 @@ def collect_sdr_targets(root: Path, categories: tuple[str, ...], scan_mode: str,
         return collect_all_audio_targets(root, scan_mode, cat)
     if layout == SDR_LAYOUT_STEMS:
         return collect_sdr_stem_songs(root, categories)
-    return [f for f in collect_sdr_song_folders(root, scan_mode) if folder_has_all_stems(f, categories)]
+    # MUSDB song folders
+    force = bool(process_all) and set(categories) == {'instrumental', 'vocals'}
+    out: list[Path] = []
+    for folder in collect_sdr_song_folders(root, scan_mode):
+        if resolve_musdb_folder_stems(folder, categories, force_two_file=force) is not None:
+            out.append(folder)
+    return out
+
+
+def _instrumental_tag_categories(categories: tuple[str, ...]) -> tuple[str, ...]:
+    if set(categories) == {'instrumental', 'vocals'}:
+        return ('instrumental',)
+    return tuple(c for c in categories if c != 'vocals')
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in paths:
+        try:
+            key = str(path.resolve(strict=False))
+        except OSError:
+            key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def collect_instrumental_tag_paths(
+    root: Path,
+    categories: tuple[str, ...],
+    scan_mode: str,
+    layout: str,
+    *,
+    flat_process_all: bool = False,
+    pair_process_all: bool = False,
+) -> list[Path]:
+    """Audio files for genre/style tagging (instrumental side of pairs, not vocals)."""
+    process_all = bool(flat_process_all or pair_process_all)
+    targets = collect_sdr_targets(
+        root, categories, scan_mode, layout, process_all=process_all
+    )
+    inst_cats = _instrumental_tag_categories(categories)
+    paths: list[Path] = []
+    if layout == SDR_LAYOUT_MUSDB:
+        for folder in targets:
+            stems = resolve_musdb_folder_stems(
+                folder, categories, force_two_file=pair_process_all
+            )
+            if not stems:
+                continue
+            for cat in inst_cats:
+                if cat in stems:
+                    paths.append(stems[cat])
+    else:
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            for cat in inst_cats:
+                if cat in target:
+                    paths.append(target[cat])
+    return _dedupe_paths(paths)
+
+
+def collect_vocal_tag_paths(
+    root: Path,
+    categories: tuple[str, ...],
+    scan_mode: str,
+    layout: str,
+    *,
+    flat_process_all: bool = False,
+    pair_process_all: bool = False,
+) -> list[Path]:
+    """Audio files for gender / reverb / vocal-type tagging (vocals only)."""
+    process_all = bool(flat_process_all or pair_process_all)
+    targets = collect_sdr_targets(
+        root, categories, scan_mode, layout, process_all=process_all
+    )
+    paths: list[Path] = []
+    if layout == SDR_LAYOUT_MUSDB:
+        for folder in targets:
+            stems = resolve_musdb_folder_stems(
+                folder, categories, force_two_file=pair_process_all
+            )
+            if stems and 'vocals' in stems:
+                paths.append(stems['vocals'])
+    else:
+        for target in targets:
+            if isinstance(target, dict) and 'vocals' in target:
+                paths.append(target['vocals'])
+    return _dedupe_paths(paths)
+
+
+def describe_tag_layout_label(
+    categories: tuple[str, ...],
+    layout: str,
+    *,
+    user_picked_category: bool = False,
+) -> str:
+    if layout == SDR_LAYOUT_MUSDB:
+        return 'Type 1 (song folders)'
+    if layout == SDR_LAYOUT_STEMS:
+        return 'Type 2 (stem category folders)'
+    if layout == SDR_LAYOUT_SINGLE_FLAT:
+        if user_picked_category:
+            return f'Type 3 ({categories[0]}-only, user confirmed)'
+        return f'Type 3 ({categories[0]}-only files)'
+    if layout == SDR_LAYOUT_MIXED_FLAT:
+        return 'Type 3 (mixed vocals/instrumental files)'
+    return str(layout)
 
 
 def _audio_to_mono(audio):
@@ -1911,6 +2229,7 @@ class SdrWorker(threading.Thread):
             'folders_total': folders_total,
             'passed': 0,
             'skipped_incomplete': 0,
+            'skipped_existing': 0,
             'deleted_whole_folder': [],
             'deleted_stem_files': [],
         }
@@ -1979,6 +2298,8 @@ class SdrWorker(threading.Thread):
             self.log(f'  Avg per folder: {format_elapsed(elapsed / st["folders_total"])} ({st["folders_total"]} folder(s))')
         if st['passed']:
             self.log(f'  Passed: {st["passed"]}')
+        if st.get('skipped_existing'):
+            self.log(f'  Skipped (SDR tag already exists): {st["skipped_existing"]}')
         if st['skipped_incomplete']:
             self.log(f'  Skipped (incomplete stems): {st["skipped_incomplete"]}')
         whole = st['deleted_whole_folder']
@@ -2003,6 +2324,29 @@ class SdrWorker(threading.Thread):
             self.log(f'  [skip] missing expected stem(s): {", ".join(missing)}')
             self._stats['skipped_incomplete'] += 1
             return
+
+        # Default ON (no GUI toggle): skip songs whose stems already have SDR tags.
+        if self.p.get('sdr_skip_existing', True):
+            try:
+                from stem_organizer.meta_tags import read_custom_tag
+            except Exception:
+                read_custom_tag = None  # type: ignore[assignment]
+            if read_custom_tag is not None:
+                def _has_sdr(path: Path) -> bool:
+                    raw = read_custom_tag(path, "SDR").strip()
+                    if not raw:
+                        return False
+                    try:
+                        float(raw.replace(",", ".").split()[0])
+                        return True
+                    except ValueError:
+                        return False
+
+                if all(_has_sdr(stem_paths[cat]) for cat in categories):
+                    self.log('  [skip] SDR tag already exists')
+                    self._stats['skipped_existing'] += 1
+                    return
+
         audios: dict = {}
         t0 = time.monotonic()
         for cat, path in stem_paths.items():
@@ -2051,6 +2395,14 @@ class SdrWorker(threading.Thread):
             scores[cat] = compute_si_sdr(ref, est)
             sdr_dt += time.monotonic() - t0
             self._log_sdr_line(stem_paths[cat].name, scores[cat], thresholds[cat])
+            if self.p.get('write_sdr_tags'):
+                try:
+                    from stem_organizer.meta_tags import write_sdr_tag
+
+                    if not write_sdr_tag(stem_paths[cat], scores[cat]):
+                        self.log(f'  [warn] could not write SDR tag: {stem_paths[cat].name}')
+                except Exception as tag_exc:
+                    self.log(f'  [warn] SDR tag failed ({stem_paths[cat].name}): {tag_exc}')
         self._phase_timer.add('separation', sep_dt)
         self._phase_timer.add('sdr_compute', sdr_dt)
 
@@ -2100,20 +2452,14 @@ class SdrWorker(threading.Thread):
             if deleted_paths:
                 self._cleanup_empty_dirs_after_delete(deleted_paths)
 
-    def _process_folder(self, folder, root, categories, thresholds, model, device, sources, sr, fi, total):
+    def _process_folder(self, folder, root, categories, thresholds, model, device, sources, sr, fi, total, *, force_two_file=False):
         display = self._folder_display(folder, root)
-        stem_paths: dict[str, Path] = {}
-        missing = []
-        for cat in categories:
-            p = find_category_stem(folder, cat)
-            if p is None:
-                missing.append(cat)
-            else:
-                stem_paths[cat] = p
-        if missing:
+        stem_paths = resolve_musdb_folder_stems(folder, categories, force_two_file=force_two_file)
+        if stem_paths is None:
+            missing = [c for c in categories if find_category_stem(folder, c) is None]
             self.log('')
             self.log(f'=== [{fi:02d}/{total}] {display} ===')
-            self.log(f'  [skip] missing expected stem(s): {", ".join(missing)}')
+            self.log(f'  [skip] missing expected stem(s): {", ".join(missing) or ", ".join(categories)}')
             self._stats['skipped_incomplete'] += 1
             return
         self._process_song(stem_paths, display, categories, thresholds, model, device, sources, sr, fi, total, delete_whole=folder, layout=SDR_LAYOUT_MUSDB)
@@ -2175,11 +2521,17 @@ class SdrWorker(threading.Thread):
                     self.log(f'[info] {categories[0]}-only files detected ({patterns}).')
 
             process_all = bool(p.get('sdr_flat_process_all', False))
+            pair_process_all = bool(p.get('sdr_pair_process_all', False))
             if process_all and layout in SDR_SINGLE_FLAT_LAYOUTS:
                 self.log(f'[info] Processing all audio files in folder as {categories[0]}.')
+            if pair_process_all and layout == SDR_LAYOUT_MUSDB:
+                self.log('[info] Processing all two-file song folders as instrumental + vocals pairs.')
 
             thresholds = sdr_thresholds_for_categories(categories, p['sdr_thresholds'])
-            targets = collect_sdr_targets(root, categories, scan_mode, layout, process_all=process_all)
+            targets = collect_sdr_targets(
+                root, categories, scan_mode, layout,
+                process_all=process_all or pair_process_all,
+            )
             if layout == SDR_LAYOUT_MUSDB:
                 layout_label = 'Type 1 (MUSDB)'
             elif layout == SDR_LAYOUT_STEMS:
@@ -2227,7 +2579,10 @@ class SdrWorker(threading.Thread):
                             torch.cuda.empty_cache()
                         return
                     if layout == SDR_LAYOUT_MUSDB:
-                        self._process_folder(target, root, categories, thresholds, model, device, sources, sr, fi, len(targets))
+                        self._process_folder(
+                            target, root, categories, thresholds, model, device, sources, sr, fi, len(targets),
+                            force_two_file=pair_process_all,
+                        )
                     elif layout in SDR_SINGLE_FLAT_LAYOUTS:
                         stem_paths: dict[str, Path] = target
                         cat = next(iter(stem_paths))

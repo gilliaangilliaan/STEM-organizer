@@ -1,7 +1,7 @@
 """Main window for STEM organizer (PySide6 port).
 
 Frameless QMainWindow with a custom title bar, a left column holding a tab
-widget (Classify / Genre & Gender / Match & Align / Rename) plus a shared
+widget (Classify / Genre & Gender / Match & Align / Rename / Integrity / Charts) plus a shared
 action bar, a right column with the log panel, and a bottom status bar.
 
 This file currently wires up the skeleton; tab contents are added in their
@@ -178,7 +178,10 @@ class MainWindow(QMainWindow):
         # Placeholder tab registration — replaced when real tabs are added
         self._tabs_registered: dict[str, object] = {}
         self._prev_tab_widget: Optional[QWidget] = None
-        self._rename_layout_active = False
+        # Layout modes: standard (tabs|log), rename (full-width rename chrome),
+        # wide (Dataset overview idle — hide log so charts can breathe).
+        self._layout_mode: str = "standard"
+        self._dataset_log_busy = False
 
         # Keyboard shortcut: Esc does nothing special here; keep window-wide
         # shortcuts in the relevant panels.
@@ -215,6 +218,20 @@ class MainWindow(QMainWindow):
         return self.log_panel.queue
 
     def append_log(self, text: str, tag: str = "") -> None:
+        bare = (text or "").strip()
+        if bare == "__live_progress_end__":
+            self.log_panel.end_live_progress()
+            return
+        if bare.startswith("__live_progress__\t"):
+            parts = bare.split("\t")
+            try:
+                n = int(parts[1])
+                total = int(parts[2])
+            except (IndexError, ValueError):
+                return
+            label = parts[3].strip() if len(parts) > 3 else "files"
+            self.log_panel.update_live_progress(f"{n:,}/{total:,} {label}")
+            return
         self.log_panel.append_line(text, tag)
 
     def append_sdr_log(self, filename: str, score: float, threshold: float) -> None:
@@ -223,11 +240,29 @@ class MainWindow(QMainWindow):
     def update_gg_processed(self, n: int, total: int) -> None:
         self.log_panel.update_gg_processed(n, total)
 
+    def update_live_progress(self, text: str) -> None:
+        self.log_panel.update_live_progress(text)
+
     def clear_log(self) -> None:
         self.log_panel.clear()
 
+    def set_log_export_prefix(self, prefix: str) -> None:
+        """Suggested Save filename, e.g. compression → compression_stem_organizer.log."""
+        self.log_panel.set_export_prefix(prefix)
+
     def save_log(self) -> None:
         self.log_panel.save_to_file(self)
+
+    def set_dataset_log_busy(self, busy: bool) -> None:
+        """Show host LOG while Dataset overview is scanning / balancing."""
+        busy = bool(busy)
+        if self._dataset_log_busy == busy:
+            return
+        self._dataset_log_busy = busy
+        # Only affect layout when that tab is active.
+        current = self.tabs.currentWidget()
+        if current is self._tabs_registered.get("Charts"):
+            self._apply_content_layout("standard" if busy else "wide")
 
     # ----- window chrome -----------------------------------------------
 
@@ -307,48 +342,7 @@ class MainWindow(QMainWindow):
             if w is not None:
                 w.setFocus()
 
-    def _show_rename_mode_layout(self) -> None:
-        """CTk Rename layout: hide host LOG; PATH beside tab bar; full-width footer."""
-        if self._rename_layout_active:
-            return
-        self._rename_layout_active = True
-        self.log_panel.hide()
-        self._log_actions.hide()
-        self._action_row.hide()
-        # Shrink the gap reserved for the action row so the rename footer (which
-        # lives inside the tab) drops to the same y as the action bar buttons in
-        # other tabs. The standard ActionBarPage is 42px tall with the 30px
-        # button centered (15px from each edge → button center 21px above the
-        # bar bottom). The rename footer has no padding, so its 30px buttons
-        # center 15px above the footer bottom. A 6px gap here puts the rename
-        # footer bottom at WCB-6, so its button center lands at WCB-21 — matching
-        # the standard bar.
-        self._action_row_spacer.changeSize(
-            0, 6, QSizePolicy.Minimum, QSizePolicy.Fixed
-        )
-        self.content_layout.invalidate()
-        self.left_col.setMinimumWidth(0)
-        self.left_col.setMaximumWidth(16777215)
-        self.left_col.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._upper_layout.setStretch(0, 1)
-        self._upper_layout.setStretch(1, 0)
-
-        rename = self._tabs_registered.get("Rename")
-        app = getattr(rename, "app", None) if rename is not None else None
-        if app is not None and hasattr(app, "dock_to_host"):
-            app.dock_to_host(self._rename_side_host, self._rename_footer_host)
-            self._rename_side_host.show()
-            self._rename_footer_host.show()
-
-        # Re-pin tab sizes after the bar grows to full width
-        theme.configure_tab_widget(self.tabs)
-
-    def _show_standard_mode_layout(self) -> None:
-        """Restore left fixed column + host LOG (non-Rename tabs)."""
-        if not self._rename_layout_active:
-            return
-        self._rename_layout_active = False
-
+    def _undock_rename_if_needed(self) -> None:
         rename = self._tabs_registered.get("Rename")
         app = getattr(rename, "app", None) if rename is not None else None
         if app is not None and hasattr(app, "undock_from_host"):
@@ -356,15 +350,8 @@ class MainWindow(QMainWindow):
         self._rename_side_host.hide()
         self._rename_footer_host.hide()
 
-        self.log_panel.show()
-        self._log_actions.show()
-        self._action_row.show()
-        # Restore the breathing room above the action row.
-        self._action_row_spacer.changeSize(
-            0, theme.ACTION_ROW_TOP_GAP, QSizePolicy.Minimum, QSizePolicy.Fixed
-        )
-        self.content_layout.invalidate()
-        # Pin left column — only Rename expands; Classify/Match/Genre stay fixed.
+    def _pin_left_column_fixed(self) -> None:
+        """Classify / Genre / Match / busy Dataset — fixed left + stretching LOG."""
         self.left_col.setMinimumWidth(theme.LEFT_PANEL_WIDTH)
         self.left_col.setMaximumWidth(theme.LEFT_PANEL_WIDTH)
         self.left_col.setFixedWidth(theme.LEFT_PANEL_WIDTH)
@@ -375,6 +362,79 @@ class MainWindow(QMainWindow):
         self.action_left.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._upper_layout.setStretch(0, 0)
         self._upper_layout.setStretch(1, 1)
+
+    def _expand_left_column(self) -> None:
+        """Rename / Dataset overview idle — content uses full upper width."""
+        self.left_col.setMinimumWidth(0)
+        self.left_col.setMaximumWidth(16777215)
+        self.left_col.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.action_left.setMinimumWidth(0)
+        self.action_left.setMaximumWidth(16777215)
+        self.action_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._upper_layout.setStretch(0, 1)
+        self._upper_layout.setStretch(1, 0)
+
+    def _apply_content_layout(self, mode: str) -> None:
+        """Switch between standard / rename / wide (charts without LOG)."""
+        if mode not in ("standard", "rename", "wide"):
+            mode = "standard"
+        if mode == self._layout_mode:
+            return
+        prev = self._layout_mode
+        self._layout_mode = mode
+
+        if prev == "rename":
+            self._undock_rename_if_needed()
+
+        if mode == "rename":
+            self.log_panel.hide()
+            self._log_actions.hide()
+            self._action_row.hide()
+            # Shrink the gap reserved for the action row so the rename footer
+            # (inside the tab) lines up with other tabs' action buttons.
+            self._action_row_spacer.changeSize(
+                0, 6, QSizePolicy.Minimum, QSizePolicy.Fixed
+            )
+            self.content_layout.invalidate()
+            self._expand_left_column()
+
+            rename = self._tabs_registered.get("Rename")
+            app = getattr(rename, "app", None) if rename is not None else None
+            if app is not None and hasattr(app, "dock_to_host"):
+                app.dock_to_host(self._rename_side_host, self._rename_footer_host)
+                self._rename_side_host.show()
+                self._rename_footer_host.show()
+            theme.configure_tab_widget(self.tabs)
+            return
+
+        # standard + wide share the host action row
+        self._action_row.show()
+        self._action_row_spacer.changeSize(
+            0, theme.ACTION_ROW_TOP_GAP, QSizePolicy.Minimum, QSizePolicy.Fixed
+        )
+        self.content_layout.invalidate()
+
+        if mode == "wide":
+            self.log_panel.hide()
+            self._log_actions.hide()
+            self._expand_left_column()
+            theme.configure_tab_widget(self.tabs)
+            return
+
+        # standard
+        self.log_panel.show()
+        self._log_actions.show()
+        self._pin_left_column_fixed()
+        theme.configure_tab_widget(self.tabs)
+
+    def _show_rename_mode_layout(self) -> None:
+        self._apply_content_layout("rename")
+
+    def _show_standard_mode_layout(self) -> None:
+        self._apply_content_layout("standard")
+
+    def _show_wide_charts_layout(self) -> None:
+        self._apply_content_layout("wide")
 
     def _on_tab_changed(self, index: int) -> None:
         widget = self.tabs.widget(index)
@@ -391,6 +451,14 @@ class MainWindow(QMainWindow):
                 if name == "Rename":
                     self.action_bar.setVisible(False)
                     self._show_rename_mode_layout()
+                elif name == "Charts":
+                    self.action_bar.setVisible(True)
+                    if self.action_bar.has_page(name):
+                        self.show_action_bar(name)
+                    if self._dataset_log_busy:
+                        self._show_standard_mode_layout()
+                    else:
+                        self._show_wide_charts_layout()
                 else:
                     self._show_standard_mode_layout()
                     self.action_bar.setVisible(True)

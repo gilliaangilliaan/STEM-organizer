@@ -25,6 +25,9 @@ from tagger_launch import (
     tagger_subprocess_env,
 )
 
+from ..io_tune import ensure_tuned
+from ..settings_store import SettingsStore
+
 
 _TQDM_PCT_RE = re.compile(
     r"(?P<pct>\d+(?:\.\d+)?)%\|.*?\|?\s*(?P<cur>\d+)/(?P<total>\d+)"
@@ -40,6 +43,14 @@ _GG_BADGE_LINE_RE = re.compile(
     r"^\s*(female|male|dry|wet)(?:\s+\(confidence\s+[^)]+\)|\s+\d+%)?\s*$",
     re.IGNORECASE,
 )
+_TAGGER_DECODE_NOISE_RE = re.compile(
+    r"^Warning:\s*Xing stream size"
+    r"|dequantization failed"
+    r"|libmpg123[/\\](?:layer3|id3)\.c"
+    r"|bad RVA2 tag"
+    r"|^\[.*libmpg123.*\]\s*error:",
+    re.IGNORECASE,
+)
 
 
 def gg_log_tag(line: str) -> str:
@@ -47,7 +58,18 @@ def gg_log_tag(line: str) -> str:
     if not s:
         return "info"
     low = s.lower()
-    if low.startswith("error") or low.startswith("[tagger exited"):
+    # Decode/file errors: small red (log_note_err), not bold body err.
+    # Covers "ERROR: path", "Error : decoder…", "error opening…",
+    # "SKIP (tag error): …".
+    if low.startswith("error:") or low.startswith("error :") or low.startswith(
+        "error opening"
+    ):
+        return "log_note_err"
+    if low.startswith("error"):
+        return "log_note_err"
+    if low.startswith("skip (tag error)"):
+        return "log_note_err"
+    if low.startswith("[tagger exited"):
         return "err"
     if s == "DONE":
         return "ok"
@@ -67,11 +89,16 @@ def gg_log_tag(line: str) -> str:
         return "ok"
     if s.startswith("  Passed:"):
         return "ok"
-    if s.startswith(("  Skipped", "Skipped:")):
+    if (
+        "[skip existing]" in low
+        or "[skip]" in low
+        or s.startswith(("  Skipped", "Skipped:", "Skipped ("))
+    ):
         return "warn"
     if s.startswith((
         "  Total time:", "  Files:", "  Sec/file:", "  Files/min:",
-        "  Peak VRAM:", "  Results:", "  Phase timing:",
+        "  Tagged:", "  Peak VRAM:", "  Results:", "  Phase timing:",
+        "  Errors:", "  Lossless:", "  OK:",
     )):
         return "info"
     if s.startswith("    ") and ":" in s:
@@ -117,6 +144,8 @@ class TaggerWorker(QThread):
         csv_path: str,
         include_subfolders: bool,
         overwrite_tags: bool,
+        settings: Optional[SettingsStore] = None,
+        files_from: str = "",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -129,6 +158,8 @@ class TaggerWorker(QThread):
         self._csv_path = csv_path
         self._include_subfolders = include_subfolders
         self._overwrite_tags = overwrite_tags
+        self._settings = settings
+        self._files_from = files_from
         self._proc: Optional[subprocess.Popen] = None
         self._stop_requested = False
         self._final_status = "Done"
@@ -182,6 +213,25 @@ class TaggerWorker(QThread):
             env["GG_REVERB_MODE"] = "combined"
         if self._csv_path:
             env["GG_CSV"] = self._csv_path
+        if self._files_from:
+            env["GG_FILES_FROM"] = self._files_from
+
+        if self._batch_mode:
+            workload = "gender" if self._mode == "gender" else "genre"
+
+            def _tune_log(msg: str, tag: str = "info") -> None:
+                self.log_line.emit(msg, tag)
+
+            hint = ensure_tuned(
+                input_dir,
+                self._settings,
+                workload=workload,
+                log=_tune_log,
+            )
+            # Respect explicit parent-process env overrides.
+            env.setdefault("GG_AUDIO_WORKERS", str(hint.audio_workers))
+            env.setdefault("GG_BATCH_SIZE", str(hint.gpu_batch_size))
+            env.setdefault("GG_FILE_CHUNK", str(hint.file_chunk))
 
         try:
             self._proc = subprocess.Popen(
@@ -207,7 +257,10 @@ class TaggerWorker(QThread):
                 self._final_status = "Done"
             else:
                 detail = format_tagger_exit(self._proc.returncode)
-                self.log_line.emit(f"[tagger exited: {detail}]", "warn")
+                msg = f"[tagger exited: {detail}]"
+                if str(detail).strip() in ("1", "-1"):
+                    msg += " Scroll up for ERROR lines."
+                self.log_line.emit(msg, "warn")
                 self._final_status = f"Failed (exit {self._proc.returncode})"
         except Exception as exc:
             if self._stop_requested:
@@ -220,24 +273,27 @@ class TaggerWorker(QThread):
             self._proc = None
             self._stop_requested = False
             self.finished_ok.emit(self._final_status)
+            if self._files_from:
+                try:
+                    Path(self._files_from).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     @staticmethod
     def _iter_lines(stream):
-        buf = ""
+        # readline() — not read(1024). Block reads coalesce many LOG lines.
         while True:
-            chunk = stream.read(1024)
-            if not chunk:
+            line = stream.readline()
+            if not line:
                 break
-            buf += chunk.replace("\r\n", "\n").replace("\r", "\n")
-            while "\n" in buf:
-                line, buf = buf.split("\n", 1)
-                yield line.rstrip("\r")
-        rem = buf.rstrip("\r")
-        if rem:
-            yield rem
+            yield line.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
 
     def _handle_line(self, line: str) -> None:
         bare = (line or "").strip()
+        if self._stop_requested:
+            return
+        if _TAGGER_DECODE_NOISE_RE.search(bare):
+            return
         if bare.startswith("__gg_processed__\t") or bare.startswith("__gg_processed__ "):
             parts = bare.split("\t") if "\t" in bare else bare.split()
             try:

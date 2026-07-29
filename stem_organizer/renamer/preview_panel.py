@@ -428,14 +428,14 @@ class PreviewModel(QAbstractTableModel):
             if col == COL_ORIGINAL and active_change:
                 return QColor(theme.DARK["text_mute"])
             if col == COL_NEW and active_change:
-                return QColor("#ffffff")
+                return QColor(theme.DARK["text"])
             if col == COL_NEW:
                 # Deselected or not changing — same dim as former "unchanged" status
                 return QColor(theme.DARK["unchanged"])
             if col == COL_KEYWORD:
                 return QColor(theme.DARK["text_mute"])
             if col == COL_ORIGINAL:
-                return QColor("#ffffff")
+                return QColor(theme.DARK["text"])
             return QColor(theme.DARK["text"])
         if role == Qt.FontRole:
             font = QFont(theme.FONT_FAMILY)
@@ -534,10 +534,10 @@ class _CenteredCheckDelegate(TableItemDelegate):
         painter.restore()
 
     def _drawIndicator(self, painter: QPainter, option, index) -> None:  # noqa: N802
-        # Thin left bar for the focused/selected row — white, not accent lavender.
+        # Thin left bar for the focused/selected row — soft white, not accent lavender.
         y, h = option.rect.y(), option.rect.height()
         ph = round(0.35 * h if self.pressedRow == index.row() else 0.257 * h)
-        painter.setBrush(QColor("#ffffff"))
+        painter.setBrush(QColor(theme.DARK["text"]))
         painter.drawRoundedRect(4, ph + y, 3, h - 2 * ph, 1.5, 1.5)
 
     def _drawCheckBox(self, painter: QPainter, option, index) -> None:  # noqa: N802
@@ -814,7 +814,7 @@ class PreviewPanel(QWidget):
                 border-radius: {theme.LOG_VIEW_CORNER_RADIUS}px;
                 padding: 8px;
                 selection-background-color: {c['accent']};
-                selection-color: #ffffff;
+                selection-color: {c['log_fg']};
             }}
         """
         self.analyze_log.setStyleSheet(log_qss)
@@ -1083,12 +1083,12 @@ class PreviewPanel(QWidget):
         self.analyze_log.ensureCursorVisible()
 
     def append_analyze_summary(self, *, elapsed_sec: float, total: int) -> None:
-        mins = int(elapsed_sec // 60)
-        secs = int(elapsed_sec % 60)
-        self._append_line("=== Instrument Summary ===", "info")
-        self._append_line(f"  Total time: {mins}:{secs:02d}", "info")
-        self._append_line(f"  Files: {total}", "info")
-        self._append_line("DONE", "ok")
+        from ..run_summary import emit_run_summary
+
+        def log(msg: str, tag: str) -> None:
+            self._append_line(msg, tag)
+
+        emit_run_summary(log, "Instrument", elapsed=elapsed_sec, files=total)
         try:
             from done_sound import play_done_sound
             play_done_sound()

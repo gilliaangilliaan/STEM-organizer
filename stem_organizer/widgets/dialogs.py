@@ -7,8 +7,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Literal, Optional, Sequence, Union
 
-from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtGui import QFont, QFontMetrics, QPixmap
+from PySide6.QtCore import QEvent, QObject, QUrl, Qt
+from PySide6.QtGui import QDesktopServices, QFont, QFontMetrics, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -41,6 +41,7 @@ HELP_ABOUT_ICON_PX = 112  # match CTk ABOUT_ICON_SIZE
 # need a floor ("Browse & select a folder first." ≈ 180px; longest commons ≈ 260).
 INFO_PROMPT_BODY_MIN_WIDTH = 300
 INFO_PROMPT_BODY_MAX_WIDTH = 420
+INFO_PROMPT_BODY_WIDE_MIN_WIDTH = 520
 INFO_PROMPT_BODY_WIDE_MAX_WIDTH = 640
 INFO_PROMPT_SCROLL_MAX_HEIGHT = 360
 
@@ -170,6 +171,8 @@ def _modal_prompt(
     *,
     primary_text: str,
     secondary_text: Optional[str] = None,
+    link_path: Optional[str] = None,
+    wide: bool = False,
 ) -> bool:
     """Dark OK / Yes-No prompt — opaque card (no Fluent MaskDialogBase).
 
@@ -178,6 +181,11 @@ def _modal_prompt(
     the painted OK button to the parent, which only beeps under modality and
     never closes the dialog. Use the same opaque-card pattern as ``help_dialog``
     / CTk ``show_info_dark`` instead (no system MessageBox sound either).
+
+    When ``link_path`` is set, ``message`` is the intro line and the path is
+    shown as a clickable link that opens in the system default app.
+
+    ``wide`` uses a broader card (summary prompts with paths / multi-line stats).
     """
     host = parent.window() if parent is not None else parent
     t = theme.DARK
@@ -212,25 +220,76 @@ def _modal_prompt(
     lay.addWidget(title_lbl)
     lay.addSpacing(10)
 
-    body = BodyLabel(message, shell)
-    body.setWordWrap(True)
-    long_body = len(message) > 280 or message.count("\n") >= 6
+    body_text = message
+    long_body = (
+        wide
+        or len(body_text) > 280
+        or body_text.count("\n") >= 6
+        or (link_path is not None and len(link_path) > 60)
+    )
+    min_w = INFO_PROMPT_BODY_WIDE_MIN_WIDTH if wide else INFO_PROMPT_BODY_MIN_WIDTH
     max_w = INFO_PROMPT_BODY_WIDE_MAX_WIDTH if long_body else INFO_PROMPT_BODY_MAX_WIDTH
-    body.setMinimumWidth(INFO_PROMPT_BODY_MIN_WIDTH)
+
+    body_host = QWidget(shell)
+    body_lay = QVBoxLayout(body_host)
+    body_lay.setContentsMargins(0, 0, 0, 0)
+    body_lay.setSpacing(6)
+    body = BodyLabel(body_text, body_host)
+    body.setWordWrap(True)
+    body.setMinimumWidth(min_w)
     body.setMaximumWidth(max_w)
     style_help_label(body, HELP_BODY_PX, t["text_dim"])
+    body_lay.addWidget(body)
+
+    if link_path:
+        try:
+            resolved = str(Path(link_path).expanduser().resolve(strict=False))
+        except OSError:
+            resolved = str(Path(link_path))
+        url = QUrl.fromLocalFile(resolved).toString()
+        link = QLabel(body_host)
+        link.setObjectName("InfoPromptLink")
+        link.setWordWrap(True)
+        link.setMinimumWidth(min_w)
+        link.setMaximumWidth(max_w)
+        link.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        link.setOpenExternalLinks(False)
+        link.setCursor(Qt.PointingHandCursor)
+        link.setText(
+            f'<a href="{url}" style="color: {t["accent"]}; text-decoration: none;">'
+            f"{resolved}</a>"
+        )
+        link.setStyleSheet(
+            f"QLabel#InfoPromptLink {{ background: transparent; "
+            f"font-family: \"{theme.FONT_FAMILY_MONO}\"; "
+            f"font-size: {theme.LOG_FONT_PX}px; }}"
+        )
+        link.setToolTip("Open in File Explorer")
+
+        def _open_link(_href: str = "") -> None:
+            target = Path(resolved)
+            if target.is_dir() or target.is_file():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+            elif target.parent.is_dir():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.parent)))
+
+        link.linkActivated.connect(_open_link)
+        body_lay.addWidget(link)
+
     if long_body:
         scroll = QScrollArea(shell)
-        scroll.setWidget(body)
+        scroll.setWidget(body_host)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setMaximumHeight(INFO_PROMPT_SCROLL_MAX_HEIGHT)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        # Wide summaries should not collapse to the default narrow min.
+        scroll.setMinimumWidth(min_w)
         lay.addWidget(scroll)
     else:
-        lay.addWidget(body)
+        lay.addWidget(body_host)
     lay.addSpacing(18)
 
     footer = QHBoxLayout()
@@ -272,10 +331,18 @@ def _modal_prompt(
         return dlg.exec() == QDialog.DialogCode.Accepted
 
 
-def show_info(parent: QWidget, title: str, message: str) -> None:
+def show_info(
+    parent: QWidget,
+    title: str,
+    message: str,
+    *,
+    link_path: Optional[str] = None,
+) -> None:
     # Parent to the top-level window so the dialog centers on the full app
     # (tab pages like Rename are only a column after docking PATH/PREVIEW).
-    _modal_prompt(parent, title, message, primary_text="OK")
+    _modal_prompt(
+        parent, title, message, primary_text="OK", link_path=link_path
+    )
 
 
 def ask_yes_no(
@@ -285,6 +352,8 @@ def ask_yes_no(
     *,
     yes_text: str = "Yes",
     no_text: str = "No",
+    link_path: Optional[str] = None,
+    wide: bool = False,
 ) -> bool:
     return _modal_prompt(
         parent,
@@ -292,6 +361,8 @@ def ask_yes_no(
         message,
         primary_text=yes_text,
         secondary_text=no_text,
+        link_path=link_path,
+        wide=wide,
     )
 
 
@@ -299,6 +370,54 @@ def _section_body_text(body: HelpSectionBody) -> str:
     if isinstance(body, str):
         return body.strip()
     return "\n".join(line.rstrip() for line in body if str(line).strip())
+
+
+def _fill_help_body_label(lbl: BodyLabel, text: str, *, text_max_width: int) -> None:
+    """Plain or rich help body; rich text enables clickable ``<a href>`` links."""
+    t = theme.DARK
+    dim = t["text_dim"]
+    lbl.setWordWrap(True)
+    lbl.setMaximumWidth(text_max_width)
+    lbl.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+    lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+    if "<a " in text.lower():
+        accent = t["accent"]
+        style_help_label(lbl, HELP_BODY_PX, dim)
+        font = QFont(theme.FONT_FAMILY)
+        font.setPixelSize(HELP_BODY_PX)
+        font.setWeight(QFont.Weight.Normal)
+        lbl.setFont(font)
+        sheet = f"""
+            FluentLabelBase, BodyLabel, QLabel {{
+                color: {dim};
+                font-family: "{theme.FONT_FAMILY}";
+                font-size: {HELP_BODY_PX}px;
+                font-weight: 400;
+                background: transparent;
+            }}
+            a {{
+                color: {accent};
+                text-decoration: none;
+            }}
+        """
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setOpenExternalLinks(False)
+        lbl.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        lbl.setStyleSheet(sheet)
+        setCustomStyleSheet(lbl, sheet, sheet)
+        lbl.setText(
+            f'<span style="font-size:{HELP_BODY_PX}px; color:{dim};">'
+            f"{text.replace(chr(10), '<br>')}</span>"
+        )
+
+        def _open(href: str) -> None:
+            QDesktopServices.openUrl(QUrl(href))
+
+        lbl.linkActivated.connect(_open)
+    else:
+        lbl.setText(text)
+        style_help_label(lbl, HELP_BODY_PX, dim)
+    lbl.setFixedHeight(max(1, lbl.heightForWidth(text_max_width)))
 
 
 # Stem legend lines: "bass — Kick, snare…" → chip + description (CTk About).
@@ -377,7 +496,7 @@ def _help_stem_chip(parent: QWidget, label: str, *, min_width: int = 0) -> QLabe
         f"""
         QLabel#HelpStemChip {{
             background-color: {bg};
-            color: #ffffff;
+            color: {theme.COLORS["log_fg"]};
             border: none;
             padding: 0px;
         }}
@@ -475,17 +594,10 @@ def _help_section_card(
             row.addWidget(desc_lbl, 1)
             lay.addLayout(row)
     else:
-        body_lbl = BodyLabel(_section_body_text(body))
-        body_lbl.setWordWrap(True)
-        body_lbl.setMaximumWidth(text_max_width)
-        # Top-align + pin height: word-wrap sizeHint assumes a narrow default
-        # width (often 2–3× too tall). With AlignVCenter that empty band sat
-        # under purple section titles in scrollable Genre/Match/Align help;
-        # Renamer multi-line cards mostly hid the same inflation.
-        body_lbl.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        body_lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        style_help_label(body_lbl, HELP_BODY_PX, t["text_dim"])
-        body_lbl.setFixedHeight(max(1, body_lbl.heightForWidth(text_max_width)))
+        body_lbl = BodyLabel()
+        _fill_help_body_label(
+            body_lbl, _section_body_text(body), text_max_width=text_max_width
+        )
         lay.addWidget(body_lbl)
     return card
 
@@ -656,13 +768,47 @@ def help_dialog(
             body_lay.addSpacing(version_to_intro)
         elif heading or subtitle:
             body_lay.addSpacing(HELP_TITLE_TO_INTRO)
-        ilbl = BodyLabel(intro)
+        ilbl = BodyLabel(body_host)
         ilbl.setWordWrap(True)
         ilbl.setMaximumWidth(text_max)
         ilbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         if center_header:
             ilbl.setAlignment(Qt.AlignHCenter)
-        style_help_label(ilbl, HELP_BODY_PX, t["text_dim"])
+        if "<a " in intro.lower():
+            # RichText uses the widget's QFont, not stylesheet font-size — pin it
+            # so the intro matches section card body text (HELP_BODY_PX).
+            dim = t["text_dim"]
+            accent = t["accent"]
+            style_help_label(ilbl, HELP_BODY_PX, dim)
+            font = QFont(theme.FONT_FAMILY)
+            font.setPixelSize(HELP_BODY_PX)
+            font.setWeight(QFont.Weight.Normal)
+            ilbl.setFont(font)
+            sheet = f"""
+                FluentLabelBase, BodyLabel, QLabel {{
+                    color: {dim};
+                    font-family: "{theme.FONT_FAMILY}";
+                    font-size: {HELP_BODY_PX}px;
+                    font-weight: 400;
+                    background: transparent;
+                }}
+                a {{
+                    color: {accent};
+                    text-decoration: none;
+                }}
+            """
+            ilbl.setTextFormat(Qt.RichText)
+            ilbl.setOpenExternalLinks(True)
+            ilbl.setTextInteractionFlags(Qt.TextBrowserInteraction)
+            ilbl.setStyleSheet(sheet)
+            setCustomStyleSheet(ilbl, sheet, sheet)
+            ilbl.setText(
+                f'<span style="font-size:{HELP_BODY_PX}px; color:{dim};">'
+                f"{intro}</span>"
+            )
+        else:
+            ilbl.setText(intro)
+            style_help_label(ilbl, HELP_BODY_PX, t["text_dim"])
         body_lay.addWidget(ilbl)
 
     if repo_url:

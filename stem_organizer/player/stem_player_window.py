@@ -548,7 +548,7 @@ def _sm_button_style(*, active: bool, danger: bool = False) -> str:
     """Plain S/M chrome — Fluent ToggleButton paints a glitched indicator at 28px."""
     if active:
         bg = theme.COLORS["danger"] if danger else theme.COLORS["accent"]
-        fg = "#ffffff"
+        fg = theme.COLORS["log_fg"]
         hover = bg
     else:
         bg = theme.CONTROL_BG
