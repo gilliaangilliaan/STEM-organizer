@@ -1049,12 +1049,8 @@ class DatasetOverviewTab(QWidget):
             d = self._settings.data
             if d.get("ds_inst_dir"):
                 self.inst_row.set_text(d["ds_inst_dir"])
-            elif d.get("gg_genre_input_dir"):
-                self.inst_row.set_text(d["gg_genre_input_dir"])
             if d.get("ds_vocal_dir"):
                 self.vocal_row.set_text(d["ds_vocal_dir"])
-            elif d.get("gg_gender_input_dir"):
-                self.vocal_row.set_text(d["gg_gender_input_dir"])
             if d.get("ds_pairs_dir"):
                 self.pairs_row.set_text(d["ds_pairs_dir"])
             if d.get("ds_samples_dir"):
@@ -1062,8 +1058,35 @@ class DatasetOverviewTab(QWidget):
             self.include_subfolders.setChecked(
                 bool(d.get("ds_include_subfolders", True))
             )
+            # Cross-tab takeovers (Genre / Gender / Align / Rename).
+            self._apply_cross_tab_paths(d)
         finally:
             self._loading = False
+
+    def on_tab_shown(self) -> None:
+        """Pull Genre / Gender / Align With-original / Rename into Charts paths."""
+        self._loading = True
+        try:
+            self._apply_cross_tab_paths(self._settings.data)
+        finally:
+            self._loading = False
+        self._flush_settings()
+
+    def _apply_cross_tab_paths(self, d: dict | None = None) -> None:
+        """Instrumental←Genre, Vocal←Gender, Pairs←Align With original, Samples←Rename."""
+        d = d if d is not None else self._settings.data
+        genre = (d.get("gg_genre_input_dir") or "").strip()
+        gender = (d.get("gg_gender_input_dir") or "").strip()
+        with_original = (d.get("align_with_original_dir") or "").strip()
+        rename = (d.get("rename_folder") or "").strip()
+        if genre:
+            self.inst_row.set_text(genre)
+        if gender:
+            self.vocal_row.set_text(gender)
+        if with_original:
+            self.pairs_row.set_text(with_original)
+        if rename:
+            self.samples_row.set_text(rename)
 
     def _bind_autosave(self) -> None:
         self._autosave_timer = QTimer(self)
