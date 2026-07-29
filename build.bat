@@ -156,10 +156,6 @@ echo ========================================
 echo   Exe:  dist\STEM-organizer\STEM-organizer.exe
 echo   Next: dist\STEM-organizer\install-deps.bat  ^(run this now^)
 echo         then start STEM-organizer.exe
-echo   Also: dist\STEM-organizer\genre_gender_tagger\
-echo         dist\STEM-organizer\instrument_tagger\
-echo         dist\STEM-organizer\panns_tagger\
-echo         dist\STEM-organizer\key_tagger\
 echo.
 pause
 exit /b 0
