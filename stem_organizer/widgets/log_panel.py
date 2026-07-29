@@ -205,6 +205,8 @@ GG_CONF_LEGACY_RE = re.compile(
     r"^(\s*)\(confidence\s+([^)]+)\)\s*$",
     re.IGNORECASE,
 )
+# Distribute originals: green "matched:" · rest (folder · %) in default color
+MATCHED_LINE_RE = re.compile(r"^(\s*)(matched:)\s*(.*)$", re.IGNORECASE)
 
 
 class ChipRenderer:
@@ -618,6 +620,9 @@ class LogPanel(QWidget):
             self._apply_line_spacing(cursor)
             self._insert(cursor, f"  {conf}", "log_pct")
             self._insert(cursor, "\n")
+        # Gender-style gap below chips before the next === file header
+        self._apply_line_spacing(cursor)
+        self._insert(cursor, "\n")
 
     def _gg_flush_pending(self, cursor: QTextCursor) -> None:
         genre = self._gg_pending_genre
@@ -767,6 +772,10 @@ class LogPanel(QWidget):
             return "deleted"
         if line.startswith(("  Skipped", "  Not processed")):
             return "warn"
+        if line.startswith("  Lossless:"):
+            return "ok"
+        if line.startswith("  Lossy:"):
+            return "err"
         # === folder titles / summaries — dim gray (CTk info = fg_dim)
         if line.startswith("===") or line.strip().startswith("==="):
             return "info"
@@ -847,6 +856,21 @@ class LogPanel(QWidget):
             self._gg_flush_pending(cursor)
             self._apply_line_spacing(cursor)
             self._insert(cursor, line.strip() + "\n", "info")
+            self.view.setTextCursor(cursor)
+            self.view.ensureCursorVisible()
+            return
+
+        # Distribute: matched: (green) + folder · % (default)
+        matched = MATCHED_LINE_RE.match(line)
+        if matched:
+            self._gg_flush_pending(cursor)
+            self._apply_line_spacing(cursor)
+            indent, label, rest = matched.group(1), matched.group(2), matched.group(3)
+            self._insert(cursor, indent or "  ")
+            self._insert(cursor, label, "ok")
+            if rest:
+                self._insert(cursor, f" {rest}", "info")
+            self._insert(cursor, "\n")
             self.view.setTextCursor(cursor)
             self.view.ensureCursorVisible()
             return

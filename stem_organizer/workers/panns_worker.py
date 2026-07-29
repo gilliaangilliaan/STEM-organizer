@@ -87,8 +87,14 @@ class PannsWorker(QThread):
         self._stop_requested = False
         self._final_status = "Done"
         self._progress_t0 = 0.0
+        self._blank_before_processed = False
 
-    def stop(self) -> None:
+    def _emit_processed(self, n: int, total: int) -> None:
+        """Blank line once before the first Processed: n/total live line."""
+        if not self._blank_before_processed:
+            self.log_line.emit("", "info")
+            self._blank_before_processed = True
+        self.processed.emit(n, total)
         self._stop_requested = True
         if self._proc is not None:
             try:
@@ -218,7 +224,7 @@ class PannsWorker(QThread):
                 total = int(m_proc.group("total"))
             except ValueError:
                 return
-            self.processed.emit(n, total)
+            self._emit_processed(n, total)
             return
 
         m = _PROGRESS_RE.match(bare)
@@ -238,7 +244,7 @@ class PannsWorker(QThread):
             self.progress.emit(pct, eta, n, total, "panns")
             # Live LOG line comes from __gg_processed__ in batch mode.
             if not self._batch_mode:
-                self.processed.emit(n, total)
+                self._emit_processed(n, total)
             return
 
         if _FILE_STATUS_RE.match(bare):
@@ -255,11 +261,11 @@ class PannsWorker(QThread):
             self._emit_result(payload)
             return
 
-        # Status from stderr-merged stream
+        # Status from stderr-merged stream (keep leading indent from tagger).
         if bare == "DONE":
             self.log_line.emit("DONE", "ok")
             return
-        self.log_line.emit(bare, gg_log_tag(bare))
+        self.log_line.emit(line, gg_log_tag(bare))
 
     def _file_header(self, name: str, payload: dict) -> str:
         try:
@@ -298,6 +304,7 @@ class PannsWorker(QThread):
         if payload.get("skipped"):
             self.log_line.emit(header, "info")
             self.log_line.emit("  [skip] already tagged", "warn")
+            self.log_line.emit("", "info")
             return
 
         label = str(payload.get("label", "?"))
@@ -330,3 +337,4 @@ class PannsWorker(QThread):
                         f"    {t0:5.1f}–{t1:5.1f}s  {sl} {ss * 100:.0f}%",
                         "info",
                     )
+        self.log_line.emit("", "info")

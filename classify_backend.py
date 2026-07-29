@@ -2498,7 +2498,7 @@ class SdrWorker(threading.Thread):
             self._sdr_root = root.resolve()
             scan_mode = p['scan_mode']
 
-            self.log('  Starting SI-SDR determination...')
+            self.log('Starting SI-SDR determination...')
             t0 = time.monotonic()
             if 'sdr_categories' in p and 'sdr_layout' in p:
                 categories = tuple(p['sdr_categories'])

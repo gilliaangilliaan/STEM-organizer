@@ -130,7 +130,7 @@ class CorruptionTab(QWidget):
         self.include_subfolders.setChecked(True)
         self.include_subfolders.setToolTip(TIPS["include_subfolders"])
         paths.body.layout().addWidget(self.include_subfolders)
-        self.skip_existing = CheckBox("Skip if already tagged")
+        self.skip_existing = CheckBox("Skip files already tagged CORRUPTION=ok")
         self.skip_existing.setChecked(True)
         self.skip_existing.setToolTip(TIPS["skip_existing"])
         paths.body.layout().addWidget(self.skip_existing)
@@ -193,7 +193,7 @@ class CorruptionTab(QWidget):
         for paragraph in (
             "Fast - checks MP3 structure. Deep - Fully decodes the audio file.",
             "Results show as OK, WARNING, or FAILED.",
-            "Fix rebuilds WARNING and FAILED files and replaces the original.",
+            "Fix rebuilds WARNING and FAILED files and replaces the original. "
             "Unfixable files go to {input}_CORRUPT.",
         ):
             lbl = BodyLabel(paragraph)

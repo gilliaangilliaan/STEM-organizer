@@ -274,7 +274,6 @@ def _log_genre_result(
 ):
     """LOG block: === [i/n] file ===, GENRE / STYLE, then dim pct."""
     name = Path(path).name
-    print(flush=True)
     if index is not None and total is not None and total > 0:
         print(f"=== [{int(index)}/{int(total)}] {name} ===", flush=True)
     else:
@@ -2192,8 +2191,8 @@ if CONTENT_TYPE == "acapella":
 
     if not files:
 
+        _log_intro("No untagged audio files left.")
         _log_intro(
-            "No untagged audio files left. "
             "Turn off Skip if already tagged to re-tag, or pick another folder."
         )
         sys.exit(0)
@@ -3053,8 +3052,8 @@ _log_intro(f"To process: {len(files)}")
 print()
 
 if not files:
+    _log_intro("No untagged audio files left.")
     _log_intro(
-        "No untagged audio files left. "
         "Turn off Skip if already tagged to re-tag, or pick another folder."
     )
     sys.exit(0)

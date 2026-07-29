@@ -1050,6 +1050,7 @@ class PreviewPanel(QWidget):
         self._append_line(f"{LOG_INDENT}Starting Auto-detect (PaSST OpenMIC)…", "info")
         self._append_line(f"{LOG_INDENT}Selected {total:,} file(s).", "info")
         self._append_line(f"{LOG_INDENT}Checking cache / starting tagger…", "info")
+        self._append_line("", "info")
 
     def append_analyze_status(self, message: str) -> None:
         text = message or ""

@@ -532,7 +532,7 @@ class TrackRenamerApp(QWidget):
             self._set_busy(False, "Idle")
             return
         if not tracks:
-            show_info(self, "Rename Files", "No audio or MIDI files found.")
+            show_info(self, "Rename Files", "All files are moved from this folder.")
             self.preview_panel.set_rows([])
             self._set_busy(False, "Idle")
             return

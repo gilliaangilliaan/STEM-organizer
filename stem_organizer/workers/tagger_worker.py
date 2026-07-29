@@ -173,6 +173,8 @@ class TaggerWorker(QThread):
         self._proc: Optional[subprocess.Popen] = None
         self._stop_requested = False
         self._final_status = "Done"
+        # HF model load often emits blank stdout lines; keep other blanks intact.
+        self._suppress_model_load_blanks = False
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -340,8 +342,14 @@ class TaggerWorker(QThread):
             self.progress.emit(pct, eta, n, total, phase)
             return
         if not bare:
+            if self._suppress_model_load_blanks:
+                return
             self.log_line.emit("", "info")
             return
+        if bare.endswith("Loading model..."):
+            self._suppress_model_load_blanks = True
+        elif bare.endswith("Model loaded"):
+            self._suppress_model_load_blanks = False
         parsed = _TQDM_PCT_RE.search(line)
         if parsed:
             try:

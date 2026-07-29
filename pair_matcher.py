@@ -278,8 +278,13 @@ def _report_progress(
 
 
 def _report_log(on_log: LogFn | None, message: str, tag: str = 'info') -> None:
-    if on_log is not None:
-        on_log(message, tag)
+    if on_log is None:
+        return
+    msg = message
+    # Match Classify / Genre indent; keep === headers and already-indented lines.
+    if msg and not msg[0].isspace() and not msg.startswith('==='):
+        msg = LOG_INDENT + msg
+    on_log(msg, tag)
 
 
 def _progress_header(name: str, index: int | None = None, total: int | None = None) -> str:
@@ -541,6 +546,7 @@ def find_pairs(
 
     if move_to is not None and pairs:
         _report_log(on_log, f'Moving {len(pairs):,} pair(s) to {move_to}…', 'info')
+        _report_log(on_log, '', 'info')
         moved = 0
         pair_total = len(pairs)
         for idx, match in enumerate(pairs, start=1):
@@ -728,6 +734,7 @@ def organize_matched_folder(
     )
     done += 1
     _report_log(on_log, f'Created {len(groups):,} group(s)', 'info')
+    _report_log(on_log, '', 'info')
     _report_progress(
         on_progress, done, total, 'Grouping tracks',
         step=done, force=True,

@@ -236,6 +236,7 @@ class KeyWorker(QThread):
                     bare if bare.startswith(" ") else f"  {bare}",
                     "gg_result",
                 )
+                self.log_line.emit("", "info")
                 return
 
         if "[skip existing]" in bare.lower() or bare.lower().startswith("[skip"):
@@ -252,7 +253,8 @@ class KeyWorker(QThread):
             )
             return
 
-        self.log_line.emit(bare, gg_log_tag(bare))
+        # Keep leading indent from tagger (Loading libraries / Scanning / …).
+        self.log_line.emit(line, gg_log_tag(bare))
 
 
 def _join_pp(root: Path, existing: str) -> str:

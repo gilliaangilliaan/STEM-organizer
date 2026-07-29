@@ -384,6 +384,9 @@ def enrich_tracks(
                 ):
                     continue
                 status(stripped.lstrip())
+                # Blank before === file headers (Rename analyze PREVIEW).
+                if stripped.lstrip().lower().startswith("backend:"):
+                    status("")
                 continue
 
             done += 1

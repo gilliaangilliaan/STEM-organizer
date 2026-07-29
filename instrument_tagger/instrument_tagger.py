@@ -476,6 +476,7 @@ def main(argv: list[str] | None = None) -> int:
     _status(f"Instrument tagger (PaSST OpenMIC) — {len(files)} file(s)")
     backend = load_backend(status=_status)
     _status(f"  backend: {backend.name}")
+    _status("")
 
     errors = 0
     for i, path in enumerate(files, 1):

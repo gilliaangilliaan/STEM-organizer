@@ -142,6 +142,7 @@ def _log_file_result(
     log(file_progress_header(path.name, index, total), "info")
     log(f"  {value}", "info")
     if not verdict:
+        log("", "info")
         return
     label = verdict.strip().lower()
     note_text = (note or "").strip()
@@ -149,6 +150,7 @@ def _log_file_result(
         log(f"  {label}  {note_text}", "info")
     else:
         log(f"  {label}", "info")
+    log("", "info")
 
 
 def _log_compression_summary(

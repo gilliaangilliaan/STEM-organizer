@@ -926,7 +926,7 @@ def main(argv: list[str] | None = None) -> int:
     device = None if args.device == "auto" else args.device
     hop = args.hop_sec if args.hop_sec > 0 else None
 
-    _status(f"PANNs tagger (Cnn14 / AudioSet) — {len(files)} file(s)")
+    _status(f"  PANNs tagger (Cnn14 / AudioSet) — {len(files)} file(s)")
     _status(f"  focus: {', '.join(FOCUS_LABELS)}")
     backend = load_backend(
         checkpoint=args.checkpoint,

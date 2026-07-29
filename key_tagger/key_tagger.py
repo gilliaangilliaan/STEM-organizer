@@ -282,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
 
     device = resolve_device(args.device)
     print(
-        f"Key Detect · {len(paths):,} file(s) · device={device} · mode={args.mode}",
+        f"  Key Detect · {len(paths):,} file(s) · device={device} · mode={args.mode}",
         flush=True,
     )
     if args.mode == "batch":
@@ -290,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
             f"  CQT workers: {default_cqt_workers()} (parallel preprocess)",
             flush=True,
         )
-    print(f"Model: {ckpt.name}", flush=True)
+    print(f"  Model: {ckpt.name}", flush=True)
     print("  Loading KeyNet weights…", flush=True)
     print("", flush=True)
 

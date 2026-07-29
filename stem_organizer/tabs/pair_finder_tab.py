@@ -787,27 +787,6 @@ class PairFinderTab(QWidget):
             )
             threshold = strictness_to_threshold(strictness)
             fallback_note = "filename only" if use_filename else "tags only"
-            if result.pairs:
-                show = min(25, len(result.pairs))
-                for match in result.pairs[:show]:
-                    on_log(
-                        f"✓ {match.reference.display_name}  ↔  {match.partner.path.name}  ({match.score:.0%})",
-                        "ok",
-                    )
-                if len(result.pairs) > show:
-                    on_log(f"… and {len(result.pairs) - show:,} more pair(s)", "info")
-            if result.unmatched_reference:
-                on_log(f"Unmatched {ref_label}: {len(result.unmatched_reference)}", "warn")
-                for track in result.unmatched_reference[:20]:
-                    on_log(f"  · {track.path.name}", "warn")
-                if len(result.unmatched_reference) > 20:
-                    on_log(f"  … and {len(result.unmatched_reference) - 20} more", "warn")
-            if result.unmatched_partner:
-                on_log(f"Unmatched {partner_label}: {len(result.unmatched_partner)}", "warn")
-                for track in result.unmatched_partner[:20]:
-                    on_log(f"  · {track.path.name}", "warn")
-                if len(result.unmatched_partner) > 20:
-                    on_log(f"  … and {len(result.unmatched_partner) - 20} more", "warn")
             self._log_feature_summary(
                 on_log,
                 "Find pairs",
@@ -957,7 +936,7 @@ class PairFinderTab(QWidget):
                 elapsed=time.monotonic() - t0,
                 lines=[
                 (f"With original: {moved_with:,}", "ok"),
-                (f"Without original: {moved_without:,}", "info"),
+                (f"Without original: {moved_without:,}", "err"),
                 (f"Skipped: {skipped:,}", "warn" if skipped else "info"),
             ])
             self._worker.set_final_status(f"Done · {moved_with + moved_without:,} sorted")

@@ -343,11 +343,10 @@ def distribute_originals(
                 _report_log(on_log, '  no folder match', 'err')
         else:
             candidates.append((src, match.folder, match.score))
-            _report_log(on_log, '  matched', 'ok')
             _report_log(
                 on_log,
                 f'  matched: {match.folder.name} · {match.score:.0%}',
-                'detail',
+                'info',
             )
         _report_progress(
             on_progress, idx + 1, total,
@@ -390,7 +389,6 @@ def distribute_originals(
             dest_name = f'{src.stem} {ORIGINAL_SUFFIX}{src.suffix}'
         dest = dest_folder / dest_name
         plan_total = max(1, len(move_plan))
-        _report_log(on_log, _progress_header(src.name, idx + 1, plan_total), 'info')
         if dest.exists():
             skipped += 1
             _report_log(
@@ -401,16 +399,11 @@ def distribute_originals(
         else:
             shutil.move(str(src), str(dest))
             moved += 1
-            _report_log(
-                on_log,
-                f'  → {dest_folder.name}/ ({score:.0%})',
-                'ok',
-            )
         _report_progress(
             on_progress, idx + 1, plan_total,
-            f'Moving originals ({idx + 1:,}/{len(move_plan):,})',
+            f'Moving originals ({idx + 1:,}/{plan_total:,})',
             step=idx + 1,
-            force=idx + 1 == len(move_plan),
+            force=idx + 1 == plan_total,
         )
 
     sorted_with = sorted_without = 0
@@ -469,7 +462,7 @@ def sort_folders_by_original(
             _report_log(on_log, f'  [skip] exists in {label}', 'warn')
         else:
             shutil.move(str(folder), str(dest))
-            tag = 'ok' if song.original is not None else 'info'
+            tag = 'ok' if song.original is not None else 'err'
             _report_log(on_log, f'  → {label}/', tag)
 
         _report_progress(
