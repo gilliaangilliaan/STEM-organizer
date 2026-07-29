@@ -78,6 +78,7 @@ LOG_STEM_COLORS = {
 LOG_GG_COLORS = {
     "female": "#ec4899",
     "male":   "#60A5FA",
+    # Dry fill stays log_fg (soft) — exception to pure-white badge text rule.
     "dry":    theme.COLORS["log_fg"],
     "wet":    "#262833",
     # Overview Compression donut — same fills as CHART_COMPRESSION_COLORS.
@@ -293,7 +294,10 @@ class ChipRenderer:
     def chip_pixmap(self, label: str) -> QPixmap:
         """Paint a chip (min width = shared stem width; longer labels grow)."""
         key = label.strip().lower()
-        cached = self._chip_pix_cache.get(key)
+        bg = self.chip_bg(key)
+        fg = self.chip_fg(key)
+        cache_key = f"chip:v2:{key}:{bg}:{fg}"
+        cached = self._chip_pix_cache.get(cache_key)
         if cached is not None:
             return cached
         fm = QFontMetrics(self.chip_font)
@@ -301,16 +305,16 @@ class ChipRenderer:
         w = max(self.chip_width_px, fm.horizontalAdvance(key) + 12)
         h = self.chip_height_px
         img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
-        img.fill(QColor(self.chip_bg(key)))
+        img.fill(QColor(bg))
         painter = QPainter(img)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
         painter.setFont(self.chip_font)
-        painter.setPen(QColor(self.chip_fg(key)))
+        painter.setPen(QColor(fg))
         paint_text = _KEY_CHIP_DISPLAY.get(key, key)
         painter.drawText(img.rect(), int(Qt.AlignCenter), paint_text)
         painter.end()
         pix = QPixmap.fromImage(img)
-        self._chip_pix_cache[key] = pix
+        self._chip_pix_cache[cache_key] = pix
         return pix
 
     def insert_chip(self, cursor: QTextCursor, label: str) -> None:
