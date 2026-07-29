@@ -128,7 +128,7 @@ class CompressionTab(QWidget):
         note_lay = note.body.layout()
         note_lay.setSpacing(10)
         for paragraph in (
-            "Lossless contains (WAV/FLAC/AIFF) are scored with FLAC Detective’s "
+            "Lossless containers (WAV/FLAC/AIFF) are scored with FLAC Detective’s "
             "11-rule spectral analysis.",
             "AUTHENTIC → lossless.",
             "WARNING / SUSPICIOUS / FAKE_CERTAIN → lossy.",
@@ -286,7 +286,7 @@ class CompressionTab(QWidget):
             ),
             sections=[
                 ("Path", [
-                    "One input folder. Include subfolders when nested libraries should be scanned. "
+                    "One input folder. Include subfolders when nested libraries should be scanned.",
                     "_backup_before_align folders are skipped.",
                 ]),
                 ("Tags", [
