@@ -100,6 +100,20 @@ def _status(msg):
     print(LOG_INDENT + s, flush=True)
 
 
+def _gender_model_status(msg) -> None:
+    """Drop routine model-path / EP chatter from Gender LOG (keep downloads)."""
+    low = str(msg or "").strip().lower()
+    if low.startswith("using bundled"):
+        return
+    if low.startswith("onnx runtime providers:"):
+        return
+    if "for discogs-effnet" in low:
+        return
+    if low.startswith("directml unavailable"):
+        return
+    _status(msg)
+
+
 def _log_intro(msg: str) -> None:
     """Startup/config line (Classify indent). Prefer over bare print()."""
     print(f"{LOG_INDENT}{msg}", flush=True)
@@ -2164,10 +2178,7 @@ if CONTENT_TYPE == "acapella":
         _log_intro(f"Audio workers: {AUDIO_WORKERS}")
         print()
 
-    _log_intro("Loading voice-gender models...")
-    gender_backend = load_gender_models(status=_status)
-    _log_intro(f"Models loaded ({gender_backend.name})")
-    print()
+    gender_backend = load_gender_models(status=_gender_model_status)
 
     _log_intro("Loading vocal reverb classifier...")
     reverb_dir = GENDER_MODEL_DIR

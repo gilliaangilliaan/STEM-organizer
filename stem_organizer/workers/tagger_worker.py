@@ -51,6 +51,16 @@ _TAGGER_DECODE_NOISE_RE = re.compile(
     r"|^\[.*libmpg123.*\]\s*error:",
     re.IGNORECASE,
 )
+# Gender model bootstrap chatter (paths / ORT providers) — keep downloads.
+_GG_GENDER_MODEL_NOISE_RE = re.compile(
+    r"^Loading voice-gender models"
+    r"|^Models loaded \("
+    r"|^\s*using bundled\b"
+    r"|^\s*ONNX Runtime providers:"
+    r"|^\s*using \S+ for discogs-effnet"
+    r"|^\s*DirectML unavailable",
+    re.IGNORECASE,
+)
 
 
 def gg_log_tag(line: str) -> str:
@@ -293,6 +303,8 @@ class TaggerWorker(QThread):
         if self._stop_requested:
             return
         if _TAGGER_DECODE_NOISE_RE.search(bare):
+            return
+        if _GG_GENDER_MODEL_NOISE_RE.search(bare):
             return
         if bare.startswith("__gg_processed__\t") or bare.startswith("__gg_processed__ "):
             parts = bare.split("\t") if "\t" in bare else bare.split()
