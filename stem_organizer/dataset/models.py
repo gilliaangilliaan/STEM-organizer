@@ -56,7 +56,7 @@ MAEST_GENRES = (
 # Fixed colors for MAEST genres (Genre + Style charts + export).
 # Saturated for dark UI — bumped from bright-bg palette.
 MAEST_GENRE_COLORS: dict[str, str] = {
-    "Blues": "#2D53D3",
+    "Blues": "#094BA9",
     "Brass & Military": "#4F6224",
     "Children's": "#FFD415",
     "Classical": "#A8A8B0",
