@@ -168,7 +168,7 @@ class CorruptionTab(QWidget):
         act_lay.setContentsMargins(am.left(), 14, am.right(), am.bottom())
         act_lay.setSpacing(12)
         self.do_fix = CheckBox("")
-        self.do_fix.setChecked(False)
+        self.do_fix.setChecked(True)
         self._fix_option_row = option_with_hint(
             self.do_fix,
             "Fix flagged files (re-encode → replace original)",
@@ -424,7 +424,7 @@ class CorruptionTab(QWidget):
                 bool(d.get("cor_include_subfolders", True))
             )
             self.skip_existing.setChecked(bool(d.get("cor_skip_existing", True)))
-            self.do_fix.setChecked(bool(d.get("cor_fix", False)))
+            self.do_fix.setChecked(bool(d.get("cor_fix", True)))
             self.do_quarantine.setChecked(bool(d.get("cor_quarantine", False)))
             mode = str(d.get("cor_mode") or "both")
             if mode in self.mode_radios:
