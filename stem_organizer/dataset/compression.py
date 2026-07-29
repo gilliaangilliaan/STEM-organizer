@@ -131,9 +131,14 @@ def _log_file_result(
     value: str,
     verdict: Optional[str] = None,
     note: Optional[str] = None,
+    *,
+    index: int | None = None,
+    total: int | None = None,
 ) -> None:
-    """Gender-style LOG: === file === + lossless/lossy + verdict (+ note)."""
-    log(f"=== {path.name} ===", "info")
+    """Gender-style LOG: === [i/n] file === + lossless/lossy + verdict (+ note)."""
+    from ..run_summary import file_progress_header
+
+    log(file_progress_header(path.name, index, total), "info")
     log(f"  {value}", "info")
     if not verdict:
         return
@@ -256,7 +261,7 @@ def run_compression_detect(
             if write_compression_tag(path, value):
                 written += 1
                 lossy_n += 1
-                _log_file_result(log, path, value)
+                _log_file_result(log, path, value, index=i, total=total)
             else:
                 record_error(path)
                 log(f"Write failed · {path.name}", "err")
@@ -336,7 +341,10 @@ def run_compression_detect(
                         lossless_n += 1
                     else:
                         lossy_n += 1
-                    _log_file_result(log, path, value, verdict, note)
+                    _log_file_result(
+                        log, path, value, verdict, note,
+                        index=done_spectral, total=spectral_total,
+                    )
                 else:
                     record_error(path)
                     log(f"Write failed · {path.name}", "err")

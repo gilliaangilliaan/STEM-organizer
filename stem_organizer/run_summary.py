@@ -17,6 +17,23 @@ def fmt_elapsed(seconds: float) -> str:
     return f"{m}:{s:02d}"
 
 
+def file_progress_header(
+    name: str,
+    index: int | None = None,
+    total: int | None = None,
+) -> str:
+    """Classify-style per-item LOG header: ``=== [i/n] name ===``."""
+    label = (name or "").strip() or "?"
+    try:
+        i = int(index) if index is not None else 0
+        n = int(total) if total is not None else 0
+    except (TypeError, ValueError):
+        i = n = 0
+    if i > 0 and n > 0:
+        return f"=== [{i}/{n}] {label} ==="
+    return f"=== {label} ==="
+
+
 def emit_run_summary(
     log: LogFn,
     feature: str,

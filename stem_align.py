@@ -15,6 +15,7 @@ from pair_matcher import (
     LOG_INDENT,
     LogFn,
     ProgressFn,
+    _progress_header,
     _report_log,
     _report_progress,
     normalize_tag,
@@ -328,20 +329,21 @@ def distribute_originals(
     for idx, src in enumerate(originals):
         best = _best_folder_match(src.stem, folders)
         match = match_original_to_folder(src.stem, folders, threshold=match_threshold)
+        _report_log(on_log, _progress_header(src.name, idx + 1, total), 'info')
         if match is None:
             unmatched += 1
             if best is not None and folders:
-                _report_log(on_log, f'✗ No folder match for {src.name}', 'err')
+                _report_log(on_log, '  no folder match', 'err')
                 _report_log(
                     on_log,
                     f'  closest: {best.folder.name} · {best.score:.0%}',
                     'detail',
                 )
             else:
-                _report_log(on_log, f'✗ No folder match for {src.name}', 'err')
+                _report_log(on_log, '  no folder match', 'err')
         else:
             candidates.append((src, match.folder, match.score))
-            _report_log(on_log, f'✓ Folder match for {src.name}', 'ok')
+            _report_log(on_log, '  matched', 'ok')
             _report_log(
                 on_log,
                 f'  matched: {match.folder.name} · {match.score:.0%}',
@@ -387,19 +389,25 @@ def distribute_originals(
         if ORIGINAL_SUFFIX.lower() not in src.stem.lower():
             dest_name = f'{src.stem} {ORIGINAL_SUFFIX}{src.suffix}'
         dest = dest_folder / dest_name
+        plan_total = max(1, len(move_plan))
+        _report_log(on_log, _progress_header(src.name, idx + 1, plan_total), 'info')
         if dest.exists():
             skipped += 1
-            _report_log(on_log, f'· Skipped (exists) {dest_folder.name}/{dest_name}', 'warn')
+            _report_log(
+                on_log,
+                f'  skipped (exists) {dest_folder.name}/{dest_name}',
+                'warn',
+            )
         else:
             shutil.move(str(src), str(dest))
             moved += 1
             _report_log(
                 on_log,
-                f'✓ {src.name}  →  {dest_folder.name}/ ({score:.0%})',
+                f'  → {dest_folder.name}/ ({score:.0%})',
                 'ok',
             )
         _report_progress(
-            on_progress, idx + 1, max(1, len(move_plan)),
+            on_progress, idx + 1, plan_total,
             f'Moving originals ({idx + 1:,}/{len(move_plan):,})',
             step=idx + 1,
             force=idx + 1 == len(move_plan),
@@ -454,14 +462,15 @@ def sort_folders_by_original(
             label = without_dir.name
             moved_without += 1
 
+        _report_log(on_log, _progress_header(folder.name, idx + 1, total), 'info')
         dest = dest_parent / folder.name
         if dest.exists():
             skipped += 1
-            _report_log(on_log, f'· Skipped (exists) {folder.name} in {label}', 'warn')
+            _report_log(on_log, f'  skipped (exists) in {label}', 'warn')
         else:
             shutil.move(str(folder), str(dest))
             tag = 'ok' if song.original is not None else 'info'
-            _report_log(on_log, f'✓ {folder.name}  →  {label}/', tag)
+            _report_log(on_log, f'  → {label}/', tag)
 
         _report_progress(
             on_progress, idx + 1, total,
@@ -995,6 +1004,8 @@ def align_song_folder(
     analysis_sec: float = DEFAULT_ANALYSIS_SEC,
     backup: bool = True,
     on_log: LogFn | None = None,
+    index: int | None = None,
+    total: int | None = None,
 ) -> AlignResult | None:
     if not folder.instrumental or not folder.acapella or not folder.original:
         missing = []
@@ -1004,10 +1015,11 @@ def align_song_folder(
             missing.append('acapella')
         if not folder.original:
             missing.append('original')
-        _report_log(on_log, f'· {folder.name}: missing {", ".join(missing)}', 'warn')
+        _report_log(on_log, _progress_header(folder.name, index, total), 'info')
+        _report_log(on_log, f'  missing {", ".join(missing)}', 'warn')
         return None
 
-    _report_log(on_log, f'Analyzing {folder.name}…', 'info')
+    _report_log(on_log, _progress_header(folder.name, index, total), 'info')
 
     orig_clip = _load_mono(folder.original, sr, duration=analysis_sec + MAX_SHIFT_SEC)
     inst_clip = _load_mono(folder.instrumental, sr, duration=analysis_sec + MAX_SHIFT_SEC)
@@ -1050,7 +1062,7 @@ def align_song_folder(
 
     _report_log(
         on_log,
-        f'✓ {folder.name}: inst +{pad_inst:.3f}s / −{trim_inst:.3f}s · '
+        f'  ok · inst +{pad_inst:.3f}s / −{trim_inst:.3f}s · '
         f'acap +{pad_acap:.3f}s / −{trim_acap:.3f}s · vocal {vocal_orig:.2f}s · {out_channels}ch',
         'ok',
     )
@@ -1098,7 +1110,12 @@ def align_all_songs(
         if song.instrumental and song.acapella and song.original:
             if skip_existing and has_align_backup(song.path):
                 skipped += 1
-                _report_log(on_log, f'> Skipped (already aligned) {song.name}', 'warn')
+                _report_log(
+                    on_log,
+                    _progress_header(song.name, idx + 1, total),
+                    'info',
+                )
+                _report_log(on_log, '  skipped (already aligned)', 'warn')
             else:
                 try:
                     result = align_song_folder(
@@ -1107,9 +1124,11 @@ def align_all_songs(
                         analysis_sec=analysis_sec,
                         backup=backup,
                         on_log=on_log,
+                        index=idx + 1,
+                        total=total,
                     )
                 except Exception as exc:
-                    _report_log(on_log, f'✗ {song.name}: align failed — {exc}', 'err')
+                    _report_log(on_log, f'  align failed — {exc}', 'err')
                     result = None
                 if result is not None:
                     results.append(result)

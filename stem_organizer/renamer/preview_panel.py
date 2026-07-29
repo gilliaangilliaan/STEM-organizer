@@ -1060,7 +1060,12 @@ class PreviewPanel(QWidget):
     def append_analyze_log(self, *, filename: str, action: str, category: str = "",
                            score: float = 0.0, label: str = "", total: int = 0,
                            done: int = 0, reason: str = "") -> None:
-        # Build one chip row: "  <chip>  <pct>  <filename>[  (reason · label)]"
+        from ..run_summary import file_progress_header
+
+        # Header matches Classify / Genre: === [i/n] name ===
+        self._append_line(file_progress_header(filename, done, total), "info")
+
+        # Chip row under header (no repeated filename)
         cursor = self.analyze_log.textCursor()
         cursor.movePosition(QTextCursor.End)
         self._chips.apply_line_spacing(cursor)
@@ -1070,17 +1075,14 @@ class PreviewPanel(QWidget):
             cat = (category or "—").strip()
             self._chips.insert_category_chip(cursor, cat, self._category_color(cat))
             self._chips.insert(cursor, f"  {score * 100:>3.0f}%", "log_pct")
-            self._chips.insert(cursor, f"  {filename}", "detail")
         elif action == "error":
             self._chips.insert_chip(cursor, "skip")
             self._chips.insert(cursor, "   —   ", "log_pct")
-            self._chips.insert(cursor, f"  {filename}", "err")
             if reason:
                 self._chips.insert(cursor, f"  ({reason})", "err")
         else:
             self._chips.insert_chip(cursor, "skip")
             self._chips.insert(cursor, f"  {score * 100:>3.0f}%", "log_pct")
-            self._chips.insert(cursor, f"  {filename}", "warn")
             extra = reason or ""
             if label:
                 extra = f"{extra} · {label}" if extra else label
@@ -1119,10 +1121,19 @@ class PreviewPanel(QWidget):
 
     def _append_line(self, text: str, tag: str) -> None:
         """Append one status/summary line with Classify-LOG styling + spacing."""
+        from ..widgets.log_panel import GG_PROGRESS_HEADER_RE
+
         cursor = self.analyze_log.textCursor()
         cursor.movePosition(QTextCursor.End)
         self._chips.apply_line_spacing(cursor)
-        self._chips.insert(cursor, text + "\n", tag)
+        prog_h = GG_PROGRESS_HEADER_RE.match((text or "").strip())
+        if prog_h:
+            counter, rest = prog_h.group(1), prog_h.group(2)
+            self._chips.insert(cursor, "=== ", "info")
+            self._chips.insert(cursor, counter, "detail")  # log_fg
+            self._chips.insert(cursor, f" {rest} ===\n", "info")
+        else:
+            self._chips.insert(cursor, text + "\n", tag)
         self.analyze_log.setTextCursor(cursor)
         self.analyze_log.ensureCursorVisible()
 

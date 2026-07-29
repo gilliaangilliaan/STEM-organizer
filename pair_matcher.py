@@ -282,6 +282,22 @@ def _report_log(on_log: LogFn | None, message: str, tag: str = 'info') -> None:
         on_log(message, tag)
 
 
+def _progress_header(name: str, index: int | None = None, total: int | None = None) -> str:
+    try:
+        from stem_organizer.run_summary import file_progress_header
+        return file_progress_header(name, index, total)
+    except Exception:
+        label = (name or '').strip() or '?'
+        try:
+            i = int(index) if index is not None else 0
+            n = int(total) if total is not None else 0
+        except (TypeError, ValueError):
+            i = n = 0
+        if i > 0 and n > 0:
+            return f'=== [{i}/{n}] {label} ==='
+        return f'=== {label} ==='
+
+
 def _norm_pair(track: TrackTags, rules: IgnoreRules | None) -> tuple[str, str]:
     return (
         normalize_tag(track.artist, rules),
@@ -526,27 +542,25 @@ def find_pairs(
     if move_to is not None and pairs:
         _report_log(on_log, f'Moving {len(pairs):,} pair(s) to {move_to}…', 'info')
         moved = 0
-        for match in pairs:
+        pair_total = len(pairs)
+        for idx, match in enumerate(pairs, start=1):
+            name = match.reference.path.name
             try:
                 move_pair(match, move_to)
                 moved += 1
                 done += 1
-                if moved == 1 or moved % LOG_EVERY_MOVE == 0 or moved == len(pairs):
-                    _report_log(on_log, f'Moved {moved:,}/{len(pairs):,} pair(s)', 'info')
+                _report_log(on_log, _progress_header(name, idx, pair_total), 'info')
                 _report_progress(
                     on_progress,
                     done,
                     total,
-                    f'Moving pairs ({moved:,}/{len(pairs):,})',
+                    f'Moving pairs ({moved:,}/{pair_total:,})',
                     step=moved,
-                    force=moved == len(pairs),
+                    force=moved == pair_total,
                 )
             except OSError as exc:
-                _report_log(
-                    on_log,
-                    f'✗ Failed to move {match.reference.path.name}: {exc}',
-                    'err',
-                )
+                _report_log(on_log, _progress_header(name, idx, pair_total), 'info')
+                _report_log(on_log, f'  failed: {exc}', 'err')
 
     unmatched_reference = [
         track for idx, track in enumerate(reference_tracks) if idx not in used_reference
@@ -722,7 +736,13 @@ def organize_matched_folder(
     moved: list[tuple[Path, list[Path]]] = []
     files_moved = 0
     total_files = sum(len(group.files) for group in groups)
-    for group in groups:
+    group_total = len(groups)
+    for g_idx, group in enumerate(groups, start=1):
+        _report_log(
+            on_log,
+            _progress_header(group.folder_name, g_idx, group_total),
+            'info',
+        )
         dest_dir = unique_destination(matched_dir / group.folder_name)
         dest_dir.mkdir(parents=True, exist_ok=False)
         new_paths: list[Path] = []
@@ -732,8 +752,6 @@ def organize_matched_folder(
             new_paths.append(target)
             files_moved += 1
             done += 1
-            if files_moved == 1 or files_moved % LOG_EVERY_MOVE == 0 or files_moved == total_files:
-                _report_log(on_log, f'Moved {files_moved:,}/{total_files:,} file(s)', 'info')
             _report_progress(
                 on_progress, done, total,
                 f'Moving files ({files_moved:,}/{total_files:,})',

@@ -469,9 +469,19 @@ def process_file(
     }
 
 
-def _log_file_result(log: LogFn, path: Path, status: str, action: str) -> None:
-    """Compression-style LOG: === file === + status + detail (log_fg)."""
-    log(f"=== {path.name} ===", "info")
+def _log_file_result(
+    log: LogFn,
+    path: Path,
+    status: str,
+    action: str,
+    *,
+    index: int | None = None,
+    total: int | None = None,
+) -> None:
+    """Compression-style LOG: === [i/n] file === + status + detail (log_fg)."""
+    from ..run_summary import file_progress_header
+
+    log(file_progress_header(path.name, index, total), "info")
     tag = "warn" if status == "skip" else ("err" if status == "fail" else "info")
     log(f"  {status}", tag)
     detail = (action or "").strip()
@@ -702,7 +712,9 @@ def run_convert_to_flac(
                     "status": "skip",
                 }
                 report_rows.append(row)
-                _log_file_result(log, src, "skip", action)
+                _log_file_result(
+                    log, src, "skip", action, index=done + 1, total=total,
+                )
                 bump_progress()
                 continue
         except Exception as exc:
@@ -718,7 +730,9 @@ def run_convert_to_flac(
                 "status": "fail",
             }
             report_rows.append(row)
-            _log_file_result(log, src, "fail", str(exc))
+            _log_file_result(
+                log, src, "fail", str(exc), index=done + 1, total=total,
+            )
             bump_progress()
             continue
 
@@ -757,7 +771,12 @@ def run_convert_to_flac(
                     if result.get("gained"):
                         gained_n += 1
                     _log_file_result(
-                        log, Path(payload["src"]), "ok", str(row.get("action") or "")
+                        log,
+                        Path(payload["src"]),
+                        "ok",
+                        str(row.get("action") or ""),
+                        index=done + 1,
+                        total=total,
                     )
                 else:
                     errors += 1
@@ -767,6 +786,8 @@ def run_convert_to_flac(
                         Path(payload["src"]),
                         "fail",
                         str(result.get("error") or row.get("action") or ""),
+                        index=done + 1,
+                        total=total,
                     )
                 bump_progress()
         else:
@@ -797,7 +818,10 @@ def run_convert_to_flac(
                             "status": "fail",
                         }
                         report_rows.append(row)
-                        _log_file_result(log, src, "fail", str(exc))
+                        _log_file_result(
+                            log, src, "fail", str(exc),
+                            index=done + 1, total=total,
+                        )
                         bump_progress()
                         continue
                     row = result["row"]
@@ -807,7 +831,8 @@ def run_convert_to_flac(
                         if result.get("gained"):
                             gained_n += 1
                         _log_file_result(
-                            log, src, "ok", str(row.get("action") or "")
+                            log, src, "ok", str(row.get("action") or ""),
+                            index=done + 1, total=total,
                         )
                     else:
                         errors += 1
@@ -817,6 +842,8 @@ def run_convert_to_flac(
                             src,
                             "fail",
                             str(result.get("error") or row.get("action") or ""),
+                            index=done + 1,
+                            total=total,
                         )
                     bump_progress()
 

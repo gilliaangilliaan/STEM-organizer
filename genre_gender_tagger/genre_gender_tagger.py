@@ -231,15 +231,18 @@ def _fmt_confidence_pct(score) -> str:
         return "0%"
 
 
-def _log_gender_result(row):
-    """Classify-style LOG: === file === + badge + dim pct (e.g. female 72%)."""
+def _log_gender_result(row, *, index: int | None = None, total: int | None = None):
+    """Classify-style LOG: === [i/n] file === + badge + dim pct (e.g. female 72%)."""
     name = Path(row.get("file") or "").name
     gender = str(row.get("gender") or "").strip().lower()
     reverb = str(row.get("reverb") or "").strip().lower()
     gconf = _fmt_confidence_pct(row.get("confidence", 0))
     rconf = _fmt_confidence_pct(row.get("reverb_confidence", 0))
     print(flush=True)
-    print(f"=== {name} ===", flush=True)
+    if index is not None and total is not None and total > 0:
+        print(f"=== [{int(index)}/{int(total)}] {name} ===", flush=True)
+    else:
+        print(f"=== {name} ===", flush=True)
     if gender in ("female", "male"):
         print(f"  {gender} {gconf}", flush=True)
     elif gender:
@@ -252,10 +255,16 @@ def _log_gender_result(row):
         print(f"  {rconf}", flush=True)
 
 
-def _log_genre_result(path, genre, style, conf):
-    """LOG block: === file ===, GENRE / STYLE, then dim pct."""
+def _log_genre_result(
+    path, genre, style, conf, *, index: int | None = None, total: int | None = None
+):
+    """LOG block: === [i/n] file ===, GENRE / STYLE, then dim pct."""
+    name = Path(path).name
     print(flush=True)
-    print(f"=== {Path(path).name} ===", flush=True)
+    if index is not None and total is not None and total > 0:
+        print(f"=== [{int(index)}/{int(total)}] {name} ===", flush=True)
+    else:
+        print(f"=== {name} ===", flush=True)
     print("GENRE:", genre, flush=True)
     print("STYLE:", style or "", flush=True)
     print(f"  {_fmt_confidence_pct(conf)}", flush=True)
@@ -2571,7 +2580,7 @@ if CONTENT_TYPE == "acapella":
             row = _merge_reverb(row, filename)
             results[index] = row
 
-            _log_gender_result(row)
+            _log_gender_result(row, index=index + 1, total=len(files))
 
             if WRITE_METADATA and row.get("gender"):
 
@@ -3177,7 +3186,9 @@ def _log_genre_from_scores(index, scores_tensor):
     parts = best_label.split("---")
     genre = parts[0]
     style = parts[1] if len(parts) > 1 else ""
-    _log_genre_result(files[index], genre, style, best_score)
+    _log_genre_result(
+        files[index], genre, style, best_score, index=index + 1, total=len(files)
+    )
 
 
 def _store_gpu_scores(scores, mapping, *, progress=None):
@@ -3383,6 +3394,8 @@ else:
             genre,
             style,
             round(best_score, 4),
+            index=index + 1,
+            total=len(files),
         )
 
 

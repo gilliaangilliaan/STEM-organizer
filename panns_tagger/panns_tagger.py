@@ -942,8 +942,6 @@ def main(argv: list[str] | None = None) -> int:
     for i, path in enumerate(files, 1):
         pct = (100.0 * (i - 1) / total) if total else 0.0
         print(f"__progress__\t{pct:.1f}\t?\t{i - 1}\t{total}\tpanns", flush=True)
-        if not batch:
-            _status(f"[{i}/{total}] {path.name}")
 
         if args.write_meta and not args.overwrite and _already_tagged(path):
             skipped += 1
@@ -955,6 +953,8 @@ def main(argv: list[str] | None = None) -> int:
                         "path": str(path.resolve()),
                         "skipped": True,
                         "reason": "already tagged",
+                        "index": i,
+                        "total": total,
                     }
                 )
             continue
@@ -969,6 +969,8 @@ def main(argv: list[str] | None = None) -> int:
                 hop_sec=hop,
                 max_seconds=args.max_seconds,
             )
+            result["index"] = i
+            result["total"] = total
             if args.write_meta:
                 try:
                     write_vocal_metadata(
@@ -994,6 +996,8 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "path": str(path.resolve()),
                     "error": str(exc),
+                    "index": i,
+                    "total": total,
                 }
             )
             if batch:

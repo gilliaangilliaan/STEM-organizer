@@ -356,10 +356,13 @@ def main(argv: list[str] | None = None) -> int:
         err: str | None,
     ) -> None:
         nonlocal written, errors
+        done_i[0] += 1
         name = Path(path_s).name
+        n = max(1, total_run)
+        header = f"=== [{done_i[0]}/{n}] {name} ==="
         if err:
             errors += 1
-            print(f"=== {name} ===", flush=True)
+            print(header, flush=True)
             print(f"  ERROR: {err}", flush=True)
             if args.json:
                 print(
@@ -385,14 +388,14 @@ def main(argv: list[str] | None = None) -> int:
                 errors += 1
 
         # Batch: progress counter only (no per-file === / badges).
-        # Per-file: live === + key badge like Genre Per-file.
+        # Per-file: live === [i/n] + key badge like Genre Per-file.
         if live_log:
-            print(f"=== {name} ===", flush=True)
+            print(header, flush=True)
             print(f"  {display} {pct:.0f}%", flush=True)
             if tag_error:
                 print(f"  Tag write failed: {tag_error}", flush=True)
         elif tag_error:
-            print(f"=== {name} ===", flush=True)
+            print(header, flush=True)
             print(f"  Tag write failed: {tag_error}", flush=True)
         if args.json:
             print(
@@ -403,11 +406,16 @@ def main(argv: list[str] | None = None) -> int:
                         "display": display,
                         "score": conf,
                         "tag_error": tag_error,
+                        "index": done_i[0],
+                        "total": n,
                     },
                     ensure_ascii=False,
                 ),
                 flush=True,
             )
+
+    done_i = [0]
+    total_run = len(to_run)
 
     if to_run:
         runner = process_batched if args.mode == "batch" else process_per_file

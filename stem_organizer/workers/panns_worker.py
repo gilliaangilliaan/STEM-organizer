@@ -232,7 +232,8 @@ class PannsWorker(QThread):
                 self.processed.emit(n, total)
             return
 
-        if self._batch_mode and _FILE_STATUS_RE.match(bare):
+        if _FILE_STATUS_RE.match(bare):
+            # Legacy "[i/n] name" status — counter is in === [i/n] name === now.
             return
 
         if bare.startswith("{"):
@@ -251,9 +252,20 @@ class PannsWorker(QThread):
             return
         self.log_line.emit(bare, gg_log_tag(bare))
 
+    def _file_header(self, name: str, payload: dict) -> str:
+        try:
+            i = int(payload.get("index") or 0)
+            n = int(payload.get("total") or 0)
+        except (TypeError, ValueError):
+            i = n = 0
+        if i > 0 and n > 0:
+            return f"=== [{i}/{n}] {name} ==="
+        return f"=== {name} ==="
+
     def _emit_result(self, payload: dict) -> None:
         path = str(payload.get("path", ""))
         name = Path(path).name if path else "(unknown)"
+        header = self._file_header(name, payload)
 
         if payload.get("error") or payload.get("tag_error"):
             # Always show failures (batch + per-file).
@@ -264,7 +276,7 @@ class PannsWorker(QThread):
                     self.log_line.emit(f"  {detail}", "log_note_err")
             if payload.get("tag_error"):
                 if not payload.get("error"):
-                    self.log_line.emit(f"=== {name} ===", "info")
+                    self.log_line.emit(header, "info")
                 self.log_line.emit(
                     f"  Tag write failed: {payload['tag_error']}", "log_note_err"
                 )
@@ -275,7 +287,7 @@ class PannsWorker(QThread):
             return
 
         if payload.get("skipped"):
-            self.log_line.emit(f"=== {name} ===", "info")
+            self.log_line.emit(header, "info")
             self.log_line.emit("  Skipped (already tagged)", "warn")
             return
 
@@ -283,7 +295,7 @@ class PannsWorker(QThread):
         score = float(payload.get("score", 0.0) or 0.0)
         vocal = payload.get("vocal") or {}
 
-        self.log_line.emit(f"=== {name} ===", "info")
+        self.log_line.emit(header, "info")
         # Winning badge only (no runner-ups).
         pct = float(vocal.get(label, score) if label in vocal else score or 0.0) * 100.0
         if label in _FOCUS:

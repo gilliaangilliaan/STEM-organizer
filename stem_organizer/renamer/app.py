@@ -674,9 +674,22 @@ class TrackRenamerApp(QWidget):
         except (TypeError, ValueError):
             second = 0.0
         err = str(row.get("error") or "")
+        try:
+            done = int(row.get("index") or 0)
+        except (TypeError, ValueError):
+            done = 0
+        try:
+            total = int(row.get("total") or 0)
+        except (TypeError, ValueError):
+            total = 0
         if err:
             self.preview_panel.append_analyze_log(
-                filename=name, action="error", reason=err[:120], label=label
+                filename=name,
+                action="error",
+                reason=err[:120],
+                label=label,
+                done=done,
+                total=total,
             )
             return
         action, category = classify_decision(label, score, second_score=second)
@@ -686,6 +699,8 @@ class TrackRenamerApp(QWidget):
             category=category,
             score=score,
             label=label,
+            done=done,
+            total=total,
         )
 
     def _on_enrich_error(self, exc: Exception) -> None:

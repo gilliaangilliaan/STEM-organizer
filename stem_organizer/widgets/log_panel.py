@@ -192,6 +192,10 @@ GG_BADGE_RE = re.compile(
     re.IGNORECASE,
 )
 GG_HEADER_RE = re.compile(r"^=== .+ ===\s*$")
+# Classify / Genre / Gender / Vocal / Key: === [1/12] name ===
+GG_PROGRESS_HEADER_RE = re.compile(
+    r"^===\s+(\[\d+/\d+\])\s+(.+?)\s+===\s*$"
+)
 GG_PCT_ONLY_RE = re.compile(r"^(\s*)(\d+%)\s*$")
 GG_RESULT_KEY_RE = re.compile(
     r"^(GENRE|STYLE|CONF|GENDER|REVERB):\s*(.*)$",
@@ -820,7 +824,20 @@ class LogPanel(QWidget):
             self.view.ensureCursorVisible()
             return
 
-        # === filename === headers
+        # === [1/12] filename ===  (counter in log_fg; rest dim like Classify)
+        prog_h = GG_PROGRESS_HEADER_RE.match(line.strip())
+        if prog_h:
+            self._gg_flush_pending(cursor)
+            self._apply_line_spacing(cursor)
+            counter, rest = prog_h.group(1), prog_h.group(2)
+            self._insert(cursor, "=== ", "info")
+            self._insert(cursor, counter, "detail")  # log_fg
+            self._insert(cursor, f" {rest} ===\n", "info")
+            self.view.setTextCursor(cursor)
+            self.view.ensureCursorVisible()
+            return
+
+        # === filename === headers (no counter)
         if GG_HEADER_RE.match(line.strip()):
             self._gg_flush_pending(cursor)
             self._apply_line_spacing(cursor)

@@ -184,21 +184,26 @@ def _emit_result(
     score: float,
     second_score: float,
     error: str = "",
+    index: int | None = None,
+    total: int | None = None,
 ) -> None:
     if on_result is None:
         return
     category = map_instrument_to_category(label) if not error else ""
-    on_result(
-        {
-            "path": path,
-            "name": path.name,
-            "label": label,
-            "score": score,
-            "second_score": second_score,
-            "category": category,
-            "error": error,
-        }
-    )
+    payload = {
+        "path": path,
+        "name": path.name,
+        "label": label,
+        "score": score,
+        "second_score": second_score,
+        "category": category,
+        "error": error,
+    }
+    if index is not None:
+        payload["index"] = int(index)
+    if total is not None:
+        payload["total"] = int(total)
+    on_result(payload)
 
 
 def enrich_tracks(
@@ -222,11 +227,11 @@ def enrich_tracks(
     pending = _paths_needing_infer(tracks)
     pending_keys = {str(p.resolve()) for p in pending}
 
-    # Emit cache hits first so the analyze log fills immediately.
-    cached_n = 0
+    # Collect cache hits first so we know grand total for === [i/n] headers.
+    cache_hits: list[tuple[Path, str, float, float]] = []
     for track in tracks:
         if cancel is not None and cancel.is_set():
-            return cached_n, None
+            return 0, None
         path = track.file_path
         if path is None or not path.is_file():
             continue
@@ -240,16 +245,26 @@ def enrich_tracks(
         if not unpacked:
             continue
         _mtime, label, score, second = unpacked
-        cached_n += 1
+        cache_hits.append((path, label, score, second))
+
+    cached_n = len(cache_hits)
+    grand_total = cached_n + len(pending)
+
+    # Emit cache hits so the analyze log fills immediately.
+    for i, (path, label, score, second) in enumerate(cache_hits, start=1):
+        if cancel is not None and cancel.is_set():
+            return i - 1, None
         _emit_result(
             on_result,
             path=path,
             label=label,
             score=score,
             second_score=second,
+            index=i,
+            total=grand_total,
         )
         if on_progress:
-            on_progress(cached_n, cached_n + len(pending))
+            on_progress(i, grand_total)
 
     status = status or (lambda _msg: None)
     if cached_n and pending:
@@ -272,7 +287,7 @@ def enrich_tracks(
             f"{missing_tagger_python_hint()}"
         )
 
-    total = cached_n + len(pending)
+    total = grand_total
     status(f"Starting tagger for {len(pending):,} file(s)…")
 
     list_path: Path | None = None
@@ -381,6 +396,8 @@ def enrich_tracks(
                     score=0.0,
                     second_score=0.0,
                     error=str(row.get("error") or "error"),
+                    index=done,
+                    total=total,
                 )
                 if on_progress:
                     on_progress(done, total)
@@ -400,6 +417,8 @@ def enrich_tracks(
                 label=label,
                 score=score,
                 second_score=second,
+                index=done,
+                total=total,
             )
             if on_progress:
                 on_progress(done, total)

@@ -503,7 +503,10 @@ def execute_balance(
                     moved += 1
         except Exception as exc:
             errors += 1
-            log(f"Failed {unit.path.name}: {exc}", "err")
+            from ..run_summary import file_progress_header
+
+            log(file_progress_header(unit.path.name, i, total), "info")
+            log(f"  failed: {exc}", "err")
 
     log("__live_progress_end__", "")
     log(

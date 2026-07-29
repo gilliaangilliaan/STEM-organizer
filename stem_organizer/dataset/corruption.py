@@ -297,7 +297,10 @@ def run_corruption_detect(
                 results.append(verdict)
                 counts[status] = counts.get(status, 0) + 1
 
-                _log_file_result(log, verdict.path, status, detail)
+                _log_file_result(
+                    log, verdict.path, status, detail,
+                    index=done, total=len(to_scan),
+                )
 
                 tag_path = verdict.path
                 tag_status = status
@@ -459,12 +462,17 @@ def _log_file_result(
     path: Path,
     status: str,
     detail: str = "",
+    *,
+    index: int | None = None,
+    total: int | None = None,
 ) -> None:
-    """Compression-style LOG: === file === + badge (+ note for bad/warn).
+    """Compression-style LOG: === [i/n] file === + badge (+ note for bad/warn).
 
     minor / suspect display as a single ``warning`` badge (yellow bg, dark text).
     """
-    log(f"=== {path.name} ===", "info")
+    from ..run_summary import file_progress_header
+
+    log(file_progress_header(path.name, index, total), "info")
     label = str(status).strip().lower() or "failed"
     display = "warning" if label in ("minor", "suspect") else label
     note = " ".join(str(detail or "").split()).strip()
