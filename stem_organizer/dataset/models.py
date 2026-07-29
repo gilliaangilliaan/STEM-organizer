@@ -156,22 +156,14 @@ class OverviewStats:
 
 
 def style_genres_from_stats(stats: OverviewStats) -> list[tuple[str, int]]:
-    """Tagged genres only — MAEST order first, then extras by count desc."""
+    """Tagged genres ordered by file count desc (most at top)."""
     tagged = {name: b.count for name, b in stats.genre.items() if b.count > 0}
     if not tagged:
         return []
-    out: list[tuple[str, int]] = []
-    seen: set[str] = set()
-    for name in MAEST_GENRES:
-        if name in tagged:
-            out.append((name, tagged[name]))
-            seen.add(name)
-    extras = sorted(
-        ((n, c) for n, c in tagged.items() if n not in seen),
+    return sorted(
+        tagged.items(),
         key=lambda x: (-x[1], x[0].lower()),
     )
-    out.extend(extras)
-    return out
 
 
 def make_demo_overview() -> OverviewStats:
