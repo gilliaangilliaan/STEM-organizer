@@ -121,12 +121,12 @@ LOG_GG_FG = {
     "wet": theme.COLORS["log_fg"],
     "lossless": "#262833",
     "lossy": "#262833",
-    # AUTHENTIC / FAKE_CERTAIN: white text on dark badges.
+    # AUTHENTIC / FAKE_CERTAIN: log_fg on dark badges (not pure white).
     # WARNING: dark text on yellow badge.
-    "authentic": _CHIP_FG_LIGHT,
+    "authentic": theme.COLORS["log_fg"],
     "warning": "#262833",
     "suspicious": "#262833",
-    "fake_certain": _CHIP_FG_LIGHT,
+    "fake_certain": theme.COLORS["log_fg"],
     "ok": "#262833",
     "minor": "#262833",
     "failed": "#262833",
