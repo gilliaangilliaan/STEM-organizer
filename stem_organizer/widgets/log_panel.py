@@ -164,7 +164,7 @@ def _genre_chip_bg(genre: str) -> str:
 
 # CTk: r'^(\s+)([a-z_]+)(?: (\d+%))?(?: \(margin [^)]+\))?(  →  .+)$'
 STEM_CLASSIFY_RE = re.compile(
-    r"^(\s+)([a-z_]+)(?: (\d+%))?(?: \(margin [^)]+\))?(  →  .+)$"
+    r"^(\s+)([a-z_]+)(?: (\d+%))?(?: \(margin [^)]+\))?(  →  )(.+)$"
 )
 # Key badges include / and # (Db/C#, Abm/G#m). Longest-first for alternation.
 _KEY_BADGE_ALTS = "|".join(
@@ -792,13 +792,16 @@ class LogPanel(QWidget):
         if m:
             self._gg_flush_pending(cursor)
             self._apply_line_spacing(cursor)
-            indent, label, pct, suffix = m.group(1), m.group(2), m.group(3), m.group(4)
+            indent, label, pct, arrow, dest = (
+                m.group(1), m.group(2), m.group(3), m.group(4), m.group(5),
+            )
             self._insert(cursor, indent)
             self._insert_chip(cursor, label)
             if pct:
                 # Fixed field so "100%" doesn't shove the arrow right of "98%"
                 self._insert(cursor, f"  {pct:>4}", "log_pct")
-            self._insert(cursor, suffix, "detail")
+            self._insert(cursor, arrow, "info")  # text_dim — darker than pct / name
+            self._insert(cursor, dest, "detail")
             self._insert(cursor, "\n")
             self.view.setTextCursor(cursor)
             self.view.ensureCursorVisible()
@@ -930,9 +933,10 @@ class LogPanel(QWidget):
         if stem_name in LOG_STEM_COLORS:
             self._insert(cursor, "  ", "detail")
             self._insert_chip(cursor, stem_name)
-            self._insert(cursor, "  →  ", "detail")
+            self._insert(cursor, "  →  ", "info")
         else:
-            self._insert(cursor, f"{filename}  →  ", "detail")
+            self._insert(cursor, f"{filename}", "detail")
+            self._insert(cursor, "  →  ", "info")
         self._insert(cursor, "SI-SDR: ", "sdr_label")
         tag = "sdr_pass" if score >= threshold else "sdr_fail"
         self._insert(cursor, f"{score:.1f}", tag)
