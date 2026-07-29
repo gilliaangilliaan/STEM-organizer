@@ -595,7 +595,10 @@ class LogPanel(QWidget):
         style: Optional[str],
         conf_pct: Optional[str] = None,
     ) -> None:
-        """Genre chip, style chip below, optional dim pct (CTk _gg_flush_genre_style_row)."""
+        """Genre chip, style chip below, optional dim pct.
+
+        Trailing blank only when both genre and style chips are present.
+        """
         genre = (genre or "").strip()
         style = (style or "").strip()
         conf = (conf_pct or "").strip()
@@ -620,9 +623,11 @@ class LogPanel(QWidget):
             self._apply_line_spacing(cursor)
             self._insert(cursor, f"  {conf}", "log_pct")
             self._insert(cursor, "\n")
-        # Gender-style gap below chips before the next === file header
-        self._apply_line_spacing(cursor)
-        self._insert(cursor, "\n")
+        # Blank after 2+ chips (GENRE+STYLE); single chip stays tight
+        n_chips = (1 if genre else 0) + (1 if style else 0)
+        if n_chips >= 2:
+            self._apply_line_spacing(cursor)
+            self._insert(cursor, "\n")
 
     def _gg_flush_pending(self, cursor: QTextCursor) -> None:
         genre = self._gg_pending_genre

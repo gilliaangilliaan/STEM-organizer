@@ -230,13 +230,13 @@ class KeyWorker(QThread):
             return
 
         # Badge lines: "  Db / C# 87%" → gg_result (Per-file live results).
+        # Single key chip — no blank after (blank only for 2+ badges elsewhere).
         if re.match(r"^\s*.+\s+\d+%\s*$", bare) and re.search(r"\d+%", bare):
             if not bare.lower().startswith(("error", "tagged", "total", "files")):
                 self.log_line.emit(
                     bare if bare.startswith(" ") else f"  {bare}",
                     "gg_result",
                 )
-                self.log_line.emit("", "info")
                 return
 
         if "[skip existing]" in bare.lower() or bare.lower().startswith("[skip"):

@@ -482,7 +482,7 @@ def _log_file_result(
         log(f"  {display}  {note}", "info")
     else:
         log(f"  {display}", "info")
-    log("", "info")
+    # Single badge chip — no blank after (blank only for 2+ badges elsewhere)
 
 
 def os_cpu_count() -> Optional[int]:

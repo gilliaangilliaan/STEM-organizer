@@ -136,13 +136,15 @@ def _log_file_result(
     index: int | None = None,
     total: int | None = None,
 ) -> None:
-    """Gender-style LOG: === [i/n] file === + lossless/lossy + verdict (+ note)."""
+    """Gender-style LOG: === [i/n] file === + lossless/lossy + verdict (+ note).
+
+    Blank after the block only when 2+ badge chips (value + verdict).
+    """
     from ..run_summary import file_progress_header
 
     log(file_progress_header(path.name, index, total), "info")
     log(f"  {value}", "info")
     if not verdict:
-        log("", "info")
         return
     label = verdict.strip().lower()
     note_text = (note or "").strip()
@@ -150,6 +152,7 @@ def _log_file_result(
         log(f"  {label}  {note_text}", "info")
     else:
         log(f"  {label}", "info")
+    # value + verdict → two chips → blank; single value stays tight
     log("", "info")
 
 

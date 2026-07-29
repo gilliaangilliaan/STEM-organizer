@@ -89,18 +89,20 @@ class PannsWorker(QThread):
         self._progress_t0 = 0.0
         self._blank_before_processed = False
 
-    def _emit_processed(self, n: int, total: int) -> None:
-        """Blank line once before the first Processed: n/total live line."""
-        if not self._blank_before_processed:
-            self.log_line.emit("", "info")
-            self._blank_before_processed = True
-        self.processed.emit(n, total)
+    def stop(self) -> None:
         self._stop_requested = True
         if self._proc is not None:
             try:
                 self._proc.kill()
             except Exception:
                 pass
+
+    def _emit_processed(self, n: int, total: int) -> None:
+        """Blank line once before the first Processed: n/total live line."""
+        if not self._blank_before_processed:
+            self.log_line.emit("", "info")
+            self._blank_before_processed = True
+        self.processed.emit(n, total)
 
     def run(self) -> None:  # noqa: N802
         tagger_dir = panns_tagger_dir()
@@ -304,7 +306,6 @@ class PannsWorker(QThread):
         if payload.get("skipped"):
             self.log_line.emit(header, "info")
             self.log_line.emit("  [skip] already tagged", "warn")
-            self.log_line.emit("", "info")
             return
 
         label = str(payload.get("label", "?"))
@@ -313,9 +314,11 @@ class PannsWorker(QThread):
 
         self.log_line.emit(header, "info")
         # Winning badge only (no runner-ups).
+        n_badges = 0
         pct = float(vocal.get(label, score) if label in vocal else score or 0.0) * 100.0
         if label in _FOCUS:
             self.log_line.emit(f"  {label} {pct:.0f}%", "gg_result")
+            n_badges += 1
         else:
             self.log_line.emit(f"  {label} {pct:.0f}%", "info")
 
@@ -332,9 +335,12 @@ class PannsWorker(QThread):
                         f"  {sl} {ss * 100:.0f}%  {t0:.1f}–{t1:.1f}s",
                         "gg_result",
                     )
+                    n_badges += 1
                 else:
                     self.log_line.emit(
                         f"    {t0:5.1f}–{t1:5.1f}s  {sl} {ss * 100:.0f}%",
                         "info",
                     )
-        self.log_line.emit("", "info")
+        # Blank only when 2+ badge chips for this file
+        if n_badges >= 2:
+            self.log_line.emit("", "info")

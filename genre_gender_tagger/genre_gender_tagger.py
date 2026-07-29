@@ -246,27 +246,36 @@ def _fmt_confidence_pct(score) -> str:
 
 
 def _log_gender_result(row, *, index: int | None = None, total: int | None = None):
-    """Classify-style LOG: === [i/n] file === + badge + dim pct (e.g. female 72%)."""
+    """Classify-style LOG: === [i/n] file === + badge + dim pct (e.g. female 72%).
+
+    Blank line after the block only when 2+ badge chips (e.g. gender + reverb).
+    """
     name = Path(row.get("file") or "").name
     gender = str(row.get("gender") or "").strip().lower()
     reverb = str(row.get("reverb") or "").strip().lower()
     gconf = _fmt_confidence_pct(row.get("confidence", 0))
     rconf = _fmt_confidence_pct(row.get("reverb_confidence", 0))
-    print(flush=True)
     if index is not None and total is not None and total > 0:
         print(f"=== [{int(index)}/{int(total)}] {name} ===", flush=True)
     else:
         print(f"=== {name} ===", flush=True)
+    n_badges = 0
     if gender in ("female", "male"):
         print(f"  {gender} {gconf}", flush=True)
+        n_badges += 1
     elif gender:
         print(f"GENDER: {gender}", flush=True)
         print(f"  {gconf}", flush=True)
+        n_badges += 1
     if reverb in ("dry", "wet"):
         print(f"  {reverb} {rconf}", flush=True)
+        n_badges += 1
     elif reverb and reverb != "?":
         print(f"REVERB: {reverb}", flush=True)
         print(f"  {rconf}", flush=True)
+        n_badges += 1
+    if n_badges >= 2:
+        print(flush=True)
 
 
 def _log_genre_result(

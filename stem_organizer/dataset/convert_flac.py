@@ -487,17 +487,14 @@ def _log_file_result(
     label = str(status or "").strip().lower() or "ok"
     if label == "skip":
         log(f"  [skip] {detail}" if detail else "  [skip]", "warn")
-        log("", "info")
         return
     if label == "fail":
         log(f"  [fail] {detail}" if detail else "  [fail]", "err")
-        log("", "info")
         return
-    # ok — green badge + description in same green (LOG_OK_COLOR)
+    # ok — green badge + optional description (single chip → no blank after)
     log(f"  {label}", "info")
     if detail:
         log(f"  {detail}", "ok")
-    log("", "info")
 
 
 def _cpu_core_count() -> int:
