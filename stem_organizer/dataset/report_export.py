@@ -863,7 +863,7 @@ def _paint_genre_bars_page(
     origin_x = panel.left() + pad_x
 
     count_font = QFont(theme.FONT_FAMILY_MONO, 9)
-    name_font = QFont(theme.FONT_FAMILY, 12)
+    name_font = QFont(theme.FONT_FAMILY, 10)
     for i, (name, count) in enumerate(items):
         x = origin_x + i * (col_w + gap)
         # Count above bar
