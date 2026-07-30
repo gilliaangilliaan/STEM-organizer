@@ -100,7 +100,7 @@ REM Base audio deps (numpy/soundfile/librosa/soxr/mutagen/tqdm) are installed
 REM once by the shared genre_gender_tagger venv. Only install here if standalone.
 "%PY%" -c "import numpy, soundfile, librosa, soxr, mutagen, tqdm" 2>nul
 if errorlevel 1 (
-    "%PY%" -m pip install "numpy>=1.24,<2.2" soundfile librosa soxr mutagen tqdm
+    "%PY%" -m pip install numpy soundfile librosa soxr mutagen tqdm
     if errorlevel 1 goto fail
 )
 

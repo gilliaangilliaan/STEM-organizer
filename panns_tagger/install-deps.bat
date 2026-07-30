@@ -101,7 +101,7 @@ REM Base audio deps (numpy/soundfile/librosa/mutagen) are installed once by the
 REM shared genre_gender_tagger venv. Only install here if run standalone.
 "%PY%" -c "import numpy, soundfile, librosa, mutagen" 2>nul
 if errorlevel 1 (
-    "%PY%" -m pip install "numpy>=1.24,<2.2" soundfile librosa mutagen
+    "%PY%" -m pip install numpy soundfile librosa mutagen
     if errorlevel 1 goto fail
 )
 
