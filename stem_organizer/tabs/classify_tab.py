@@ -859,10 +859,7 @@ class ClassifyTab(QWidget):
             title="About Classify",
             heading="STEM organizer",
             version_line=f"v{theme.APP_VERSION} — by Gilliaan & Bas Curtiz",
-            intro=(
-                "Organize, classify, and prepare multitrack music datasets.\n"
-                "Automatically create 2- or 4-stems, identify genre/style + vocal gender/reverb, align tracks & auto-rename files."
-            ),
+            intro="Organize, classify, prepare and balance audio datasets.",
             header_icon=logo if logo.exists() else None,
             repo_url=theme.STATUS_LINK_URL,
             rhythm="classify",
@@ -913,10 +910,11 @@ class ClassifyTab(QWidget):
                 ]),
                 ("Classification controls", [
                     "Confidence threshold: minimum top-category RMS share required to keep "
-                    "a stem. Lower = more permissive; higher = stricter.",
+                    "a stem.\n"
+                    "Lower = more permissive; higher = stricter.",
                     "Min. margin: required gap between the top and runner-up categories. "
                     "Prevents ambiguous stems from being mis-categorized.",
-                    "On ambiguous — Skip stem only: drop just that stem, keep the rest. "
+                    "On ambiguous — Skip stem only: drop just that stem, keep the rest.\n"
                     "Skip the entire song: abort this folder; no outputs are written.",
                 ]),
                 ("(Optional) Calculate SI-SDR", [

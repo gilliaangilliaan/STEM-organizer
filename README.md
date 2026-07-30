@@ -6,7 +6,7 @@
 
 # STEM organizer
 
-Organize, classify, and prepare multitrack music datasets.<br>
+Organize, classify, prepare and balance audio datasets.<br>
 Automatically create 2- or 4-stems, tag genre/style, gender/reverb, vocal type, and key, align tracks, check integrity, and export charts.
 
 **By:** Gilliaan & Bas Curtiz  

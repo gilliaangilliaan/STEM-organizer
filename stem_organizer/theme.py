@@ -861,6 +861,8 @@ def _underline_width_for_text(font_metrics, text: str, *, minimum: float = 32.0)
 # Shared status look for RMS/SI-SDR SegmentedWidget and top TabWidget items.
 # Idle = dim text + soft pill; hover (unselected) = stronger pill; active = white + accent underline.
 STATUS_PILL_RADIUS = 6
+# Even gap between main top-tab pills; raised further so Charts meets card right edge.
+MAIN_TAB_SPACING = 8
 
 
 def _status_pill_color() -> QColor:
@@ -1122,7 +1124,8 @@ def configure_tab_widget(tabs) -> None:
     item_layout = getattr(bar, "itemLayout", None)
     if item_layout is not None:
         item_layout.setContentsMargins(0, 0, 0, 0)
-        item_layout.setSpacing(2)
+        # Spacing set after tab widths are known (main tabs align Charts to cards).
+        item_layout.setSpacing(MAIN_TAB_SPACING)
         # Fluent insertWidget(..., stretch=1) + Minimum size policy makes tabs
         # grow with the bar. Keep items content-sized and park leftover width
         # in a trailing stretch so Rename full-width matches other tabs.
@@ -1172,7 +1175,8 @@ def configure_tab_widget(tabs) -> None:
             x = (item.width() - uw) / 2.0
             painter.drawRoundedRect(QRectF(x, item.height() - 4.0, uw, 3.0), 1.5, 1.5)
 
-    for item in getattr(bar, "items", []) or []:
+    tab_items = list(getattr(bar, "items", []) or [])
+    for item in tab_items:
         try:
             item.setFixedHeight(h)
             # Content-sized tabs (Fluent sizeHint uses maximumWidth → 240px)
@@ -1189,6 +1193,22 @@ def configure_tab_widget(tabs) -> None:
             item.update()
         except Exception:
             pass
+
+    # Main tabs: inset both sides to match cards, even gaps so Charts meets
+    # the right card edge. Nested sub-tabs keep MAIN_TAB_SPACING here;
+    # inset_tab_bar overwrites with SUBTAB_SPACING + its own left pad.
+    if item_layout is not None and len(tab_items) >= 2:
+        labels = {(it.text() or "").strip() for it in tab_items}
+        if "Charts" in labels and "Classify" in labels:
+            # 2px left of cards so Classify sits slightly proud; right still
+            # matches card edge. Gaps even across the remaining span.
+            left_inset = PAGE_CONTENT_INSET - 2
+            item_layout.setContentsMargins(left_inset, 0, PAGE_CONTENT_INSET, 0)
+            widths_sum = sum(it.minimumWidth() for it in tab_items)
+            target = LEFT_PANEL_WIDTH - left_inset - PAGE_CONTENT_INSET
+            gaps = len(tab_items) - 1
+            spacing = max(MAIN_TAB_SPACING, round((target - widths_sum) / gaps))
+            item_layout.setSpacing(int(spacing))
 
 
 def inset_tab_bar(tabs, left: int | None = None) -> None:

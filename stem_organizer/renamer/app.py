@@ -296,7 +296,7 @@ class TrackRenamerApp(QWidget):
         self.side_panel = QWidget()
         self.side_panel.setObjectName("RenameSidePanel")
         right_lay = QVBoxLayout(self.side_panel)
-        _path_top = max(0, (theme.ACTION_BTN_HEIGHT - theme.SECTION_TITLE_PX) // 2)
+        _path_top = max(0, (theme.ACTION_BTN_HEIGHT - theme.SECTION_TITLE_PX) // 2 - 3)
         # Left 0 — sit flush against the rules scrollbar (no center seam/line)
         right_lay.setContentsMargins(0, _path_top, self._rename_right_inset, 0)
         right_lay.setSpacing(theme.SECTION_GAP)
@@ -317,6 +317,8 @@ class TrackRenamerApp(QWidget):
         self.recursive_chk.setToolTip(TIPS["recursive"])
         self.recursive_chk.toggled.connect(self._on_recursive_toggle)
         paths.body.layout().addWidget(self.recursive_chk)
+        # Recover 3px after PATH/card shift so card bottom still meets Apply.
+        paths.body.layout().addSpacing(3)
         # Indent PATH to match PREVIEW left; right edge shares footer inset (no extra pad).
         path_row = QHBoxLayout()
         path_row.setContentsMargins(0, 0, 0, 0)

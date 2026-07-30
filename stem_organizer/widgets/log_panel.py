@@ -460,7 +460,7 @@ class LogPanel(QWidget):
         # window→content (6 + PAGE_CONTENT_INSET) matches content→LogView
         # (PAGE_CONTENT_INSET + 6). Right uses PAGE_CONTENT_INSET so window→LogView
         # on the right matches the left margin.
-        layout.setContentsMargins(0, 8, theme.PAGE_CONTENT_INSET, 0)
+        layout.setContentsMargins(0, 7, theme.PAGE_CONTENT_INSET, 0)
         layout.setSpacing(6)
 
         header = QHBoxLayout()

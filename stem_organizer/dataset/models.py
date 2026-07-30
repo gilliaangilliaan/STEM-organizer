@@ -57,21 +57,21 @@ MAEST_GENRES = (
 # Saturated for dark UI — bumped from bright-bg palette.
 # Saturated to match theme-colors.png / STEM_COLORS intensity (red→purple + neutrals).
 MAEST_GENRE_COLORS: dict[str, str] = {
-    "Blues": "#3B82F6",
-    "Brass & Military": "#467A0C",
-    "Children's": "#FACC15",
-    "Classical": "#9AA0B4",
-    "Electronic": "#14B8A6",
-    "Folk, World, & Country": "#38BDF8",
-    "Funk / Soul": "#F59E0B",
-    "Hip Hop": "#F97316",
-    "Jazz": "#FEEC1D",
-    "Latin": "#EC4899",
+    "Blues": "#4281E8",
+    "Brass & Military": "#497715",
+    "Children's": "#F5CC29",
+    "Classical": "#9AA0B2",
+    "Electronic": "#21B3A3",
+    "Folk, World, & Country": "#44BAEF",
+    "Funk / Soul": "#EC9F1D",
+    "Hip Hop": "#ED7623",
+    "Jazz": "#FAEA33",
+    "Latin": "#E04E97",
     "Non-Music": "#000000",
-    "Pop": "#A855F7",
-    "Reggae": "#09C371",
-    "Rock": "#EF4444",
-    "Stage & Screen": "#636B7A",
+    "Pop": "#A45AEA",
+    "Reggae": "#17BB72",
+    "Rock": "#E14949",
+    "Stage & Screen": "#636B78",
 }
 
 
