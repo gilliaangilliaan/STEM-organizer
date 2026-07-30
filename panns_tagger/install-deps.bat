@@ -97,10 +97,13 @@ goto install_pkgs
 :install_pkgs
 echo.
 echo [1/3] audio helpers ...
-"%PY%" -m pip install --upgrade pip
-if errorlevel 1 goto fail
-"%PY%" -m pip install "numpy>=1.24,<2.2" soundfile librosa mutagen
-if errorlevel 1 goto fail
+REM Base audio deps (numpy/soundfile/librosa/mutagen) are installed once by the
+REM shared genre_gender_tagger venv. Only install here if run standalone.
+"%PY%" -c "import numpy, soundfile, librosa, mutagen" 2>nul
+if errorlevel 1 (
+    "%PY%" -m pip install "numpy>=1.24,<2.2" soundfile librosa mutagen
+    if errorlevel 1 goto fail
+)
 
 echo [2/3] panns-inference ...
 "%PY%" -m pip install panns-inference

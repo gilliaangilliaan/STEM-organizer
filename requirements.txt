@@ -7,12 +7,13 @@ scipy
 soundfile
 demucs
 sounddevice
-resampy
 psutil
 requests
 # Optional tag writers / metadata
 mutagen
 # Overview compression detect (spectral fake-lossless)
 flac-detective==1.7.0
-# torchvision (hear21passt/timm) imports PIL
+# PIL/Pillow has no direct import in this app's source — it is a transitive
+# dependency of torchvision (used by hear21passt/timm in the tagger venv).
+# Listed here only so the frozen --no-deps site-packages install includes it.
 Pillow

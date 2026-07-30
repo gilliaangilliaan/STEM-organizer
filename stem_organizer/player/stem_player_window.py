@@ -145,11 +145,12 @@ def _normalize_player_audio(audio, file_sr: int, sr: int, ch: int):
         # thousands of sibling folders cause audible underruns).
         return _np.ascontiguousarray(audio, dtype=_np.float32)
     try:
-        import resampy
-        audio = resampy.resample(audio, file_sr, sr, axis=1)
+        from audio_resample import resample_audio
+
+        audio = resample_audio(audio, file_sr, sr, axis=1)
     except ImportError:
         raise RuntimeError(
-            f"Sample rate mismatch ({file_sr} Hz vs {sr} Hz) and resampy is not installed."
+            f"Sample rate mismatch ({file_sr} Hz vs {sr} Hz) and scipy is not installed."
         )
     return _np.ascontiguousarray(audio, dtype=_np.float32)
 

@@ -865,7 +865,7 @@ class LogPanel(QWidget):
             self.view.ensureCursorVisible()
             return
 
-        # Distribute: matched: (green) + folder · % (default)
+        # Distribute: matched: (green) + folder · % (log_fg)
         matched = MATCHED_LINE_RE.match(line)
         if matched:
             self._gg_flush_pending(cursor)
@@ -874,7 +874,7 @@ class LogPanel(QWidget):
             self._insert(cursor, indent or "  ")
             self._insert(cursor, label, "ok")
             if rest:
-                self._insert(cursor, f" {rest}", "info")
+                self._insert(cursor, f" {rest}", "detail")
             self._insert(cursor, "\n")
             self.view.setTextCursor(cursor)
             self.view.ensureCursorVisible()

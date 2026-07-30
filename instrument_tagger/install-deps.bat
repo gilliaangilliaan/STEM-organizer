@@ -98,10 +98,14 @@ goto install_pkgs
 :install_pkgs
 echo.
 echo [1/3] audio helpers ...
-"%PY%" -m pip install --upgrade pip
-if errorlevel 1 goto fail
-"%PY%" -m pip install "numpy>=1.24,<2.2" soundfile librosa
-if errorlevel 1 goto fail
+REM Base audio deps (numpy/soundfile/librosa) are installed once by the shared
+REM genre_gender_tagger venv. Only install them here if this script was run
+REM standalone on an empty venv.
+"%PY%" -c "import numpy, soundfile, librosa" 2>nul
+if errorlevel 1 (
+    "%PY%" -m pip install "numpy>=1.24,<2.2" soundfile librosa
+    if errorlevel 1 goto fail
+)
 
 echo [2/3] hear21passt + timm ...
 "%PY%" -m pip install hear21passt --no-deps
@@ -116,8 +120,6 @@ echo [3/3] torch + torchaudio + torchvision (%TORCH_LABEL%) ...
 if errorlevel 1 (
     echo WARNING: torch stack install failed - leaving existing packages.
 )
-"%PY%" -m pip install Pillow
-if errorlevel 1 goto fail
 
 "%PY%" -c "import PIL, torch, torchaudio, torchvision; print('OK PIL', PIL.__version__, 'torch', torch.__version__, 'torchaudio', torchaudio.__version__, 'torchvision', torchvision.__version__, 'cuda=', torch.cuda.is_available())"
 "%PY%" -c "import hear21passt; print('OK hear21passt')"

@@ -621,13 +621,14 @@ def _normalize_audio(audio, file_sr: int, sr: int, ch: int):
     elif audio.shape[0] > ch:
         audio = audio[:ch]
     if file_sr != sr:
+        from audio_resample import resample_audio
+
         try:
-            import resampy
-            audio = resampy.resample(audio, file_sr, sr, axis=1)
+            audio = resample_audio(audio, file_sr, sr, axis=1)
         except ImportError:
             raise RuntimeError(
                 f"Sample rate mismatch ({file_sr} Hz vs expected {sr} Hz) "
-                "and resampy is not installed. Install it with: pip install resampy"
+                "and scipy is not installed. Install it with: pip install scipy"
             )
     return audio.astype(np.float32)
 

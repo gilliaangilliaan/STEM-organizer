@@ -11,7 +11,7 @@ Local AI tagging for a music library:
 - **Instrumental** — Discogs genre/style via Hugging Face
   `discogs-maest-30s-pw-129e-519l` (MAEST)
 - **Acapella** — singing voice gender (female/male) via Essentia
-  `gender-discogs-effnet` (TensorFlow `.pb`; Essentia has no Windows wheels),
+  `gender-discogs-effnet` (ONNX Runtime; Essentia has no Windows wheels),
   plus dry/wet reverb via a lightweight mel-CNN (`models\vocal_reverb.pt`).
   Train it from your own packs: `reverb_data\dry` + `reverb_data\wet`, then
   `train-reverb.bat`.
@@ -69,7 +69,7 @@ GPU or CPU, creates a virtual environment, and installs everything.
    - venv or global install
    - **GPU build** (pick 1 or 3) **or CPU** (pick 2)
 
-That's it. Models: Essentia `.pb` + trained `vocal_reverb.pt` live in
+That's it. Models: Essentia `.onnx` + trained `vocal_reverb.pt` live in
 `models\`; Hugging Face MAEST downloads on first genre run.
 
 ### Train dry/wet reverb (required for Gender reverb)
@@ -90,8 +90,8 @@ sample packs, remix packs, and multitracks; best val accuracy **0.924**
 
 Gender models must already exist under `models\`:
 
-- `models\discogs-effnet-bs64-1.pb`
-- `models\gender-discogs-effnet-1.pb`
+- `models\discogs-effnet-bsdynamic-1.onnx`
+- `models\gender-discogs-effnet-1.onnx`
 - `models\vocal_reverb.pt` (train on a machine with your dry/wet packs,
   then copy)
 

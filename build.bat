@@ -111,7 +111,7 @@ if exist "genre_gender_tagger\install-deps.bat" copy /Y "genre_gender_tagger\ins
 if exist "genre_gender_tagger\run.bat" copy /Y "genre_gender_tagger\run.bat" "%OUT%\genre_gender_tagger\" >nul
 if exist "genre_gender_tagger\requirements.txt" copy /Y "genre_gender_tagger\requirements.txt" "%OUT%\genre_gender_tagger\" >nul
 if exist "genre_gender_tagger\readme.md" copy /Y "genre_gender_tagger\readme.md" "%OUT%\genre_gender_tagger\" >nul
-if exist "genre_gender_tagger\models\*.pb" copy /Y "genre_gender_tagger\models\*.pb" "%OUT%\genre_gender_tagger\models\" >nul
+if exist "genre_gender_tagger\models\*.onnx" copy /Y "genre_gender_tagger\models\*.onnx" "%OUT%\genre_gender_tagger\models\" >nul
 if exist "genre_gender_tagger\models\vocal_reverb.pt" copy /Y "genre_gender_tagger\models\vocal_reverb.pt" "%OUT%\genre_gender_tagger\models\" >nul
 
 echo   Copying instrument_tagger\ ^(Rename Auto-detect, no venv^) ...

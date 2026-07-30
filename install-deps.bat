@@ -298,16 +298,19 @@ REM ---------- SOURCE: install into .venv ----------
 set "PY=%~dp0.venv\Scripts\python.exe"
 
 echo.
-echo [1/4] Core GUI + audio deps ...
+echo [1/4] PyTorch (%TORCH_LABEL%) ...
 "%PY%" -m pip install --upgrade pip
 if errorlevel 1 goto failed
-REM torch is NOT in requirements.txt - installed from the CUDA/CPU index below
-"%PY%" -m pip install -r "%~dp0requirements.txt" --upgrade
+REM Install torch + torchaudio from the chosen index FIRST. demucs hard-requires
+REM torchaudio (demucs/audio.py: "import torchaudio as ta"), so both must be
+REM present before demucs is resolved. Installing them first also means demucs
+REM won't drag in a different-flavored torch wheel from PyPI - the default
+REM only-if-needed upgrade strategy leaves the already-satisfied torch alone.
+"%PY%" -m pip install torch torchaudio --index-url %TORCH_INDEX% --upgrade --no-cache-dir
 if errorlevel 1 goto failed
 
-echo [2/4] PyTorch (%TORCH_LABEL%) ...
-"%PY%" -m pip uninstall -y torch torchvision torchaudio 2>nul
-"%PY%" -m pip install torch --index-url %TORCH_INDEX% --upgrade --no-cache-dir
+echo [2/4] Core GUI + audio deps ...
+"%PY%" -m pip install -r "%~dp0requirements.txt" --upgrade
 if errorlevel 1 goto failed
 
 echo [3/4] verify ...
@@ -356,7 +359,7 @@ if errorlevel 1 goto failed
 echo [2/4] audio + UI deps ...
 "%PIP_PY%" -m pip install "cffi>=1.16" -t "%DEST%" --only-binary=:all: --upgrade --no-cache-dir
 if errorlevel 1 goto failed
-"%PIP_PY%" -m pip install soundfile numpy sounddevice PySide6 "PySide6-Fluent-Widgets>=1.11,<2" psutil mutagen scipy librosa soxr resampy audioread requests -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install soundfile numpy sounddevice PySide6 "PySide6-Fluent-Widgets>=1.11,<2" psutil mutagen scipy librosa soxr audioread requests -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 goto failed
 "%PIP_PY%" -m pip install flac-detective==1.7.0 -t "%DEST%" --upgrade --no-cache-dir
 if errorlevel 1 goto failed

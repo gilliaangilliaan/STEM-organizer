@@ -12,9 +12,6 @@ import warnings
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Silence TensorFlow C++ logs before any TF import (acapella path).
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
-os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 # Harmless HF Hub noise on Windows VMs (no symlink support / no token).
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("HF_HUB_DISABLE_EXPERIMENTAL_WARNING", "1")
@@ -639,18 +636,8 @@ def _writable_gender_model_dir() -> Path:
 
 GENDER_MODEL_DIR = _writable_gender_model_dir()
 
-GENDER_EFFNET_URL = (
-    "https://essentia.upf.edu/models/feature-extractors/"
-    "discogs-effnet/discogs-effnet-bs64-1.pb"
-)
-GENDER_HEAD_URL = (
-    "https://essentia.upf.edu/models/classification-heads/"
-    "gender/gender-discogs-effnet-1.pb"
-)
-GENDER_EFFNET_NAME = "discogs-effnet-bs64-1.pb"
-GENDER_HEAD_NAME = "gender-discogs-effnet-1.pb"
-
-# ONNX / DirectML (GPU on Windows — TF 2.11+ has no native Win CUDA).
+# Gender classifier runs on ONNX Runtime only (TF frozen-graph fallback was
+# removed). ONNX is GPU-capable via DirectML/CUDA and CPU on every platform.
 GENDER_EFFNET_ONNX_NAME = "discogs-effnet-bsdynamic-1.onnx"
 GENDER_HEAD_ONNX_NAME = "gender-discogs-effnet-1.onnx"
 GENDER_EFFNET_ONNX_URL = (
@@ -665,14 +652,11 @@ GENDER_HEAD_ONNX_URL = (
 # but ORT fails with a vague system error and tagging appears stuck/dead.
 GENDER_EFFNET_ONNX_MIN_BYTES = 15_000_000
 GENDER_HEAD_ONNX_MIN_BYTES = 100_000
-GENDER_EFFNET_PB_MIN_BYTES = 15_000_000
-GENDER_HEAD_PB_MIN_BYTES = 100_000
 GENDER_ORT_BATCH = 128
 _INSTRUMENT_MODELS = (
     _tagger_package_dir().parent / "instrument_tagger" / "models"
 )
 
-_TF_SILENCED = False
 _MEL_FILTERBANK = None
 
 
@@ -1157,31 +1141,8 @@ elif RUNTIME_PROMPTS and CONTENT_TYPE == "acapella":
 
 
 # ==========================================================
-# VOICE-GENDER HELPERS (gender-discogs-effnet via TF)
+# VOICE-GENDER HELPERS (gender-discogs-effnet via ONNX Runtime)
 # ==========================================================
-
-def _silence_tensorflow():
-    """Hide TF C++ INFO spam and GraphDef deprecation warnings."""
-
-    global _TF_SILENCED
-    if _TF_SILENCED:
-        return
-
-    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-
-    logging.getLogger("tensorflow").setLevel(logging.ERROR)
-    logging.getLogger("absl").setLevel(logging.ERROR)
-
-    warnings.filterwarnings("ignore", message=r".*tf\.GraphDef.*")
-    warnings.filterwarnings(
-        "ignore",
-        category=DeprecationWarning,
-        module=r"tensorflow.*",
-    )
-
-    _TF_SILENCED = True
-
 
 def _model_file_ready(path, min_bytes: int = 1000) -> bool:
     try:
@@ -1263,36 +1224,6 @@ def _download_model_file(path, url, status=print, min_bytes: int = 1000):
         ) from exc
 
 
-def ensure_gender_models(model_dir=None, status=print):
-    """Download EffNet + gender .pb files if missing."""
-
-    download_dir = Path(model_dir or _writable_gender_model_dir())
-    download_dir.mkdir(parents=True, exist_ok=True)
-
-    found = []
-    for name, url, min_bytes in (
-        (GENDER_EFFNET_NAME, GENDER_EFFNET_URL, GENDER_EFFNET_PB_MIN_BYTES),
-        (GENDER_HEAD_NAME, GENDER_HEAD_URL, GENDER_HEAD_PB_MIN_BYTES),
-    ):
-        ready = _find_ready_model(name, min_bytes, model_dir=model_dir)
-        if ready is not None:
-            if ready.parent != download_dir:
-                status(f"  using bundled {ready}")
-            found.append(ready)
-            continue
-        path = download_dir / name
-        if path.exists():
-            status(f"  replacing incomplete {path.name} ({path.stat().st_size:,} bytes)")
-            try:
-                path.unlink()
-            except OSError:
-                pass
-        _download_model_file(path, url, status=status, min_bytes=min_bytes)
-        found.append(path)
-
-    return found[0], found[1]
-
-
 def ensure_gender_onnx_models(model_dir=None, status=print):
     """Download EffNet + gender .onnx files if missing or truncated."""
 
@@ -1352,63 +1283,6 @@ def ensure_gender_onnx_models(model_dir=None, status=print):
         )
 
     return effnet, gender
-
-
-def _wrap_frozen_graph(graph_path, input_names, output_names):
-    _silence_tensorflow()
-    import tensorflow as tf
-
-    graph_def = tf.compat.v1.GraphDef()
-    graph_def.ParseFromString(Path(graph_path).read_bytes())
-
-    def _imports_graph_def():
-        tf.compat.v1.import_graph_def(graph_def, name="")
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        wrapped = tf.compat.v1.wrap_function(_imports_graph_def, [])
-
-    return wrapped.prune(
-        [wrapped.graph.as_graph_element(n) for n in input_names],
-        [wrapped.graph.as_graph_element(n) for n in output_names],
-    )
-
-
-class _GenderTfBackend:
-    name = "tensorflow-cpu"
-
-    def __init__(self, embed_fn, gender_fn):
-        self.embed_fn = embed_fn
-        self.gender_fn = gender_fn
-
-    def predict_batch(self, chunk):
-        """chunk [N,128,96] -> probs [N,2]. Pads to 64 when N < 64 (TF graph)."""
-        import tensorflow as tf
-
-        valid = chunk.shape[0]
-        if valid < GENDER_BATCH_SIZE:
-            pad = np.zeros(
-                (
-                    GENDER_BATCH_SIZE - valid,
-                    GENDER_PATCH_SIZE,
-                    GENDER_N_MELS,
-                ),
-                dtype=np.float32,
-            )
-            chunk = np.concatenate([chunk, pad], axis=0)
-        elif valid > GENDER_BATCH_SIZE:
-            # Fixed bs64 graph — split.
-            parts = []
-            for start in range(0, valid, GENDER_BATCH_SIZE):
-                parts.append(
-                    self.predict_batch(chunk[start : start + GENDER_BATCH_SIZE])
-                )
-            return np.concatenate(parts, axis=0)
-
-        x = tf.convert_to_tensor(chunk, dtype=tf.float32)
-        embeddings = self.embed_fn(x)[0]
-        probs = self.gender_fn(embeddings)[0].numpy()
-        return probs[:valid]
 
 
 class _GenderOrtBackend:
@@ -1512,70 +1386,25 @@ def load_gender_ort_backend(model_dir=None, status=print):
     return _GenderOrtBackend(effnet, head, active)
 
 
-def load_gender_tf_backend(model_dir=None, status=print):
-    """Load EffNet + gender head via TensorFlow frozen graphs (CPU on Windows)."""
-
-    _silence_tensorflow()
-    status("  loading TensorFlow ...")
-    import tensorflow as tf
-
-    tf.get_logger().setLevel("ERROR")
-    try:
-        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-    except Exception:
-        pass
-
-    effnet_path, gender_path = ensure_gender_models(model_dir, status=status)
-
-    status("  loading discogs-effnet embeddings ...")
-    embed_fn = _wrap_frozen_graph(
-        effnet_path,
-        ["serving_default_melspectrogram:0"],
-        ["PartitionedCall:1"],
-    )
-
-    status("  loading gender-discogs-effnet head ...")
-    gender_fn = _wrap_frozen_graph(
-        gender_path,
-        ["model/Placeholder:0"],
-        ["model/Softmax:0"],
-    )
-
-    return _GenderTfBackend(embed_fn, gender_fn)
-
-
 def load_gender_models(model_dir=None, status=print):
     """
-    Load gender backend (ONNX DirectML/CUDA preferred, TF CPU fallback).
+    Load the ONNX Runtime gender backend (DirectML/CUDA/CPU).
 
     Returns a backend with .predict_batch(chunk) -> probs [N,2] and .name.
     """
 
-    ort_err: Exception | None = None
     try:
         import onnxruntime  # noqa: F401
-
-        return load_gender_ort_backend(model_dir, status=status)
-    except SystemExit:
-        raise
-    except Exception as exc:
-        ort_err = exc
-        status(f"  ONNX Runtime unavailable ({exc})")
-
-    try:
-        import tensorflow as tf  # noqa: F401
-    except ImportError:
+    except ImportError as exc:
         raise SystemExit(
-            "\nERROR: gender models could not load.\n"
-            f"  ONNX: {ort_err}\n"
-            "  TensorFlow is not installed (optional CPU fallback).\n\n"
-            "Fix: ensure models\\discogs-effnet-bsdynamic-1.onnx is complete "
-            f"(~18 MB, not a truncated download), then retry Tag gender.\n"
-            f"  Expected file: {GENDER_MODEL_DIR / GENDER_EFFNET_ONNX_NAME}\n"
-        ) from ort_err
+            "\nERROR: ONNX Runtime is not installed.\n"
+            "  Gender tagging needs onnxruntime-directml (Windows) or "
+            "onnxruntime.\n"
+            f"  Reason: {exc}\n\n"
+            "Fix: re-run install-deps.bat, then retry Tag gender.\n"
+        ) from exc
 
-    status("  falling back to TensorFlow...")
-    return load_gender_tf_backend(model_dir, status=status)
+    return load_gender_ort_backend(model_dir, status=status)
 
 
 def load_mono_16k(filename):
@@ -1813,17 +1642,9 @@ def predict_patches(patches, backend):
     return np.concatenate(probs_all, axis=0)
 
 
-def predict_fixed_batch(chunk64, backend, gender_fn=None):
-    """
-    One forward pass on a stacked patch batch.
+def predict_fixed_batch(chunk64, backend):
+    """One forward pass on a stacked patch batch. backend is a gender backend."""
 
-    `backend` is a gender backend (.predict_batch). The unused gender_fn
-    arg keeps older call sites that passed (embed_fn, gender_fn) working
-    when they still unpack two values — prefer passing backend alone.
-    """
-    if gender_fn is not None and not hasattr(backend, "predict_batch"):
-        # Legacy: (embed_fn, gender_fn) as two args.
-        backend = _GenderTfBackend(backend, gender_fn)
     return backend.predict_batch(np.asarray(chunk64, dtype=np.float32))
 
 
@@ -1858,11 +1679,9 @@ def calibrate_multiclass_confidence(top1, top2=None):
     return t1 / denom
 
 
-def classify_gender_file(filename, backend, gender_fn=None):
+def classify_gender_file(filename, backend):
     """Run gender-discogs-effnet on one file."""
 
-    if gender_fn is not None and not hasattr(backend, "predict_batch"):
-        backend = _GenderTfBackend(backend, gender_fn)
     patches = extract_patches(filename)
     probs = predict_patches(patches, backend)
     return probs_to_result(probs)
