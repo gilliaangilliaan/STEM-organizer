@@ -25,12 +25,12 @@ PySide6 desktop app for building and auditing stem libraries. Hover **?** in any
 | Tab | What it does |
 |-----|----------------|
 | **Classify** | Demucs RMS classify → group stems<br>optional SI-SDR quality filter; export organized folders |
-| **Genre & Gender** | **Genre** — MAEST genre/style tags<br>**Gender** — EffNet gender + reverb<br>**Vocal type** — PANNs (Singing/Speech/…) |
-| **Key** | In-house KeyNet CNN → `KEY` / Initial key metadata |
+| **Genre & Gender** | **Genre** — MAEST genre/style tags<br>**Gender** — EffNet gender (male/female) + In-house trained reverb (dry/wet)<br>**Vocal type** — PANNs (Singing/Speech/Rapping/Humming/Choir) |
+| **Key** | In-house trained KeyNet CNN → `KEY` / Initial key — [outperforms](https://docs.google.com/spreadsheets/d/1asmBVlIjimZ9XAmK5JE42SX4vAvjGqjLflukYBgFSuE/edit?usp=sharing) original model + MIK |
 | **Match & Align** | Pair instrumental/vocal folders, organize pairs, align stems to a reference |
 | **Rename** | Rule-based sample rename + optional instrument Auto-detect (PaSST / hear21passt) |
-| **Integrity** | **Compression** — FLAC Detective lossless/lossy<br>**Corruption** — fast/deep verify + fix<br>**Convert** — batch to FLAC |
-| **Charts** | Scan library roots → donuts, genre/style breakdown, SI-SDR bars; balance or export PNG/PDF |
+| **Integrity** | **Compression** — FLAC Detective lossless/lossy<br>**Corruption** — fast/deep verify + fix ([AudioTester](http://www.vuplayer.com/other.php) / [foobar2k](https://www.foobar2000.org/) alike)<br>**Convert** — batch to FLAC |
+| **Charts** | Scan library roots → donuts, genre/style breakdown, SI-SDR bars<br>Export PNG/PDF + output balanced dataset |
 
 Downstream tabs can auto-fill paths from Classify output (`*_organized`).
 
