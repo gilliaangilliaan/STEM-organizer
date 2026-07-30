@@ -32,7 +32,9 @@ flac/
 key_tagger/checkpoints/*
 !key_tagger/checkpoints/nf50-q05-221125.pt
 panns_tagger/models/*.pth
-genre_gender_tagger/models/
+# genre_gender ONNX models download on first run; vocal_reverb.pt is bundled.
+genre_gender_tagger/models/*
+!genre_gender_tagger/models/vocal_reverb.pt
 
 # OS / editor
 .DS_Store

@@ -345,33 +345,33 @@ if errorlevel 1 goto failed
 
 echo.
 echo [1/4] PyTorch (%TORCH_LABEL%) ...
-"%PIP_PY%" -m pip install torch --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-cache-dir --no-deps
+"%PIP_PY%" -m pip install torch --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-deps
 if errorlevel 1 goto failed
 REM torchvision (hear21passt/timm) + torchaudio (demucs) from same CUDA/CPU index
-"%PIP_PY%" -m pip install torchvision torchaudio --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-cache-dir --no-deps
+"%PIP_PY%" -m pip install torchvision torchaudio --index-url %TORCH_INDEX% -t "%DEST%" --upgrade --no-deps
 if errorlevel 1 goto failed
 REM Pillow: torchvision imports PIL; --no-deps above skips it
-"%PIP_PY%" -m pip install Pillow -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install Pillow -t "%DEST%" --upgrade
 if errorlevel 1 goto failed
-"%PIP_PY%" -m pip install filelock "typing-extensions>=4.10" "setuptools>=77" "sympy>=1.13.3" "networkx>=2.5.1" jinja2 "fsspec>=0.8.5" -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install filelock "typing-extensions>=4.10" "setuptools>=77" "sympy>=1.13.3" "networkx>=2.5.1" jinja2 "fsspec>=0.8.5" -t "%DEST%" --upgrade
 if errorlevel 1 goto failed
 
 echo [2/4] audio + UI deps ...
-"%PIP_PY%" -m pip install "cffi>=1.16" -t "%DEST%" --only-binary=:all: --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install "cffi>=1.16" -t "%DEST%" --only-binary=:all: --upgrade
 if errorlevel 1 goto failed
-"%PIP_PY%" -m pip install soundfile numpy sounddevice PySide6 "PySide6-Fluent-Widgets>=1.11,<2" psutil mutagen scipy librosa soxr audioread requests -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install soundfile numpy sounddevice PySide6 "PySide6-Fluent-Widgets>=1.11,<2" psutil mutagen scipy librosa soxr audioread requests -t "%DEST%" --upgrade
 if errorlevel 1 goto failed
-"%PIP_PY%" -m pip install flac-detective==1.7.0 -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install flac-detective==1.7.0 -t "%DEST%" --upgrade
 if errorlevel 1 goto failed
 
 echo [3/4] demucs ...
-"%PIP_PY%" -m pip install omegaconf retrying submitit treetable cloudpickle colorama -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install omegaconf retrying submitit treetable cloudpickle colorama -t "%DEST%" --upgrade
 if errorlevel 1 goto failed
-"%PIP_PY%" -m pip install dora-search -t "%DEST%" --upgrade --no-cache-dir --no-deps
+"%PIP_PY%" -m pip install dora-search -t "%DEST%" --upgrade --no-deps
 if errorlevel 1 goto failed
-"%PIP_PY%" -m pip install lameenc "einops>=0.8.0" julius openunmix pyyaml tqdm -t "%DEST%" --upgrade --no-cache-dir --no-deps
+"%PIP_PY%" -m pip install lameenc "einops>=0.8.0" julius openunmix pyyaml tqdm -t "%DEST%" --upgrade --no-deps
 if errorlevel 1 goto failed
-"%PIP_PY%" -m pip install demucs -t "%DEST%" --upgrade --no-cache-dir --no-deps
+"%PIP_PY%" -m pip install demucs -t "%DEST%" --upgrade --no-deps
 if errorlevel 1 goto failed
 
 if /I "%TORCH_LABEL%"=="CPU" (
@@ -655,16 +655,14 @@ if "%PIP_PY%"=="" goto after_inst
 REM PaSST FIRST: heavy Genre^&Gender wheels (transformers/onnx) often fail or
 REM get cancelled on VMs — previously that left Auto-detect without hear21passt.
 set "PASST_INSTALLED=0"
-echo Rename Auto-detect ^(hear21passt + helpers^) ...
-"%PIP_PY%" -m pip install hear21passt --no-deps -t "%DEST%" --upgrade --no-cache-dir
+echo Rename Auto-detect ^(hear21passt + timm + helpers^) ...
+"%PIP_PY%" -m pip install hear21passt timm --no-deps -t "%DEST%" --upgrade
 if errorlevel 1 (
     echo ERROR: hear21passt pip install failed.
     echo Fix: check network / re-run install-deps.bat beside STEM-organizer.exe.
     goto after_inst
 )
-"%PIP_PY%" -m pip install timm --no-deps -t "%DEST%" --upgrade --no-cache-dir
-if errorlevel 1 echo WARNING: timm install reported errors - continuing.
-"%PIP_PY%" -m pip install pyyaml huggingface_hub safetensors packaging Pillow -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install pyyaml huggingface_hub safetensors packaging Pillow -t "%DEST%" --upgrade
 if errorlevel 1 echo WARNING: PaSST helper deps reported errors - continuing.
 REM hear21passt/timm need torchvision - fill gap if Keep=N left it out.
 if not defined TORCH_INDEX call :detect_torch_index
@@ -701,13 +699,13 @@ set "STEM_OLD_PP="
 set "PASST_INSTALLED=1"
 if exist "%~dp0genre_gender_tagger\requirements.txt" (
     echo Genre ^& Gender extras ^(transformers / onnxruntime^) ...
-    "%PIP_PY%" -m pip install -r "%~dp0genre_gender_tagger\requirements.txt" -t "%DEST%" --upgrade --no-cache-dir
+    "%PIP_PY%" -m pip install -r "%~dp0genre_gender_tagger\requirements.txt" -t "%DEST%" --upgrade
     if errorlevel 1 echo WARNING: Genre ^& Gender extras reported errors - continuing.
 ) else (
     echo WARNING: genre_gender_tagger\requirements.txt missing - skipping.
 )
 echo PANNs tagger ^(panns-inference / Cnn14^) ...
-"%PIP_PY%" -m pip install panns-inference -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install panns-inference -t "%DEST%" --upgrade
 if errorlevel 1 (
     echo WARNING: panns-inference install reported errors - continuing.
 ) else (
@@ -721,7 +719,7 @@ if errorlevel 1 (
     set "STEM_OLD_PP="
 )
 echo Key Detect ^(librosa / more-itertools / tqdm / soxr^) ...
-"%PIP_PY%" -m pip install more-itertools tqdm librosa soxr -t "%DEST%" --upgrade --no-cache-dir
+"%PIP_PY%" -m pip install more-itertools tqdm librosa soxr -t "%DEST%" --upgrade
 if errorlevel 1 (
     echo WARNING: Key Detect extras reported errors - continuing.
 ) else (

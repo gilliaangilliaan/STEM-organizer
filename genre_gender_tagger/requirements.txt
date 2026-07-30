@@ -8,8 +8,12 @@
 # panns, key) — they all install into this venv. numpy/soundfile/librosa/
 # soxr/mutagen/tqdm live here so the downstream tagger scripts only add
 # their own extras instead of re-resolving the same base every time.
+#
+# numpy is unpinned: numba 0.66+ supports numpy 2.x (declares <2.5), and the
+# core install already pulls a 2.x wheel. A hard <2.2 cap here previously
+# DOWNGRADED numpy mid-install and left duplicate dist-info dirs.
 
-numpy>=1.24,<2.2
+numpy
 soundfile
 librosa
 soxr

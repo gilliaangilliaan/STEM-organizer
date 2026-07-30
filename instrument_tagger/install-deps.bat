@@ -103,7 +103,7 @@ REM genre_gender_tagger venv. Only install them here if this script was run
 REM standalone on an empty venv.
 "%PY%" -c "import numpy, soundfile, librosa" 2>nul
 if errorlevel 1 (
-    "%PY%" -m pip install "numpy>=1.24,<2.2" soundfile librosa
+    "%PY%" -m pip install numpy soundfile librosa
     if errorlevel 1 goto fail
 )
 
