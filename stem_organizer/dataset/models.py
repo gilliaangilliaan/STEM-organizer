@@ -55,22 +55,23 @@ MAEST_GENRES = (
 
 # Fixed colors for MAEST genres (Genre + Style charts + export).
 # Saturated for dark UI — bumped from bright-bg palette.
+# Saturated to match theme-colors.png / STEM_COLORS intensity (red→purple + neutrals).
 MAEST_GENRE_COLORS: dict[str, str] = {
-    "Blues": "#284F99",
-    "Brass & Military": "#51622E",
-    "Children's": "#F5D233",
-    "Classical": "#A5A8B1",
-    "Electronic": "#68C2BB",
-    "Folk, World, & Country": "#4CA2CF",
-    "Funk / Soul": "#ED9831",
-    "Hip Hop": "#E87346",
-    "Jazz": "#F1ED72",
-    "Latin": "#C75D9C",
+    "Blues": "#3B82F6",
+    "Brass & Military": "#467A0C",
+    "Children's": "#FACC15",
+    "Classical": "#9AA0B4",
+    "Electronic": "#14B8A6",
+    "Folk, World, & Country": "#38BDF8",
+    "Funk / Soul": "#F59E0B",
+    "Hip Hop": "#F97316",
+    "Jazz": "#FEEC1D",
+    "Latin": "#EC4899",
     "Non-Music": "#000000",
-    "Pop": "#957DB7",
-    "Reggae": "#72BA52",
-    "Rock": "#E44E45",
-    "Stage & Screen": "#5D5D5F",
+    "Pop": "#A855F7",
+    "Reggae": "#09C371",
+    "Rock": "#EF4444",
+    "Stage & Screen": "#636B7A",
 }
 
 
