@@ -144,7 +144,7 @@ for _k in _KEY_CHIP_DISPLAY:
 LOG_SKIP_COLOR = "#636b7a"
 
 
-_GENRE_CHIP_LIGHT_TEXT = frozenset({"stage & screen", "non-music"})
+_GENRE_CHIP_LIGHT_TEXT = frozenset({"non-music"})
 
 
 def _genre_chip_fg(genre: str) -> str:
