@@ -10,7 +10,6 @@ Organize, classify, prepare and balance audio datasets.<br>
 Automatically create 2- or 4-stems, tag genre/style, gender/reverb, vocal type, and key, align tracks, check integrity, and export charts.
 
 **By:** Gilliaan & Bas Curtiz  
-**Repo:** [github.com/gilliaangilliaan/STEM-organizer](https://github.com/gilliaangilliaan/STEM-organizer)  
 **Video:** [How to install & use](https://youtu.be/L6RbF4N99tE)
 
 </div>
@@ -25,13 +24,13 @@ PySide6 desktop app for building and auditing stem libraries. Hover **?** in any
 
 | Tab | What it does |
 |-----|----------------|
-| **Classify** | Demucs RMS classify → group stems; optional SI-SDR quality filter; export organized folders |
-| **Genre & Gender** | **Genre** — MAEST genre/style tags · **Gender** — EffNet gender + reverb · **Vocal type** — PANNs (Singing/Speech/…) |
+| **Classify** | Demucs RMS classify → group stems<br>optional SI-SDR quality filter; export organized folders |
+| **Genre & Gender** | **Genre** — MAEST genre/style tags<br>**Gender** — EffNet gender + reverb<br>**Vocal type** — PANNs (Singing/Speech/…) |
 | **Key** | In-house KeyNet CNN → `KEY` / Initial key metadata |
 | **Match & Align** | Pair instrumental/vocal folders, organize pairs, align stems to a reference |
 | **Rename** | Rule-based sample rename + optional instrument Auto-detect (PaSST / hear21passt) |
-| **Integrity** | **Compression** — FLAC Detective lossless/lossy · **Corruption** — fast/deep verify + fix · **Convert** — batch to FLAC |
-| **Charts** | Scan library roots → KPIs, donuts, genre/style breakdown, SI-SDR bars; balance or export PNG/PDF |
+| **Integrity** | **Compression** — FLAC Detective lossless/lossy<br>**Corruption** — fast/deep verify + fix<br>**Convert** — batch to FLAC |
+| **Charts** | Scan library roots → donuts, genre/style breakdown, SI-SDR bars; balance or export PNG/PDF |
 
 Downstream tabs can auto-fill paths from Classify output (`*_organized`).
 
@@ -39,7 +38,7 @@ Downstream tabs can auto-fill paths from Classify output (`*_organized`).
 
 - **Windows**
 - **Python 3.10 or 3.11** on PATH (for `install-deps.bat` / `build.bat`)
-- Disk space for PyTorch + Demucs (`site-packages\` beside the `.exe`, or `.venv` / `genre_gender_tagger\venv` from source)
+- Disk space for PyTorch + Demucs (`site-packages\` beside the `.exe`, or `.venv` / `genre_gender_tagger\venv`)
 - **NVIDIA GPU** optional (CUDA 12.4 for RTX 20/30/40, CUDA 12.8 for RTX 50-series); CPU works everywhere
 
 ## Quick start (from source)
