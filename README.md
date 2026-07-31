@@ -10,7 +10,7 @@ Organize, classify, prepare and balance audio datasets.<br>
 Automatically create 2- or 4-stems, tag genre/style, gender/reverb, vocal type, and key, align tracks, check integrity, and export charts.
 
 **By:** Gilliaan & Bas Curtiz  
-**Video:** [How to install & use](https://youtu.be/L6RbF4N99tE)
+**Video:** [How to install & use](https://youtu.be/9xvfCQVhs1Y)
 
 </div>
 
