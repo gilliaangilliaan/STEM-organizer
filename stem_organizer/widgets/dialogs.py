@@ -383,16 +383,17 @@ def _help_code_text(line: str) -> Optional[str]:
 
 
 def _help_code_block(parent: QWidget, code: str, *, text_max_width: int) -> QFrame:
-    """GitHub-style dark code chip — Consolas, log_bg fill."""
+    """Soft inset code chip — Consolas on panel (not near-black log_bg)."""
     t = theme.DARK
     c = theme.COLORS
     host = QFrame(parent)
     host.setObjectName("HelpCodeBlock")
     host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+    # panel (#262833) sits just under the section card (#2F3140) — readable, low contrast.
     host.setStyleSheet(
         f"""
         QFrame#HelpCodeBlock {{
-            background-color: {c['log_bg']};
+            background-color: {c['panel']};
             border: 1px solid {t['border']};
             border-radius: 6px;
         }}

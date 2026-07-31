@@ -556,7 +556,7 @@ class ConvertTab(QWidget):
                         "-of json INPUT</pre>",
                         "Decode to raw float32 PCM on stdout:",
                         "<pre>ffmpeg -nostdin -hide_banner -loglevel error "
-                        "-i INPUT -vn -f f32le -acodec pcm_f32le -</pre>",
+                        "-i INPUT -vn -f f32le -acodec pcm_f32le pipe:1</pre>",
                         "Then STEM resamples / mono-stereo / dither / headroom in "
                         "Python and writes FLAC via soundfile "
                         "(format=FLAC, subtype=PCM_16 or PCM_24) — not ffmpeg encode.",
