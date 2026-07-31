@@ -158,6 +158,16 @@ def show_rename_help_dialog(parent: Optional[QWidget] = None) -> None:
         "folders are created automatically.",
         text_max_width=_RENAME_HELP_TEXT_MAX,
     ))
+    layout.addSpacing(HELP_CARD_GAP)
+    layout.addWidget(_help_section_card(
+        card, "Sources",
+        "Auto-detect uses "
+        '<a href="https://research.atspotify.com/publications/openmic-2018-an-open-dataset-for-multiple-instrument-recognition">'
+        "OpenMIC-2018</a> instrument labels via "
+        '<a href="https://github.com/kkoutini/passt_hear21">hear21passt</a> '
+        "(PaSST), mapped to Category Macro PREFIX rows.",
+        text_max_width=_RENAME_HELP_TEXT_MAX,
+    ))
 
     keys = QFrame(card)
     keys.setObjectName("HelpSection")

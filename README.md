@@ -28,7 +28,7 @@ PySide6 desktop app for building and auditing stem libraries. Hover **?** in any
 | **Genre & Gender** | **Genre** — [MAEST](https://huggingface.co/mtg-upf/discogs-maest-30s-pw-129e) genre/style tags<br>**Gender** — [EffNet gender](https://essentia.upf.edu/models.html#voice-gender) (male/female) + In-house trained reverb (dry/wet)<br>**Vocal type** — [PANNs](https://github.com/qiuqiangkong/audioset_tagging_cnn) (Singing/Speech/Rapping/Humming/Choir) |
 | **Key** | In-house trained KeyNet CNN → `KEY` / Initial key — [outperforms](https://docs.google.com/spreadsheets/d/1asmBVlIjimZ9XAmK5JE42SX4vAvjGqjLflukYBgFSuE/edit?usp=sharing) [original model](https://github.com/a1ex90/MusicalKeyCNN/blob/main/checkpoints/keynet.pt) + [MIK](https://mixedinkey.com/) |
 | **Match & Align** | Pair instrumental/vocal folders, organize pairs, align stems to a reference |
-| **Rename** | Rule-based sample rename + optional instrument Auto-detect (PaSST / hear21passt) |
+| **Rename** | Rule-based sample rename + optional instrument Auto-detect ([OpenMIC](https://research.atspotify.com/publications/openmic-2018-an-open-dataset-for-multiple-instrument-recognition) / [hear21passt](https://github.com/kkoutini/passt_hear21)) |
 | **Integrity** | **Compression** — [FLAC Detective](https://pypi.org/project/flac-detective/) lossless/lossy<br>**Corruption** — fast/deep verify + fix ([AudioTester](http://www.vuplayer.com/other.php) / [foobar2k](https://www.foobar2000.org/) alike)<br>**Convert** — batch to FLAC |
 | **Charts** | Scan library roots → donuts, genre/style breakdown, [SI-SDR](https://source-separation.github.io/tutorial/basics/evaluation.html#si-sdr) bars<br>Export PNG/PDF + output balanced dataset |
 
