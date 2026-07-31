@@ -838,12 +838,14 @@ exit /b 0
 REM --- Ensure %TEMP%\stem-organizer-pip-venv matches HOST_PY (major.minor) ---
 REM Stale helper from another Python (e.g. 3.11 home while PATH is 3.10) makes
 REM the Windows venv launcher print: No Python at '"C:\...\Python311\python.exe"'
+REM Also keep setuptools/pip in sync — a leftover distutils-precedence.pth with an
+REM older _distutils_hack prints AttributeError: add_shim on every pip invoke.
 :ensure_pip_helper
 set "PIP_VENV=%TEMP%\stem-organizer-pip-venv"
 set "PIP_PY=%PIP_VENV%\Scripts\python.exe"
 if not exist "%PIP_PY%" goto pip_helper_create
 "%PIP_PY%" -c "import sys; v='%HOST_VER%'.split('.'); raise SystemExit(0 if sys.version_info[:2]==(int(v[0]),int(v[1])) else 1)" 1>nul 2>nul
-if not errorlevel 1 exit /b 0
+if not errorlevel 1 goto pip_helper_ready
 echo Pip helper venv is broken or wrong Python - recreating with %HOST_VER% ...
 rmdir /S /Q "%PIP_VENV%" 2>nul
 
@@ -863,4 +865,22 @@ if errorlevel 1 (
     echo   %PIP_VENV%
     exit /b 1
 )
+
+:pip_helper_ready
+REM Quiet the add_shim noise: align pip/setuptools, drop mismatched .pth.
+"%PIP_PY%" -m pip install -q -U "pip" "setuptools>=77" "wheel" 1>nul 2>nul
+if errorlevel 1 (
+    echo WARNING: could not refresh pip/setuptools in helper - recreating ...
+    rmdir /S /Q "%PIP_VENV%" 2>nul
+    "%HOST_PY%" -m venv "%PIP_VENV%"
+    if errorlevel 1 exit /b 1
+    set "PIP_PY=%PIP_VENV%\Scripts\python.exe"
+    "%PIP_PY%" -m pip install -q -U "pip" "setuptools>=77" "wheel" 1>nul 2>nul
+    if errorlevel 1 (
+        echo ERROR: pip helper bootstrap failed.
+        exit /b 1
+    )
+)
+REM Stale .pth + old _distutils_hack → AttributeError: add_shim on every pip run.
+del /Q "%PIP_VENV%\Lib\site-packages\distutils-precedence.pth" 2>nul
 exit /b 0
