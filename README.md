@@ -15,7 +15,7 @@ Automatically create 2- or 4-stems, tag genre/style, gender/reverb, vocal type, 
 </div>
 
 <p align="center">
-  <img src="stem-organizer-screenshots.gif" alt="STEM organizer screenshots" width="800">
+  <img src="screenshots-v107.gif" alt="STEM organizer screenshots" width="800">
 </p>
 
 PySide6 desktop app for building and auditing stem libraries. Hover **?** in any tab for per-control help.
