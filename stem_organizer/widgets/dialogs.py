@@ -372,6 +372,61 @@ def _section_body_text(body: HelpSectionBody) -> str:
     return "\n".join(line.rstrip() for line in body if str(line).strip())
 
 
+def _help_code_text(line: str) -> Optional[str]:
+    """Return inner text if ``line`` is a ``<pre>…</pre>`` / fenced code block."""
+    s = (line or "").strip()
+    if s.startswith("<pre>") and s.endswith("</pre>"):
+        return s[5:-6].strip()
+    if s.startswith("```") and s.endswith("```") and len(s) >= 6:
+        return s[3:-3].strip()
+    return None
+
+
+def _help_code_block(parent: QWidget, code: str, *, text_max_width: int) -> QFrame:
+    """GitHub-style dark code chip — Consolas, log_bg fill."""
+    t = theme.DARK
+    c = theme.COLORS
+    host = QFrame(parent)
+    host.setObjectName("HelpCodeBlock")
+    host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+    host.setStyleSheet(
+        f"""
+        QFrame#HelpCodeBlock {{
+            background-color: {c['log_bg']};
+            border: 1px solid {t['border']};
+            border-radius: 6px;
+        }}
+        """
+    )
+    lay = QVBoxLayout(host)
+    lay.setContentsMargins(10, 8, 10, 8)
+    lay.setSpacing(0)
+    lbl = BodyLabel(code)
+    lbl.setWordWrap(True)
+    lbl.setMaximumWidth(max(120, text_max_width - 24))
+    lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    font = QFont(theme.FONT_FAMILY_MONO)
+    font.setPixelSize(theme.LOG_FONT_PX)
+    font.setWeight(QFont.Weight.Normal)
+    lbl.setFont(font)
+    style_help_label(lbl, theme.LOG_FONT_PX, c["log_fg"])
+    # Pin mono after style_help_label (it may reset family).
+    lbl.setFont(font)
+    sheet = f"""
+        FluentLabelBase, BodyLabel, QLabel {{
+            color: {c['log_fg']};
+            font-family: "{theme.FONT_FAMILY_MONO}";
+            font-size: {theme.LOG_FONT_PX}px;
+            font-weight: 400;
+            background: transparent;
+        }}
+    """
+    lbl.setStyleSheet(sheet)
+    setCustomStyleSheet(lbl, sheet, sheet)
+    lay.addWidget(lbl)
+    return host
+
+
 def _fill_help_body_label(lbl: BodyLabel, text: str, *, text_max_width: int) -> None:
     """Plain or rich help body; rich text enables clickable ``<a href>`` links."""
     t = theme.DARK
@@ -593,6 +648,36 @@ def _help_section_card(
             style_help_label(desc_lbl, HELP_BODY_PX, t["text_dim"])
             row.addWidget(desc_lbl, 1)
             lay.addLayout(row)
+    elif isinstance(body, (list, tuple)) and any(
+        _help_code_text(str(ln)) for ln in body
+    ):
+        # Mixed prose + <pre> command chips (Convert Sources, etc.).
+        prose_buf: list[str] = []
+
+        def _flush_prose() -> None:
+            nonlocal prose_buf
+            if not prose_buf:
+                return
+            body_lbl = BodyLabel()
+            _fill_help_body_label(
+                body_lbl, "\n".join(prose_buf), text_max_width=text_max_width
+            )
+            lay.addWidget(body_lbl)
+            prose_buf = []
+
+        for raw in body:
+            line = str(raw).rstrip()
+            if not line.strip():
+                continue
+            code = _help_code_text(line)
+            if code is not None:
+                _flush_prose()
+                lay.addWidget(
+                    _help_code_block(card, code, text_max_width=text_max_width)
+                )
+            else:
+                prose_buf.append(line)
+        _flush_prose()
     else:
         body_lbl = BodyLabel()
         _fill_help_body_label(

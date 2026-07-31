@@ -547,16 +547,16 @@ class ConvertTab(QWidget):
                         '<a href="https://python-soundfile.readthedocs.io/">'
                         "soundfile</a> / libsndfile writes the FLAC.",
                         "Probe (sample rate / channels / bit depth):",
-                        "ffprobe -v error -select_streams a:0 "
+                        "<pre>ffprobe -v error -select_streams a:0 "
                         "-show_entries stream=sample_rate,channels,sample_fmt,"
-                        "bits_per_raw_sample,codec_name -of json INPUT",
+                        "bits_per_raw_sample,codec_name -of json INPUT</pre>",
                         "Probe (bitrate for optional _mp3-320 filename tag):",
-                        "ffprobe -v error -select_streams a:0 "
+                        "<pre>ffprobe -v error -select_streams a:0 "
                         "-show_entries stream=bit_rate:format=bit_rate "
-                        "-of json INPUT",
+                        "-of json INPUT</pre>",
                         "Decode to raw float32 PCM on stdout:",
-                        "ffmpeg -nostdin -hide_banner -loglevel error "
-                        "-i INPUT -vn -f f32le -acodec pcm_f32le -",
+                        "<pre>ffmpeg -nostdin -hide_banner -loglevel error "
+                        "-i INPUT -vn -f f32le -acodec pcm_f32le -</pre>",
                         "Then STEM resamples / mono-stereo / dither / headroom in "
                         "Python and writes FLAC via soundfile "
                         "(format=FLAC, subtype=PCM_16 or PCM_24) — not ffmpeg encode.",
