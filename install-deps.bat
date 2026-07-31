@@ -714,6 +714,17 @@ echo PANNs tagger ^(panns-inference / Cnn14^) ...
 if errorlevel 1 (
     echo WARNING: panns-inference install reported errors - continuing.
 ) else (
+    REM Seed labels before import — panns_inference.config uses wget otherwise.
+    echo Seeding PANNs labels ^(no wget^) ...
+    if not exist "%USERPROFILE%\panns_data" mkdir "%USERPROFILE%\panns_data"
+    if not exist "%USERPROFILE%\panns_data\class_labels_indices.csv" (
+        if exist "%~dp0panns_tagger\models\class_labels_indices.csv" (
+            copy /Y "%~dp0panns_tagger\models\class_labels_indices.csv" "%USERPROFILE%\panns_data\class_labels_indices.csv" >nul
+        ) else (
+            "%HOST_PY%" -c "from pathlib import Path; import urllib.request; d=Path.home()/'panns_data'; d.mkdir(parents=True, exist_ok=True); urllib.request.urlretrieve('http://storage.googleapis.com/us_audioset/youtube_corpus/v1/csv/class_labels_indices.csv', d/'class_labels_indices.csv'); print('downloaded labels')"
+            if errorlevel 1 echo WARNING: could not seed class_labels_indices.csv - continuing.
+        )
+    )
     set "STEM_OLD_PP=%PYTHONPATH%"
     set "PYTHONPATH=%DEST%"
     "%HOST_PY%" -c "import panns_inference; print('OK panns_inference', panns_inference.__file__)"

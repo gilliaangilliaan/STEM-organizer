@@ -109,6 +109,21 @@ echo [2/3] panns-inference ...
 "%PY%" -m pip install panns-inference
 if errorlevel 1 goto fail
 
+REM panns_inference.config imports fail without ~/panns_data/class_labels_indices.csv
+REM and only knows how to fetch it via wget (missing on most Windows installs).
+echo Seeding PANNs labels ^(no wget^) ...
+if not exist "%USERPROFILE%\panns_data" mkdir "%USERPROFILE%\panns_data"
+if not exist "%USERPROFILE%\panns_data\class_labels_indices.csv" (
+    if exist "%~dp0models\class_labels_indices.csv" (
+        copy /Y "%~dp0models\class_labels_indices.csv" "%USERPROFILE%\panns_data\class_labels_indices.csv" >nul
+    ) else (
+        "%PY%" -c "from pathlib import Path; import urllib.request; d=Path.home()/'panns_data'; d.mkdir(parents=True, exist_ok=True); urllib.request.urlretrieve('http://storage.googleapis.com/us_audioset/youtube_corpus/v1/csv/class_labels_indices.csv', d/'class_labels_indices.csv'); print('downloaded labels')"
+        if errorlevel 1 (
+            echo WARNING: could not seed class_labels_indices.csv - first Vocal run may fail.
+        )
+    )
+)
+
 echo [3/3] ensure torch stack (%TORCH_LABEL%) ...
 "%PY%" -c "import torch; print('OK torch', torch.__version__, 'cuda=', torch.cuda.is_available())" 2>nul
 if errorlevel 1 (
