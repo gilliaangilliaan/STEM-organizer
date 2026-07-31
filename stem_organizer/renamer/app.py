@@ -866,6 +866,12 @@ class TrackRenamerApp(QWidget):
             tail = "\n".join(errors[:shown])
             more = "" if len(errors) <= shown else f"\n…and {len(errors) - shown} more."
             body += f"\n\nErrors:\n{tail}{more}"
+        try:
+            from done_sound import play_done_sound
+
+            play_done_sound()
+        except Exception:
+            pass
         show_info(self, title, body)
 
     def _finish_file_operation(self) -> None:

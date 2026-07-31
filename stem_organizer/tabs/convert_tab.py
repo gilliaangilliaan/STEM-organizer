@@ -497,7 +497,9 @@ class ConvertTab(QWidget):
             heading="Consistent FLAC libraries",
             intro=(
                 "Batch-convert audio to FLAC at one sample rate and channel layout "
-                "so MSST gets uniform WAV/FLAC-ready inputs."
+                "so "
+                '<a href="https://github.com/ZFTurbo/Music-Source-Separation-Training">'
+                "MSST</a> gets uniform WAV/FLAC-ready inputs."
             ),
             sections=[
                 (
@@ -515,7 +517,9 @@ class ConvertTab(QWidget):
                     "Options",
                     [
                         "Target sample rate (default 44.1 kHz) — other rates are resampled.",
-                        "Stereo (default) or Mono — MSST expects one layout.",
+                        "Stereo (default) or Mono — "
+                        '<a href="https://github.com/ZFTurbo/Music-Source-Separation-Training">'
+                        "MSST</a> expects one layout.",
                         "Float-over headroom (e.g. −1.0 dB) — only when 32-bit float "
                         "peaks above 0 dBFS.",
                         "TPDF dither (triangular PDF) when reducing bit depth to ≤24-bit.",
@@ -526,12 +530,36 @@ class ConvertTab(QWidget):
                 (
                     "Formats",
                     [
-                        "MSST expects WAV or FLAC. Other formats (MP3, OGG, …) are "
+                        '<a href="https://github.com/ZFTurbo/Music-Source-Separation-Training">'
+                        "MSST</a> expects WAV or FLAC. Other formats (MP3, OGG, …) are "
                         "decoded and written as FLAC at your target rate and channels.",
                         "Tags and cover art are copied onto the new FLAC "
                         "(including COMPRESSION, KEY, and other STEM fields).",
                         "Already-correct FLAC (right sample rate and bit depth) is "
                         "copied or skipped, not re-encoded.",
+                    ],
+                ),
+                (
+                    "Sources",
+                    [
+                        '<a href="https://ffmpeg.org/">FFmpeg</a> / ffprobe '
+                        "(bundled via install-deps.bat) — probe + decode only. "
+                        '<a href="https://python-soundfile.readthedocs.io/">'
+                        "soundfile</a> / libsndfile writes the FLAC.",
+                        "Probe (sample rate / channels / bit depth):",
+                        "ffprobe -v error -select_streams a:0 "
+                        "-show_entries stream=sample_rate,channels,sample_fmt,"
+                        "bits_per_raw_sample,codec_name -of json INPUT",
+                        "Probe (bitrate for optional _mp3-320 filename tag):",
+                        "ffprobe -v error -select_streams a:0 "
+                        "-show_entries stream=bit_rate:format=bit_rate "
+                        "-of json INPUT",
+                        "Decode to raw float32 PCM on stdout:",
+                        "ffmpeg -nostdin -hide_banner -loglevel error "
+                        "-i INPUT -vn -f f32le -acodec pcm_f32le -",
+                        "Then STEM resamples / mono-stereo / dither / headroom in "
+                        "Python and writes FLAC via soundfile "
+                        "(format=FLAC, subtype=PCM_16 or PCM_24) — not ffmpeg encode.",
                     ],
                 ),
             ],
